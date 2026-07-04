@@ -801,31 +801,125 @@ function SaleFormFields({
           <option value="supplier">Supplier</option>
         </select>
         {(form.mode === 'credit' || form.mode === 'advance') && (
-          <select
-            value={form.customerId}
-            onChange={(e) => update('customerId', e.target.value)}
-            onKeyDown={(e) => handleKeyDown(e, 'customerId')}
-            className="col-span-2 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-          >
-            <option value="">Customer</option>
-            {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          <div className="col-span-2 flex gap-1">
+            <select
+              value={form.customerId}
+              onChange={(e) => update('customerId', e.target.value)}
+              onKeyDown={(e) => handleKeyDown(e, 'customerId')}
+              className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+            >
+              <option value="">Customer</option>
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            {setShowQuickAddCustomer && (
+              <button
+                type="button"
+                onClick={() => setShowQuickAddCustomer(!showQuickAddCustomer)}
+                className="p-1.5 border border-slate-300 rounded hover:bg-slate-50 shrink-0"
+                title="Add new customer"
+              >
+                <UserPlus size={16} className="text-slate-500" />
+              </button>
+            )}
+          </div>
         )}
         {form.mode === 'supplier' && (
-          <select
-            value={form.supplierId}
-            onChange={(e) => update('supplierId', e.target.value)}
-            onKeyDown={(e) => handleKeyDown(e, 'supplierId')}
-            className="col-span-2 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-          >
-            <option value="">Supplier</option>
-            {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          <div className="col-span-2 flex gap-1">
+            <select
+              value={form.supplierId}
+              onChange={(e) => update('supplierId', e.target.value)}
+              onKeyDown={(e) => handleKeyDown(e, 'supplierId')}
+              className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+            >
+              <option value="">Supplier</option>
+              {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            {setShowQuickAddSupplier && (
+              <button
+                type="button"
+                onClick={() => setShowQuickAddSupplier(!showQuickAddSupplier)}
+                className="p-1.5 border border-slate-300 rounded hover:bg-slate-50 shrink-0"
+                title="Add new supplier"
+              >
+                <UserPlus size={16} className="text-slate-500" />
+              </button>
+            )}
+          </div>
         )}
         {form.mode !== 'credit' && form.mode !== 'advance' && form.mode !== 'supplier' && (
           <div className="col-span-2" />
         )}
       </div>
+
+      {/* Inline quick-add customer */}
+      {form.mode !== 'supplier' && showQuickAddCustomer && quickCustomer && setQuickCustomer && onQuickAddCustomer && (
+        <div className="grid grid-cols-4 gap-2 bg-emerald-50 border border-emerald-200 rounded p-2">
+          <input
+            type="text"
+            value={quickCustomer.name}
+            onChange={(e) => setQuickCustomer({ ...quickCustomer, name: e.target.value })}
+            placeholder="New customer name"
+            className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+          <input
+            type="text"
+            value={quickCustomer.phone}
+            onChange={(e) => setQuickCustomer({ ...quickCustomer, phone: e.target.value })}
+            placeholder="Phone (optional)"
+            className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+          <input
+            type="number"
+            value={quickCustomer.creditLimit}
+            onChange={(e) => setQuickCustomer({ ...quickCustomer, creditLimit: e.target.value })}
+            placeholder="Credit limit (optional)"
+            className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+          <div className="flex gap-1">
+            <button type="button" onClick={onQuickAddCustomer} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">
+              Add
+            </button>
+            <button type="button" onClick={() => setShowQuickAddCustomer && setShowQuickAddCustomer(false)} className="text-slate-500 hover:text-slate-700 text-xs">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Inline quick-add supplier */}
+      {form.mode === 'supplier' && showQuickAddSupplier && quickSupplier && setQuickSupplier && onQuickAddSupplier && (
+        <div className="grid grid-cols-4 gap-2 bg-emerald-50 border border-emerald-200 rounded p-2">
+          <input
+            type="text"
+            value={quickSupplier.name}
+            onChange={(e) => setQuickSupplier({ ...quickSupplier, name: e.target.value })}
+            placeholder="New supplier name"
+            className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+          <input
+            type="text"
+            value={quickSupplier.phone}
+            onChange={(e) => setQuickSupplier({ ...quickSupplier, phone: e.target.value })}
+            placeholder="Phone (optional)"
+            className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+          <input
+            type="number"
+            value={quickSupplier.balance}
+            onChange={(e) => setQuickSupplier({ ...quickSupplier, balance: e.target.value })}
+            placeholder="Opening balance (optional)"
+            className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+          <div className="flex gap-1">
+            <button type="button" onClick={onQuickAddSupplier} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">
+              Add
+            </button>
+            <button type="button" onClick={() => setShowQuickAddSupplier && setShowQuickAddSupplier(false)} className="text-slate-500 hover:text-slate-700 text-xs">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Row 2: SP, CP, Commission */}
       <div className="grid grid-cols-4 gap-2">
