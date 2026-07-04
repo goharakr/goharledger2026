@@ -1,0 +1,1 @@
+ALTER TABLE reminders ADD COLUMN IF NOT EXISTS reminder_time TEXT DEFAULT '09:00';
