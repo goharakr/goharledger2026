@@ -132,10 +132,13 @@ export default function Suppliers() {
       }).eq('id', editingId);
 
       // Keep the opening balance in sync by delta, not by overwriting the whole
-      // balance - any real invoices/payments recorded since should not be wiped out
+      // balance - any real invoices/payments recorded since should not be wiped out.
+      // Look up the mirror row directly (not from is_void-filtered state) so a
+      // previously-voided row is found and revived instead of re-inserted, which
+      // would fail against the transaction_id unique constraint.
       const txnId = openingBalanceTxnId(editingId);
-      const existing = transactions.find((t) => t.transaction_id === txnId);
-      const oldOpening = existing?.amount || 0;
+      const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
+      const oldOpening = existing && !existing.is_void ? existing.amount || 0 : 0;
       const delta = newOpening - oldOpening;
 
       if (delta !== 0) {
@@ -144,8 +147,8 @@ export default function Suppliers() {
 
       if (existing) {
         if (newOpening > 0) {
-          await supabase.from('transactions').update({ amount: newOpening, edited_at: new Date().toISOString() }).eq('id', existing.id);
-        } else {
+          await supabase.from('transactions').update({ amount: newOpening, is_void: false, edited_at: new Date().toISOString() }).eq('id', existing.id);
+        } else if (!existing.is_void) {
           await supabase.from('transactions').update({ is_void: true, void_reason: 'Opening balance removed' }).eq('id', existing.id);
         }
       } else if (newOpening > 0) {
