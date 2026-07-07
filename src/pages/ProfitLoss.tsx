@@ -324,7 +324,7 @@ export default function ProfitLoss() {
                 historicalProfit.map((h) => (
                   <tr key={h.month} className="hover:bg-slate-50 transition-colors">
                     <td className="px-4 py-2 font-medium">{getMonthLabel(h.month)}</td>
-                    <td className="px-4 py-2 text-right">{formatKES(h.total_profit + (h.taher_share || 0) + (h.abdulqadir_share || 0) + (h.retained || 0))}</td>
+                    <td className="px-4 py-2 text-right">-</td>
                     <td className="px-4 py-2 text-right">-</td>
                     <td className="px-4 py-2 text-right">{formatKES(h.total_profit)}</td>
                     <td className="px-4 py-2 text-right">{formatKES(h.total_profit)}</td>
