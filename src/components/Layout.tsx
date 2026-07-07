@@ -78,8 +78,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const checkReminders = () => {
       if (notifPermission !== 'granted') return;
+      const supplierAlerts = localStorage.getItem('gohar_alert_supplier') !== 'false';
+      const collectionAlerts = localStorage.getItem('gohar_alert_collection') !== 'false';
       const now = new Date();
       const due = reminders.filter((r) => {
+        if (r.reminder_type === 'supplier_payment' && !supplierAlerts) return false;
+        if (r.reminder_type === 'customer_collection' && !collectionAlerts) return false;
         const reminderDate = new Date(r.reminder_date);
         const reminderTime = r.reminder_time || '09:00';
         const [hours, minutes] = reminderTime.split(':').map(Number);
@@ -122,7 +126,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     if (!reminderForm.entityId || !reminderForm.dueDate || !reminderForm.reminderDate) return;
 
     await supabase.from('reminders').insert({
-      reminder_type: reminderForm.entityType === 'supplier' ? 'payment_due' : 'collection',
+      // Matches the convention used everywhere else a reminder is created
+      // (Dashboard.tsx, Suppliers.tsx) and what the notification/list display
+      // here already checks for - this used to say 'payment_due'/'collection',
+      // which never matched, so these reminders always displayed as "Collect from"
+      reminder_type: reminderForm.entityType === 'supplier' ? 'supplier_payment' : 'customer_collection',
       entity_id: reminderForm.entityId,
       entity_type: reminderForm.entityType,
       amount: parseFloat(reminderForm.amount || '0') || null,
