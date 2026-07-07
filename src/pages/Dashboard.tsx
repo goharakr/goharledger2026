@@ -434,6 +434,12 @@ export default function Dashboard() {
             if (t.partner_id === 'taher') taherBal += t.amount;
             if (t.partner_id === 'abdulqadir') abdulBal += t.amount;
           }
+          // Reverse the IOU once the shop pays the partner back (mirrors
+          // Partners.tsx's calculatePartnerBalance so the two pages agree)
+          if (t.notes?.includes('From Shop') && t.notes?.includes('repaying')) {
+            if (t.partner_id === 'taher') taherBal -= t.amount;
+            if (t.partner_id === 'abdulqadir') abdulBal -= t.amount;
+          }
         }
       });
 

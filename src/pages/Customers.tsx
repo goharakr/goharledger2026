@@ -189,10 +189,13 @@ export default function Customers() {
     }).eq('id', selectedCustomer.id);
 
     // Keep the opening advance in sync by delta, not by overwriting the whole
-    // balance - any real advance payments/usage recorded since should not be wiped out
+    // balance - any real advance payments/usage recorded since should not be wiped out.
+    // Look up the mirror row directly (not from is_void-filtered state) so a
+    // previously-voided row is found and revived instead of re-inserted, which
+    // would fail against the transaction_id unique constraint.
     const txnId = openingAdvanceTxnId(selectedCustomer.id);
-    const existing = transactions.find((t) => t.transaction_id === txnId);
-    const oldOpening = existing?.amount || 0;
+    const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
+    const oldOpening = existing && !existing.is_void ? existing.amount || 0 : 0;
     const newOpening = parseFloat(form.advanceBalance || '0');
     const delta = newOpening - oldOpening;
 
@@ -202,8 +205,8 @@ export default function Customers() {
 
     if (existing) {
       if (newOpening > 0) {
-        await supabase.from('transactions').update({ amount: newOpening, edited_at: new Date().toISOString() }).eq('id', existing.id);
-      } else {
+        await supabase.from('transactions').update({ amount: newOpening, is_void: false, edited_at: new Date().toISOString() }).eq('id', existing.id);
+      } else if (!existing.is_void) {
         await supabase.from('transactions').update({ is_void: true, void_reason: 'Opening advance removed' }).eq('id', existing.id);
       }
     } else if (newOpening > 0) {
@@ -221,8 +224,8 @@ export default function Customers() {
 
     // Same delta-sync pattern for the opening balance owed (credit)
     const creditTxnId = openingCreditTxnId(selectedCustomer.id);
-    const existingCredit = transactions.find((t) => t.transaction_id === creditTxnId);
-    const oldOpeningCredit = existingCredit?.amount || 0;
+    const { data: existingCredit } = await supabase.from('transactions').select('*').eq('transaction_id', creditTxnId).maybeSingle();
+    const oldOpeningCredit = existingCredit && !existingCredit.is_void ? existingCredit.amount || 0 : 0;
     const newOpeningCredit = parseFloat(form.openingCredit || '0');
     const creditDelta = newOpeningCredit - oldOpeningCredit;
 
@@ -232,8 +235,8 @@ export default function Customers() {
 
     if (existingCredit) {
       if (newOpeningCredit > 0) {
-        await supabase.from('transactions').update({ amount: newOpeningCredit, edited_at: new Date().toISOString() }).eq('id', existingCredit.id);
-      } else {
+        await supabase.from('transactions').update({ amount: newOpeningCredit, is_void: false, edited_at: new Date().toISOString() }).eq('id', existingCredit.id);
+      } else if (!existingCredit.is_void) {
         await supabase.from('transactions').update({ is_void: true, void_reason: 'Opening balance removed' }).eq('id', existingCredit.id);
       }
     } else if (newOpeningCredit > 0) {
@@ -346,11 +349,15 @@ export default function Customers() {
   }
 
   function getPayments(customerId: string) {
-    return transactions.filter((t) => t.customer_id === customerId && t.type === 'customer_payment');
+    // Only payments against credit, not advance deposits (those build up
+    // advance_balance, a separate pool, not a payment against credit owed)
+    return transactions.filter((t) => t.customer_id === customerId && t.type === 'customer_payment'
+      && !t.description?.startsWith('Advance from') && !t.transaction_id.startsWith('OPN-ADV-'));
   }
 
   function getTotalCredit(customerId: string) {
-    return getCreditSales(customerId).reduce((sum, t) => sum + (t.selling_price || 0), 0);
+    const openingCredit = transactions.find((t) => t.customer_id === customerId && t.type === 'opening_balance')?.amount || 0;
+    return openingCredit + getCreditSales(customerId).reduce((sum, t) => sum + (t.selling_price || 0), 0);
   }
 
   function getTotalPaid(customerId: string) {
@@ -748,10 +755,11 @@ export default function Customers() {
                             <span className={`text-xs px-2 py-0.5 rounded-full ${
                               t.type === 'sale' && t.primary_mode === 'credit' ? 'bg-red-100 text-red-700' :
                               t.type === 'sale' ? 'bg-emerald-100 text-emerald-700' :
+                              t.type === 'opening_balance' ? 'bg-red-100 text-red-700' :
                               t.type === 'customer_payment' ? 'bg-blue-100 text-blue-700' :
                               'bg-slate-100 text-slate-700'
                             }`}>
-                              {t.type === 'sale' ? (t.primary_mode === 'credit' ? 'Credit Sale' : t.primary_mode === 'advance' ? 'Advance Sale' : 'Sale') : t.type.replace('_', ' ')}
+                              {t.type === 'sale' ? (t.primary_mode === 'credit' ? 'Credit Sale' : t.primary_mode === 'advance' ? 'Advance Sale' : 'Sale') : t.type === 'opening_balance' ? 'Opening balance' : t.type.replace('_', ' ')}
                             </span>
                           </td>
                           <td className="px-3 py-2 text-slate-600 text-xs capitalize">
@@ -771,9 +779,9 @@ export default function Customers() {
                             )}
                           </td>
                           <td className={`px-3 py-2 text-right font-medium ${
-                            t.type === 'sale' ? 'text-emerald-600' : 'text-blue-600'
+                            t.type === 'sale' ? 'text-emerald-600' : t.type === 'opening_balance' ? 'text-red-600' : 'text-blue-600'
                           }`}>
-                            {t.type === 'sale' ? '+' : '-'}{formatKES(t.type === 'sale' ? (t.selling_price || t.amount) : t.amount)}
+                            {t.type === 'sale' || t.type === 'opening_balance' ? '+' : '-'}{formatKES(t.type === 'sale' ? (t.selling_price || t.amount) : t.amount)}
                           </td>
                           <td className="px-3 py-2 text-center">
                             {t.type === 'sale' && (t.primary_mode === 'credit' || t.primary_mode === 'advance') && (
@@ -929,7 +937,7 @@ export default function Customers() {
         open={showLedger}
         onClose={() => setShowLedger(false)}
         title="Customer Ledger"
-        filterTypes={['sale', 'customer_payment']}
+        filterTypes={['sale', 'customer_payment', 'opening_balance']}
       />
     </div>
   );

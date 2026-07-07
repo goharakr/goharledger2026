@@ -188,13 +188,6 @@ export default function Expenses() {
       });
       // Update loan balance
       await adjustLoanBalance(form.loanId, amt);
-      await supabase.from('loan_payments').insert({
-        loan_id: form.loanId,
-        date: form.date,
-        amount: amt,
-        mode: form.mode,
-        notes: form.notes || null,
-      });
       setForm(emptyForm);
       setShowAdd(false);
       fetchData();
@@ -238,13 +231,6 @@ export default function Expenses() {
       const loan = loans.find((l) => l.id === form.loanId);
       if (loan) {
         await adjustLoanBalance(form.loanId, amt);
-        await supabase.from('loan_payments').insert({
-          loan_id: form.loanId,
-          date: form.date,
-          amount: amt,
-          mode: form.mode,
-          notes: form.notes || null,
-        });
       }
     }
 

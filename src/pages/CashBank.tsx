@@ -199,17 +199,21 @@ export default function CashBank() {
     const amt = parseFloat(openingAmount || '0');
     if (amt < 0) return;
 
+    // Look up the mirror row directly (not from is_void-filtered state) so a
+    // previously-voided row is found and revived instead of re-inserted, which
+    // would fail against the transaction_id unique constraint.
     const txnId = openingBalanceTxnId(openingMode);
-    const existing = transactions.find((t) => t.transaction_id === txnId);
+    const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
 
     if (existing) {
       if (amt > 0) {
         await supabase.from('transactions').update({
           date: openingDate,
           amount: amt,
+          is_void: false,
           edited_at: new Date().toISOString(),
         }).eq('id', existing.id);
-      } else {
+      } else if (!existing.is_void) {
         await supabase.from('transactions').update({ is_void: true, void_reason: 'Opening balance removed' }).eq('id', existing.id);
       }
     } else if (amt > 0) {

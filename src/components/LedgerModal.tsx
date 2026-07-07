@@ -159,7 +159,10 @@ export default function LedgerModal({
         await adjustSupplierBalance(txn.supplier_id, txn.amount || 0);
       }
     } else if (txn.type === 'customer_payment' && txn.customer_id) {
-      if (txn.description?.startsWith('Advance from')) {
+      // Both the "Add Advance" flow and the opening-advance mirror ("Opening
+      // advance - X") deposit into advance_balance, not credit_balance
+      const isAdvanceDeposit = txn.description?.startsWith('Advance from') || txn.transaction_id.startsWith('OPN-ADV-');
+      if (isAdvanceDeposit) {
         await adjustCustomerAdvance(txn.customer_id, -(txn.amount || 0));
       } else {
         await adjustCustomerCredit(txn.customer_id, txn.amount || 0);
@@ -168,6 +171,9 @@ export default function LedgerModal({
       await adjustSupplierBalance(txn.supplier_id, txn.amount || 0);
     } else if (txn.type === 'supplier_invoice' && txn.supplier_id) {
       await adjustSupplierBalance(txn.supplier_id, -(txn.amount || 0));
+    } else if (txn.type === 'opening_balance' && txn.customer_id) {
+      // Customer "opening balance owed" mirror - reverse the receivable
+      await adjustCustomerCredit(txn.customer_id, -(txn.amount || 0));
     } else if (txn.type === 'expense') {
       if (txn.supplier_id && (txn.category === 'supplier_payment' || txn.category === 'stock')) {
         await adjustSupplierBalance(txn.supplier_id, txn.amount || 0);

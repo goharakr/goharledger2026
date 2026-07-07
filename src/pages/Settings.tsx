@@ -6,7 +6,6 @@ import {
   Percent,
   Bell,
   FileText,
-  Palette,
   AlertTriangle,
   Save,
   Trash2,
@@ -38,7 +37,6 @@ export default function Settings() {
     { id: 'shares', label: 'Share Rules', icon: Percent },
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'export', label: 'Data & Backup', icon: FileText },
-    { id: 'appearance', label: 'Appearance', icon: Palette },
     { id: 'danger', label: 'Danger Zone', icon: AlertTriangle },
   ];
 
@@ -66,7 +64,6 @@ export default function Settings() {
         {activeTab === 'shares' && <ShareRulesSettings />}
         {activeTab === 'notifications' && <NotificationsSettings />}
         {activeTab === 'export' && <DataExport />}
-        {activeTab === 'appearance' && <AppearanceSettings />}
         {activeTab === 'danger' && <DangerZone triggerRefresh={triggerRefresh} navigate={navigate} />}
       </div>
     </div>
@@ -177,8 +174,8 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
 
     if (existing) {
       if (amt > 0) {
-        await supabase.from('transactions').update({ amount: amt, edited_at: new Date().toISOString() }).eq('id', existing.id);
-      } else {
+        await supabase.from('transactions').update({ amount: amt, is_void: false, edited_at: new Date().toISOString() }).eq('id', existing.id);
+      } else if (!existing.is_void) {
         await supabase.from('transactions').update({ is_void: true, void_reason: 'Opening balance removed' }).eq('id', existing.id);
       }
     } else if (amt > 0) {
@@ -205,12 +202,12 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
 
     const txnId = `OPN-CR-${customerId}`;
     const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
-    const oldAmount = existing?.amount || 0;
+    const oldAmount = existing && !existing.is_void ? existing.amount || 0 : 0;
 
     await adjustCustomerCredit(customerId, amt - oldAmount);
 
     if (existing) {
-      await supabase.from('transactions').update({ amount: amt, edited_at: new Date().toISOString() }).eq('id', existing.id);
+      await supabase.from('transactions').update({ amount: amt, is_void: false, edited_at: new Date().toISOString() }).eq('id', existing.id);
     } else {
       await supabase.from('transactions').insert({
         transaction_id: txnId,
@@ -237,12 +234,12 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
 
     const txnId = `OPN-BAL-${supplierId}`;
     const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
-    const oldAmount = existing?.amount || 0;
+    const oldAmount = existing && !existing.is_void ? existing.amount || 0 : 0;
 
     await adjustSupplierBalance(supplierId, amt - oldAmount);
 
     if (existing) {
-      await supabase.from('transactions').update({ amount: amt, edited_at: new Date().toISOString() }).eq('id', existing.id);
+      await supabase.from('transactions').update({ amount: amt, is_void: false, edited_at: new Date().toISOString() }).eq('id', existing.id);
     } else {
       await supabase.from('transactions').insert({
         transaction_id: txnId,
@@ -432,34 +429,40 @@ function ShareRulesSettings() {
 }
 
 function NotificationsSettings() {
-  const [supplierAlerts, setSupplierAlerts] = useState(true);
-  const [partnerAlerts, setPartnerAlerts] = useState(true);
-  const [lowCashAlerts, setLowCashAlerts] = useState(false);
-  const [browserNotifications, setBrowserNotifications] = useState(false);
+  const [supplierAlerts, setSupplierAlerts] = useState(() => localStorage.getItem('gohar_alert_supplier') !== 'false');
+  const [collectionAlerts, setCollectionAlerts] = useState(() => localStorage.getItem('gohar_alert_collection') !== 'false');
+  const [browserNotifications, setBrowserNotifications] = useState<NotificationPermission | 'unsupported'>(
+    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'
+  );
+
+  function toggleSupplierAlerts(checked: boolean) {
+    setSupplierAlerts(checked);
+    localStorage.setItem('gohar_alert_supplier', String(checked));
+  }
+
+  function toggleCollectionAlerts(checked: boolean) {
+    setCollectionAlerts(checked);
+    localStorage.setItem('gohar_alert_collection', String(checked));
+  }
 
   const requestNotificationPermission = () => {
     if ('Notification' in window) {
-      Notification.requestPermission().then((permission) => {
-        setBrowserNotifications(permission === 'granted');
-      });
+      Notification.requestPermission().then((permission) => setBrowserNotifications(permission));
     }
   };
 
   return (
     <div className="space-y-4">
       <h3 className="font-semibold text-slate-800">Notifications</h3>
+      <p className="text-sm text-slate-500">Controls which due reminders trigger the popup alert and browser notification (set from the bell icon in the sidebar).</p>
       <div className="space-y-3">
         <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
           <span className="text-sm text-slate-700">Supplier payment due alerts</span>
-          <input type="checkbox" checked={supplierAlerts} onChange={(e) => setSupplierAlerts(e.target.checked)} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+          <input type="checkbox" checked={supplierAlerts} onChange={(e) => toggleSupplierAlerts(e.target.checked)} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
         </div>
         <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-          <span className="text-sm text-slate-700">Partner pending balance alerts</span>
-          <input type="checkbox" checked={partnerAlerts} onChange={(e) => setPartnerAlerts(e.target.checked)} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-        </div>
-        <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-          <span className="text-sm text-slate-700">Low cash threshold alerts</span>
-          <input type="checkbox" checked={lowCashAlerts} onChange={(e) => setLowCashAlerts(e.target.checked)} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+          <span className="text-sm text-slate-700">Customer collection due alerts</span>
+          <input type="checkbox" checked={collectionAlerts} onChange={(e) => toggleCollectionAlerts(e.target.checked)} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
         </div>
         <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
           <div>
@@ -468,13 +471,14 @@ function NotificationsSettings() {
           </div>
           <button
             onClick={requestNotificationPermission}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium ${
-              browserNotifications
+            disabled={browserNotifications === 'unsupported'}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-50 ${
+              browserNotifications === 'granted'
                 ? 'bg-emerald-100 text-emerald-700'
                 : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
             }`}
           >
-            {browserNotifications ? 'Enabled' : 'Enable'}
+            {browserNotifications === 'granted' ? 'Enabled' : browserNotifications === 'unsupported' ? 'Not supported' : 'Enable'}
           </button>
         </div>
       </div>
@@ -483,11 +487,13 @@ function NotificationsSettings() {
 }
 
 async function fetchReportData() {
-  const [{ data: txns }, { data: customers }, { data: suppliers }] = await Promise.all([
+  const [{ data: txns }, { data: customers }, { data: suppliers }, { data: profile }] = await Promise.all([
     supabase.from('transactions').select('*').eq('is_void', false).order('date', { ascending: false }),
     supabase.from('customers').select('*'),
     supabase.from('suppliers').select('*'),
+    supabase.from('business_profile').select('*').limit(1).maybeSingle(),
   ]);
+  const businessName = profile?.business_name || 'Gohar Records';
 
   const entityName = (t: any) => {
     if (t.customer_id) return customers?.find((c) => c.id === t.customer_id)?.name || 'Customer';
@@ -544,7 +550,7 @@ async function fetchReportData() {
     t.amount,
   ]);
 
-  return { summaryRows, txnRows };
+  return { summaryRows, txnRows, businessName };
 }
 
 function DataExport() {
@@ -583,10 +589,10 @@ function DataExport() {
   async function exportExcel() {
     setExporting('excel');
     try {
-      const { summaryRows, txnRows } = await fetchReportData();
+      const { summaryRows, txnRows, businessName } = await fetchReportData();
 
       const wb = XLSX.utils.book_new();
-      const summarySheet = XLSX.utils.aoa_to_sheet([['Summary', ''], ...summaryRows]);
+      const summarySheet = XLSX.utils.aoa_to_sheet([[businessName, ''], ['Summary', ''], ...summaryRows]);
       XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
 
       const txnSheet = XLSX.utils.aoa_to_sheet([
@@ -605,11 +611,11 @@ function DataExport() {
   async function exportPDF() {
     setExporting('pdf');
     try {
-      const { summaryRows, txnRows } = await fetchReportData();
+      const { summaryRows, txnRows, businessName } = await fetchReportData();
 
       const doc = new jsPDF();
       doc.setFontSize(16);
-      doc.text('Gohar Records - Business Report', 14, 16);
+      doc.text(`${businessName} - Business Report`, 14, 16);
       doc.setFontSize(10);
       doc.text(`Generated ${todayStr()}`, 14, 22);
 
@@ -672,29 +678,30 @@ function DataExport() {
   );
 }
 
-function AppearanceSettings() {
-  return (
-    <div className="space-y-4">
-      <h3 className="font-semibold text-slate-800">Appearance</h3>
-      <div className="space-y-3">
-        <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-          <span className="text-sm text-slate-700">Dark Mode</span>
-          <input type="checkbox" className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-        </div>
-        <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-          <span className="text-sm text-slate-700">Compact View</span>
-          <input type="checkbox" className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function DangerZone({ triggerRefresh, navigate }: { triggerRefresh: () => void; navigate: (path: string) => void }) {
   const [showResetModal, setShowResetModal] = useState(false);
   const [resetStep, setResetStep] = useState(1);
   const [resetConfirmation, setResetConfirmation] = useState('');
   const [resetting, setResetting] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
+
+  async function handleDeleteAllCustomersSuppliers() {
+    setDeletingAll(true);
+    try {
+      // Transactions/reminders reference customers and suppliers by id, so they
+      // have to go first or the delete below would be blocked/orphan them.
+      await supabase.from('transaction_splits').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      await supabase.from('transactions').delete().or('customer_id.not.is.null,supplier_id.not.is.null');
+      await supabase.from('reminders').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      await supabase.from('customers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      await supabase.from('suppliers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      triggerRefresh();
+      navigate('/');
+    } catch (err) {
+      console.error('Delete all failed:', err);
+    }
+    setDeletingAll(false);
+  }
 
   async function handleReset() {
     if (resetStep === 1) {
@@ -727,11 +734,12 @@ function DangerZone({ triggerRefresh, navigate }: { triggerRefresh: () => void; 
       // Clear loan trackers
       await supabase.from('loan_trackers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
 
-      // Reset customer balances
-      await supabase.from('customers').update({ credit_balance: 0, advance_balance: 0 }).eq('is_active', true);
+      // Reset customer balances (all of them, including soft-deleted ones, so
+      // nothing carries a stale balance if it's ever reactivated)
+      await supabase.from('customers').update({ credit_balance: 0, advance_balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
 
-      // Reset supplier balances
-      await supabase.from('suppliers').update({ balance: 0 }).eq('is_active', true);
+      // Reset supplier balances (same reasoning)
+      await supabase.from('suppliers').update({ balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
 
       // Reset share rules
       await supabase.from('share_rules').delete().neq('id', '00000000-0000-0000-0000-000000000000');
@@ -769,10 +777,11 @@ function DangerZone({ triggerRefresh, navigate }: { triggerRefresh: () => void; 
             <p className="text-xs text-slate-500">Permanently delete all customer and supplier records along with transactions.</p>
           </div>
           <button
-            onClick={() => { if (confirm('This will delete everything including customer/supplier records. Are you sure?')) { /* handle full delete */ } }}
-            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
+            onClick={() => { if (confirm('This will delete everything including customer/supplier records. Are you sure?')) handleDeleteAllCustomersSuppliers(); }}
+            disabled={deletingAll}
+            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
           >
-            Delete All
+            {deletingAll ? 'Deleting...' : 'Delete All'}
           </button>
         </div>
       </div>

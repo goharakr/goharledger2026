@@ -16,7 +16,7 @@ import { adjustLoanBalance } from '../utils/balances';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
-import type { CapitalEntry, LoanTracker, HistoricalProfit, LoanPayment } from '../types';
+import type { CapitalEntry, LoanTracker, HistoricalProfit, Transaction } from '../types';
 
 interface CapitalForm {
   partnerId: string;
@@ -46,7 +46,7 @@ export default function Capital() {
   const { user } = useAuth();
   const [capitalEntries, setCapitalEntries] = useState<CapitalEntry[]>([]);
   const [loans, setLoans] = useState<LoanTracker[]>([]);
-  const [loanPayments, setLoanPayments] = useState<LoanPayment[]>([]);
+  const [loanPayments, setLoanPayments] = useState<Transaction[]>([]);
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCapital, setShowCapital] = useState(false);
@@ -95,7 +95,7 @@ export default function Capital() {
     const [{ data: cap }, { data: loanData }, { data: paymentData }, { data: hist }] = await Promise.all([
       supabase.from('capital_entries').select('*').order('date', { ascending: false }),
       supabase.from('loan_trackers').select('*'),
-      supabase.from('loan_payments').select('*').order('date', { ascending: false }),
+      supabase.from('transactions').select('*').eq('type', 'loan_payment').eq('is_void', false).order('date', { ascending: false }),
       supabase.from('historical_profit').select('*').order('month', { ascending: false }),
     ]);
     setCapitalEntries(cap || []);
@@ -202,15 +202,9 @@ export default function Capital() {
 
     await adjustLoanBalance(selectedLoan, amt);
 
-    await supabase.from('loan_payments').insert({
-      loan_id: selectedLoan,
-      date: loanPaymentForm.date,
-      amount: amt,
-      mode: loanPaymentForm.mode,
-      notes: loanPaymentForm.notes || null,
-    });
-
-    // Create transaction record
+    // Create transaction record - Payment History below reads straight from
+    // transactions, so this single insert is the only record that needs to
+    // stay in sync when it's later edited or voided from the Expenses page
     const { data: lastTxn } = await supabase
       .from('transactions')
       .select('transaction_id')
@@ -297,6 +291,10 @@ export default function Capital() {
     triggerRefresh();
   }
 
+  // Unlike Capital Entries, Historical Profit is deliberately never mirrored into
+  // `transactions` - it's a backfilled record of months from before this app
+  // existed, and mirroring it would double-count that profit against the live
+  // transactions Reports/Dashboard already compute for the current period.
   async function handleSaveHistorical() {
     if (!historicalForm.month || !historicalForm.totalProfit) return;
 
@@ -669,11 +667,11 @@ export default function Capital() {
           <div className="w-full bg-slate-200 rounded-full h-3">
             <div
               className="bg-emerald-500 h-3 rounded-full transition-all"
-              style={{ width: `${Math.min(100, ((idrisLoan.total_amount - idrisLoan.remaining_balance) / idrisLoan.total_amount) * 100)}%` }}
+              style={{ width: `${idrisLoan.total_amount > 0 ? Math.min(100, ((idrisLoan.total_amount - idrisLoan.remaining_balance) / idrisLoan.total_amount) * 100) : 0}%` }}
             />
           </div>
           <p className="text-xs text-slate-500 mt-1 text-right">
-            {((idrisLoan.total_amount - idrisLoan.remaining_balance) / idrisLoan.total_amount * 100).toFixed(1)}% paid
+            {idrisLoan.total_amount > 0 ? ((idrisLoan.total_amount - idrisLoan.remaining_balance) / idrisLoan.total_amount * 100).toFixed(1) : '0.0'}% paid
           </p>
         </div>
       )}
