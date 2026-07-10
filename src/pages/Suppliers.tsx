@@ -40,6 +40,8 @@ interface PaymentForm {
   date: string;
   mode: string;
   notes: string;
+  isPostDated: boolean;
+  clearsOn: string;
 }
 
 const emptySupplier: SupplierForm = {
@@ -64,6 +66,8 @@ const emptyPayment: PaymentForm = {
   date: new Date().toISOString().split('T')[0],
   mode: 'cash',
   notes: '',
+  isPostDated: false,
+  clearsOn: '',
 };
 
 export default function Suppliers() {
@@ -252,6 +256,7 @@ export default function Suppliers() {
       supplier_id: selectedSupplier.id,
       description: `Payment to ${selectedSupplier.name}`,
       notes: paymentForm.notes || null,
+      clears_on: paymentForm.mode === 'paybill' && paymentForm.isPostDated && paymentForm.clearsOn ? paymentForm.clearsOn : null,
       created_by: user?.username || null,
     }));
     if (error || !newTxn) { console.error(error); alert('Failed to save payment: ' + (error?.message || 'unknown error')); return; }
@@ -495,6 +500,13 @@ export default function Suppliers() {
                           </td>
                           <td className="px-3 py-2 text-slate-700">
                             {t.description || '-'}
+                            {t.clears_on && (
+                              <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${
+                                t.clears_on > todayStr() ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
+                              }`} title="Post-dated cheque">
+                                {t.clears_on > todayStr() ? `Clears ${formatDate(t.clears_on)}` : 'Cleared'}
+                              </span>
+                            )}
                             {t.created_by && (
                               <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500" title="Added by">
                                 {t.created_by}
@@ -630,6 +642,27 @@ export default function Suppliers() {
                   <option value="paybill">Paybill</option>
                 </select>
               </div>
+              {paymentForm.mode === 'paybill' && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="paymentPostDated"
+                    checked={paymentForm.isPostDated}
+                    onChange={(e) => setPaymentForm({ ...paymentForm, isPostDated: e.target.checked })}
+                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <label htmlFor="paymentPostDated" className="text-xs text-slate-600">Post-dated cheque</label>
+                  {paymentForm.isPostDated && (
+                    <input
+                      type="date"
+                      value={paymentForm.clearsOn}
+                      onChange={(e) => setPaymentForm({ ...paymentForm, clearsOn: e.target.value })}
+                      className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
+                      placeholder="Clears on"
+                    />
+                  )}
+                </div>
+              )}
               <input
                 type="text"
                 value={paymentForm.notes}

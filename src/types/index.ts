@@ -46,6 +46,7 @@ export interface Transaction {
   commission: number | null;
   commission_mode: string | null;
   due_date: string | null;
+  clears_on: string | null;
   is_void: boolean;
   void_reason: string | null;
   is_unclassified: boolean;

@@ -190,13 +190,17 @@ export default function Dashboard() {
     });
 
     // Calculate expenses by mode (NOT including supplier invoices/payments)
+    const todayStr = new Date().toISOString().split('T')[0];
     allTxns?.forEach((t) => {
+      const isPendingClear = t.clears_on && t.clears_on > todayStr;
       // Supplier invoices and payments are NOT shop expenses
       if (t.type === 'expense' && t.category !== 'stock' && t.category !== 'supplier_payment') {
         totalExpenses += t.amount || 0;
-        if (t.primary_mode === 'cash') cashExpenses += t.amount || 0;
-        else if (t.primary_mode === 'mpesa') mpesaExpenses += t.amount || 0;
-        else if (t.primary_mode === 'paybill') paybillExpenses += t.amount || 0;
+        if (!isPendingClear) {
+          if (t.primary_mode === 'cash') cashExpenses += t.amount || 0;
+          else if (t.primary_mode === 'mpesa') mpesaExpenses += t.amount || 0;
+          else if (t.primary_mode === 'paybill') paybillExpenses += t.amount || 0;
+        }
       }
       if (t.type === 'partner_draw' || t.type === 'loan_payment') {
         totalExpenses += t.amount || 0;
@@ -299,7 +303,10 @@ export default function Dashboard() {
           // Only shop expenses (NOT supplier invoices which have category='stock')
           if (t.category !== 'stock' && t.category !== 'supplier_payment') {
             const isHomeExpenseFromOwnPocket = t.category === 'home_expense' && t.notes?.includes('From Own Pocket');
-            if (!isHomeExpenseFromOwnPocket) {
+            // A post-dated cheque hasn't left the bank yet - don't deduct it
+            // until its "clears on" date actually arrives.
+            const isPendingClear = t.clears_on && t.clears_on > today;
+            if (!isHomeExpenseFromOwnPocket && !isPendingClear) {
               if (t.primary_mode === 'mpesa') mpesa -= t.amount;
               else if (t.primary_mode === 'cash') cash -= t.amount;
               else if (t.primary_mode === 'paybill') bank -= t.amount;
@@ -322,10 +329,13 @@ export default function Dashboard() {
           else if (t.primary_mode === 'cash') { cash += t.amount; if (isAdvanceDeposit) cashAdvance += t.amount; }
           else if (t.primary_mode === 'paybill') { bank += t.amount; if (isAdvanceDeposit) bankAdvance += t.amount; }
         } else if (t.type === 'supplier_payment' || t.type === 'supplier_invoice') {
-          // Supplier payments deduct from mode balance
-          if (t.primary_mode === 'mpesa') mpesa -= t.amount;
-          else if (t.primary_mode === 'cash') cash -= t.amount;
-          else if (t.primary_mode === 'paybill') bank -= t.amount;
+          // Supplier payments deduct from mode balance, unless it's a
+          // post-dated cheque that hasn't cleared the bank yet.
+          if (!(t.clears_on && t.clears_on > today)) {
+            if (t.primary_mode === 'mpesa') mpesa -= t.amount;
+            else if (t.primary_mode === 'cash') cash -= t.amount;
+            else if (t.primary_mode === 'paybill') bank -= t.amount;
+          }
         } else if (t.type === 'partner_draw') {
           if (t.primary_mode === 'mpesa') mpesa -= t.amount;
           else if (t.primary_mode === 'cash') cash -= t.amount;

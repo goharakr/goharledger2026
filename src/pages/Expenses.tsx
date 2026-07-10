@@ -31,6 +31,8 @@ interface ExpenseForm {
   loanId: string;
   partnerId: string;
   source: 'shop' | 'own_pocket';
+  isPostDated: boolean;
+  clearsOn: string;
 }
 
 const emptyForm: ExpenseForm = {
@@ -44,6 +46,8 @@ const emptyForm: ExpenseForm = {
   loanId: '',
   partnerId: '',
   source: 'shop',
+  isPostDated: false,
+  clearsOn: '',
 };
 
 export default function Expenses() {
@@ -140,6 +144,7 @@ export default function Expenses() {
         supplier_id: form.supplierId,
         description: form.description || `Payment to ${supp.name}`,
         notes: form.notes || null,
+        clears_on: form.mode === 'paybill' && form.isPostDated && form.clearsOn ? form.clearsOn : null,
         created_by: user?.username || null,
       }));
       if (error || !newTxn) { console.error(error); alert('Failed to save payment: ' + (error?.message || 'unknown error')); return; }
@@ -196,6 +201,7 @@ export default function Expenses() {
       supplier_id: form.supplierId || null,
       loan_id: form.loanId || null,
       partner_id: isPartnerExpense ? category : (isHomeExpense ? form.partnerId || null : null),
+      clears_on: form.mode === 'paybill' && form.isPostDated && form.clearsOn ? form.clearsOn : null,
       created_by: user?.username || null,
     }));
     if (error || !newTxn) { console.error(error); alert('Failed to save expense: ' + (error?.message || 'unknown error')); return; }
@@ -255,6 +261,8 @@ export default function Expenses() {
       loanId: expense.loan_id || '',
       partnerId: expense.partner_id || '',
       source: source as 'shop' | 'own_pocket',
+      isPostDated: !!expense.clears_on,
+      clearsOn: expense.clears_on || '',
     });
     if (expense.type === 'supplier_payment') setActiveTab('suppliers');
     else if (expense.type === 'loan_payment') setActiveTab('loans');
@@ -282,6 +290,7 @@ export default function Expenses() {
         supplier_id: form.supplierId || null,
         description: form.description || null,
         notes: form.notes || null,
+        clears_on: form.mode === 'paybill' && form.isPostDated && form.clearsOn ? form.clearsOn : null,
         edited_at: new Date().toISOString(),
       }).eq('id', editingId);
       if (form.supplierId) await adjustSupplierBalance(form.supplierId, -amt);
@@ -339,6 +348,7 @@ export default function Expenses() {
       loan_id: form.loanId || null,
       partner_id: isPartnerExpense ? category : (isHomeExpense ? form.partnerId || null : null),
       type: isPartnerExpense ? 'partner_draw' : 'expense',
+      clears_on: form.mode === 'paybill' && form.isPostDated && form.clearsOn ? form.clearsOn : null,
       edited_at: new Date().toISOString(),
     }).eq('id', editingId);
 
@@ -507,6 +517,29 @@ export default function Expenses() {
                 <option value="paybill">Paybill</option>
               </select>
             </div>
+
+            {/* Post-dated cheque (only makes sense for Paybill/Bank) */}
+            {form.mode === 'paybill' && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="isPostDated"
+                  checked={form.isPostDated}
+                  onChange={(e) => setForm({ ...form, isPostDated: e.target.checked })}
+                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                />
+                <label htmlFor="isPostDated" className="text-xs text-slate-600">Post-dated cheque</label>
+                {form.isPostDated && (
+                  <input
+                    type="date"
+                    value={form.clearsOn}
+                    onChange={(e) => setForm({ ...form, clearsOn: e.target.value })}
+                    className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
+                    placeholder="Clears on"
+                  />
+                )}
+              </div>
+            )}
 
             {/* Row 2: Category/Loan/Supplier/Partner based on tab */}
             {activeTab === 'shop' && (
@@ -712,7 +745,16 @@ export default function Expenses() {
                                   </span>
                                 )}
                               </td>
-                              <td className="px-4 py-2 text-slate-500">{exp.primary_mode}</td>
+                              <td className="px-4 py-2 text-slate-500">
+                                {exp.primary_mode}
+                                {exp.clears_on && (
+                                  <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${
+                                    exp.clears_on > todayStr() ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
+                                  }`} title="Post-dated cheque">
+                                    {exp.clears_on > todayStr() ? `Clears ${formatDate(exp.clears_on)}` : 'Cleared'}
+                                  </span>
+                                )}
+                              </td>
                               <td className="px-4 py-2 text-right font-medium text-red-600">{formatKES(exp.amount)}</td>
                               <td className="px-4 py-2 text-center">
                                 <div className="flex items-center justify-center gap-1">

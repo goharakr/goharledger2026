@@ -113,7 +113,10 @@ export default function CashBank() {
         // Only deduct shop expenses (NOT supplier payments - those are separate)
         const isHomeExpenseFromOwnPocket = t.category === 'home_expense' && t.notes?.includes('From Own Pocket');
         const isSupplierPayment = t.category === 'supplier_payment' || t.category === 'stock';
-        if (!isHomeExpenseFromOwnPocket && !isSupplierPayment) {
+        // A post-dated cheque hasn't left the bank yet - don't deduct it
+        // until its "clears on" date actually arrives.
+        const isPendingClear = t.clears_on && t.clears_on > todayStr();
+        if (!isHomeExpenseFromOwnPocket && !isSupplierPayment && !isPendingClear) {
           if (t.primary_mode === 'mpesa') mpesa -= t.amount;
           else if (t.primary_mode === 'cash') cash -= t.amount;
           else if (t.primary_mode === 'paybill') paybill -= t.amount;
@@ -128,10 +131,13 @@ export default function CashBank() {
         else if (t.primary_mode === 'cash') cash += t.amount;
         else if (t.primary_mode === 'paybill') paybill += t.amount;
       } else if (t.type === 'supplier_payment') {
-        // Supplier payments deduct from mode balance
-        if (t.primary_mode === 'mpesa') mpesa -= t.amount;
-        else if (t.primary_mode === 'cash') cash -= t.amount;
-        else if (t.primary_mode === 'paybill') paybill -= t.amount;
+        // Supplier payments deduct from mode balance, unless it's a
+        // post-dated cheque that hasn't cleared the bank yet.
+        if (!(t.clears_on && t.clears_on > todayStr())) {
+          if (t.primary_mode === 'mpesa') mpesa -= t.amount;
+          else if (t.primary_mode === 'cash') cash -= t.amount;
+          else if (t.primary_mode === 'paybill') paybill -= t.amount;
+        }
       } else if (t.type === 'partner_draw') {
         if (t.primary_mode === 'mpesa') mpesa -= t.amount;
         else if (t.primary_mode === 'cash') cash -= t.amount;
@@ -278,7 +284,8 @@ export default function CashBank() {
       } else if (t.type === 'expense') {
         const isHomeExpenseFromOwnPocket = t.category === 'home_expense' && t.notes?.includes('From Own Pocket');
         const isSupplierPayment = t.category === 'supplier_payment' || t.category === 'stock';
-        if (!isHomeExpenseFromOwnPocket && !isSupplierPayment) {
+        const isPendingClear = t.clears_on && t.clears_on > todayStr();
+        if (!isHomeExpenseFromOwnPocket && !isSupplierPayment && !isPendingClear) {
           if (mode === 'all') {
             if (t.primary_mode === 'mpesa') debit += t.amount;
             else if (t.primary_mode === 'cash') debit += t.amount;
@@ -292,7 +299,7 @@ export default function CashBank() {
       } else if (t.type === 'opening_balance') {
         if (mode === 'all' || t.primary_mode === mode) credit += t.amount;
       } else if (t.type === 'supplier_payment') {
-        if (mode === 'all' || t.primary_mode === mode) debit += t.amount;
+        if (!(t.clears_on && t.clears_on > todayStr()) && (mode === 'all' || t.primary_mode === mode)) debit += t.amount;
       } else if (t.type === 'partner_draw') {
         if (mode === 'all' || t.primary_mode === mode) debit += t.amount;
       } else if (t.type === 'loan_payment') {
