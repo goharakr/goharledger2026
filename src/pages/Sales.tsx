@@ -11,6 +11,7 @@ import {
   Save,
   UserPlus,
   BookOpen,
+  RotateCcw,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr } from '../utils/format';
@@ -89,6 +90,8 @@ export default function Sales() {
   const [quickSupplier, setQuickSupplier] = useState({ name: '', phone: '', balance: '' });
   const [showQuickAddCostSupplier, setShowQuickAddCostSupplier] = useState(false);
   const [quickCostSupplier, setQuickCostSupplier] = useState({ name: '', phone: '' });
+  const [refundingSale, setRefundingSale] = useState<Transaction | null>(null);
+  const [refundForm, setRefundForm] = useState({ amount: '', costPrice: '', mode: 'cash', date: todayStr() });
 
   useEffect(() => {
     fetchData();
@@ -241,25 +244,45 @@ export default function Sales() {
     }
 
     // Optionally, pay a supplier back for the cost of this item right away
-    // (e.g. bought on the spot from another shop, sold immediately)
+    // (e.g. bought on the spot from another shop, sold immediately). Recorded
+    // as an invoice (cost taken) plus a payment (cost given back) so both
+    // show up as their own lines on that supplier's ledger, not one opaque entry.
     if (form.payCostToSupplier && form.costSupplierId && parseFloat(form.costSupplierAmount || '0') > 0) {
       const costAmt = parseFloat(form.costSupplierAmount);
-      const costPrefix = 'SUP-' + form.date.replace(/-/g, '');
-      const { data: costTxn, error: costError } = await insertTransactionWithId(costPrefix, (transactionId) => ({
+      const invPrefix = 'INV-' + form.date.replace(/-/g, '');
+      const { data: invTxn, error: invError } = await insertTransactionWithId(invPrefix, (transactionId) => ({
         transaction_id: transactionId,
         date: form.date,
-        type: 'supplier_payment',
-        primary_mode: form.costSupplierMode,
+        type: 'supplier_invoice',
+        primary_mode: null,
         amount: costAmt,
         supplier_id: form.costSupplierId,
-        description: 'Cost price paid on sale ' + txnId,
+        description: 'Cost price taken on sale ' + txnId,
         created_by: user?.username || null,
       }));
-      if (costError || !costTxn) {
-        console.error(costError);
-        alert('Sale saved, but paying the supplier back failed: ' + (costError?.message || 'unknown error'));
+      if (invError || !invTxn) {
+        console.error(invError);
+        alert('Sale saved, but recording the supplier cost failed: ' + (invError?.message || 'unknown error'));
       } else {
-        await adjustSupplierBalance(form.costSupplierId, -costAmt);
+        await adjustSupplierBalance(form.costSupplierId, costAmt);
+
+        const payPrefix = 'SUP-' + form.date.replace(/-/g, '');
+        const { data: payTxn, error: payError } = await insertTransactionWithId(payPrefix, (transactionId) => ({
+          transaction_id: transactionId,
+          date: form.date,
+          type: 'supplier_payment',
+          primary_mode: form.costSupplierMode,
+          amount: costAmt,
+          supplier_id: form.costSupplierId,
+          description: 'Cost price paid on sale ' + txnId,
+          created_by: user?.username || null,
+        }));
+        if (payError || !payTxn) {
+          console.error(payError);
+          alert('Sale saved, and the supplier cost was recorded, but paying it back failed: ' + (payError?.message || 'unknown error'));
+        } else {
+          await adjustSupplierBalance(form.costSupplierId, -costAmt);
+        }
       }
     }
 
@@ -352,6 +375,47 @@ export default function Sales() {
     }
 
     await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', id);
+    fetchData();
+    triggerRefresh();
+  }
+
+  async function handleRefund() {
+    if (!refundingSale) return;
+    const amount = parseFloat(refundForm.amount);
+    if (!amount || amount <= 0) return;
+
+    // Use the cost price you entered if given; otherwise work out this
+    // refund's share of the original cost automatically, so a partial refund
+    // only reverses that portion of the profit, and a full refund reverses it all
+    let refundCp: number;
+    if (refundForm.costPrice) {
+      refundCp = parseFloat(refundForm.costPrice);
+    } else {
+      const originalSp = refundingSale.selling_price || 0;
+      const originalCp = refundingSale.cost_price || 0;
+      refundCp = originalSp > 0 ? (amount / originalSp) * originalCp : 0;
+    }
+
+    const prefix = 'REF-' + refundForm.date.replace(/-/g, '');
+    const { data: newTxn, error } = await insertTransactionWithId(prefix, (transactionId) => ({
+      transaction_id: transactionId,
+      date: refundForm.date,
+      type: 'sale',
+      primary_mode: refundForm.mode,
+      selling_price: -amount,
+      cost_price: -refundCp,
+      amount: -amount,
+      description: `Refund - ${refundingSale.transaction_id}`,
+      created_by: user?.username || null,
+    }));
+    if (error || !newTxn) {
+      console.error(error);
+      alert('Failed to save refund: ' + (error?.message || 'unknown error'));
+      return;
+    }
+
+    setRefundingSale(null);
+    setRefundForm({ amount: '', costPrice: '', mode: 'cash', date: todayStr() });
     fetchData();
     triggerRefresh();
   }
@@ -763,6 +827,16 @@ export default function Sales() {
                                     </button>
                                     <button
                                       onClick={() => {
+                                        setRefundingSale(sale);
+                                        setRefundForm({ amount: '', costPrice: '', mode: 'cash', date: todayStr() });
+                                      }}
+                                      className="p-1 hover:bg-amber-100 rounded"
+                                      title="Refund"
+                                    >
+                                      <RotateCcw size={14} className="text-amber-600" />
+                                    </button>
+                                    <button
+                                      onClick={() => {
                                         const reason = prompt('Enter void reason:');
                                         if (reason) handleVoid(sale.id, reason);
                                       }}
@@ -792,6 +866,73 @@ export default function Sales() {
         title="Sales Ledger"
         filterTypes={['sale']}
       />
+
+      {/* Refund modal */}
+      {refundingSale && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-sm space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-slate-800">Refund Sale {refundingSale.transaction_id}</h3>
+              <button onClick={() => setRefundingSale(null)} className="p-1 hover:bg-slate-100 rounded">
+                <X size={16} />
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">
+              Original sale: {formatKES(refundingSale.selling_price || 0)} (cost {formatKES(refundingSale.cost_price || 0)})
+            </p>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Amount to refund</label>
+              <input
+                type="number"
+                value={refundForm.amount}
+                onChange={(e) => setRefundForm({ ...refundForm, amount: e.target.value })}
+                className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Cost price of the refunded amount (optional - leave blank to work it out automatically)</label>
+              <input
+                type="number"
+                value={refundForm.costPrice}
+                onChange={(e) => setRefundForm({ ...refundForm, costPrice: e.target.value })}
+                placeholder="Auto-calculated if left blank"
+                className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Paid back via</label>
+                <select
+                  value={refundForm.mode}
+                  onChange={(e) => setRefundForm({ ...refundForm, mode: e.target.value })}
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                >
+                  <option value="cash">Cash</option>
+                  <option value="mpesa">Mpesa</option>
+                  <option value="paybill">Paybill</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={refundForm.date}
+                  onChange={(e) => setRefundForm({ ...refundForm, date: e.target.value })}
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={handleRefund} className="flex-1 bg-amber-600 hover:bg-amber-700 text-white px-3 py-2 rounded text-sm font-medium">
+                Save Refund
+              </button>
+              <button onClick={() => setRefundingSale(null)} className="px-3 py-2 text-slate-500 hover:text-slate-700 text-sm">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
