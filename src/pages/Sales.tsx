@@ -38,6 +38,10 @@ interface SaleForm {
   splitPaybill: string;
   isUnclassified: boolean;
   advanceMode: string;
+  payCostToSupplier: boolean;
+  costSupplierId: string;
+  costSupplierAmount: string;
+  costSupplierMode: string;
 }
 
 const emptyForm: SaleForm = {
@@ -55,6 +59,10 @@ const emptyForm: SaleForm = {
   splitPaybill: '',
   isUnclassified: false,
   advanceMode: 'cash',
+  payCostToSupplier: false,
+  costSupplierId: '',
+  costSupplierAmount: '',
+  costSupplierMode: 'cash',
 };
 
 export default function Sales() {
@@ -79,6 +87,8 @@ export default function Sales() {
   const [showQuickAddSupplier, setShowQuickAddSupplier] = useState(false);
   const [quickCustomer, setQuickCustomer] = useState({ name: '', phone: '', creditLimit: '' });
   const [quickSupplier, setQuickSupplier] = useState({ name: '', phone: '', balance: '' });
+  const [showQuickAddCostSupplier, setShowQuickAddCostSupplier] = useState(false);
+  const [quickCostSupplier, setQuickCostSupplier] = useState({ name: '', phone: '' });
 
   useEffect(() => {
     fetchData();
@@ -154,6 +164,26 @@ export default function Sales() {
     }
   }
 
+  async function handleQuickAddCostSupplier() {
+    const name = quickCostSupplier.name.trim();
+    if (!name) return;
+    if (suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+      alert('A supplier with this name already exists.');
+      return;
+    }
+    const { data } = await supabase.from('suppliers').insert({
+      name,
+      phone: quickCostSupplier.phone || null,
+      balance: 0,
+    }).select().single();
+    if (data) {
+      setSuppliers((prev) => [...prev, data]);
+      setForm((f) => ({ ...f, costSupplierId: data.id }));
+      setShowQuickAddCostSupplier(false);
+      setQuickCostSupplier({ name: '', phone: '' });
+    }
+  }
+
   async function handleSave() {
     if (!form.sellingPrice || parseFloat(form.sellingPrice) <= 0) return;
     if ((form.mode === 'credit' || form.mode === 'advance') && !form.customerId) return;
@@ -208,6 +238,29 @@ export default function Sales() {
 
     if (form.mode === 'supplier' && form.supplierId) {
       await adjustSupplierBalance(form.supplierId, -sp);
+    }
+
+    // Optionally, pay a supplier back for the cost of this item right away
+    // (e.g. bought on the spot from another shop, sold immediately)
+    if (form.payCostToSupplier && form.costSupplierId && parseFloat(form.costSupplierAmount || '0') > 0) {
+      const costAmt = parseFloat(form.costSupplierAmount);
+      const costPrefix = 'SUP-' + form.date.replace(/-/g, '');
+      const { data: costTxn, error: costError } = await insertTransactionWithId(costPrefix, (transactionId) => ({
+        transaction_id: transactionId,
+        date: form.date,
+        type: 'supplier_payment',
+        primary_mode: form.costSupplierMode,
+        amount: costAmt,
+        supplier_id: form.costSupplierId,
+        description: 'Cost price paid on sale ' + txnId,
+        created_by: user?.username || null,
+      }));
+      if (costError || !costTxn) {
+        console.error(costError);
+        alert('Sale saved, but paying the supplier back failed: ' + (costError?.message || 'unknown error'));
+      } else {
+        await adjustSupplierBalance(form.costSupplierId, -costAmt);
+      }
     }
 
     setForm(emptyForm);
@@ -404,6 +457,10 @@ export default function Sales() {
       splitPaybill: String(existingSplits.find((s) => s.mode === 'paybill')?.amount || ''),
       isUnclassified: sale.is_unclassified,
       advanceMode: sale.settlement_mode || 'cash',
+      payCostToSupplier: false,
+      costSupplierId: '',
+      costSupplierAmount: '',
+      costSupplierMode: 'cash',
     });
     setShowAdd(true);
   }
@@ -517,6 +574,11 @@ export default function Sales() {
             quickSupplier={quickSupplier}
             setQuickSupplier={setQuickSupplier}
             onQuickAddSupplier={handleQuickAddSupplier}
+            showQuickAddCostSupplier={showQuickAddCostSupplier}
+            setShowQuickAddCostSupplier={setShowQuickAddCostSupplier}
+            quickCostSupplier={quickCostSupplier}
+            setQuickCostSupplier={setQuickCostSupplier}
+            onQuickAddCostSupplier={handleQuickAddCostSupplier}
             isEditing={!!editingId}
             onKeyDown={(e, field) => {
               if (e.key === 'Enter') {
@@ -753,6 +815,11 @@ function SaleFormFields({
   quickSupplier,
   setQuickSupplier,
   onQuickAddSupplier,
+  showQuickAddCostSupplier,
+  setShowQuickAddCostSupplier,
+  quickCostSupplier,
+  setQuickCostSupplier,
+  onQuickAddCostSupplier,
   isEditing,
   onKeyDown,
 }: {
@@ -774,6 +841,11 @@ function SaleFormFields({
   quickSupplier?: { name: string; phone: string; balance: string };
   setQuickSupplier?: (v: { name: string; phone: string; balance: string }) => void;
   onQuickAddSupplier?: () => void;
+  showQuickAddCostSupplier?: boolean;
+  setShowQuickAddCostSupplier?: (v: boolean) => void;
+  quickCostSupplier?: { name: string; phone: string };
+  setQuickCostSupplier?: (v: { name: string; phone: string }) => void;
+  onQuickAddCostSupplier?: () => void;
   isEditing?: boolean;
   onKeyDown?: (e: React.KeyboardEvent, field: keyof SaleForm) => void;
 }) {
@@ -935,6 +1007,89 @@ function SaleFormFields({
               Cancel
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Optional: pay a supplier back for this item's cost price right away */}
+      {onQuickAddCostSupplier && (
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input
+              type="checkbox"
+              checked={form.payCostToSupplier}
+              onChange={(e) => setForm((prev) => ({
+                ...prev,
+                payCostToSupplier: e.target.checked,
+                costSupplierAmount: e.target.checked && !prev.costSupplierAmount ? prev.costPrice : prev.costSupplierAmount,
+              }))}
+            />
+            Pay cost price to a supplier now
+          </label>
+          {form.payCostToSupplier && (
+            <div className="grid grid-cols-4 gap-2">
+              <div className="col-span-2 flex gap-1">
+                <select
+                  value={form.costSupplierId}
+                  onChange={(e) => update('costSupplierId', e.target.value)}
+                  className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                >
+                  <option value="">Supplier</option>
+                  {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setShowQuickAddCostSupplier && setShowQuickAddCostSupplier(!showQuickAddCostSupplier)}
+                  className="p-1.5 border border-slate-300 rounded hover:bg-slate-50 shrink-0"
+                  title="Add new supplier"
+                >
+                  <UserPlus size={16} className="text-slate-500" />
+                </button>
+              </div>
+              <input
+                type="number"
+                value={form.costSupplierAmount}
+                onChange={(e) => update('costSupplierAmount', e.target.value)}
+                placeholder="Amount"
+                className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+              <select
+                value={form.costSupplierMode}
+                onChange={(e) => update('costSupplierMode', e.target.value)}
+                className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              >
+                <option value="cash">Cash</option>
+                <option value="mpesa">Mpesa</option>
+                <option value="paybill">Paybill</option>
+              </select>
+            </div>
+          )}
+          {showQuickAddCostSupplier && quickCostSupplier && setQuickCostSupplier && (
+            <div className="grid grid-cols-4 gap-2 bg-emerald-50 border border-emerald-200 rounded p-2">
+              <input
+                type="text"
+                value={quickCostSupplier.name}
+                onChange={(e) => setQuickCostSupplier({ ...quickCostSupplier, name: e.target.value })}
+                placeholder="New supplier name"
+                className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+              <input
+                type="text"
+                value={quickCostSupplier.phone}
+                onChange={(e) => setQuickCostSupplier({ ...quickCostSupplier, phone: e.target.value })}
+                placeholder="Phone (optional)"
+                className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+              <div />
+              <div className="flex gap-1">
+                <button type="button" onClick={onQuickAddCostSupplier} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">
+                  Add
+                </button>
+                <button type="button" onClick={() => setShowQuickAddCostSupplier && setShowQuickAddCostSupplier(false)} className="text-slate-500 hover:text-slate-700 text-xs">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
