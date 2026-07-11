@@ -230,6 +230,8 @@ export default function Dashboard() {
     try {
       const monthStart = monthFilter + '-01';
       const today = new Date().toISOString().split('T')[0];
+      const [monthFilterYear, monthFilterMonth] = monthFilter.split('-').map(Number);
+      const monthEnd = new Date(monthFilterYear, monthFilterMonth, 0).toISOString().split('T')[0];
 
       const [{ data: txns }, { data: splits }, { data: suppData }, { data: custData }, { data: loans }, { data: reminderData }, { data: capitalData }, { data: histProfit }] = await Promise.all([
         supabase.from('transactions').select('*').eq('is_void', false),
@@ -268,7 +270,7 @@ export default function Dashboard() {
       txns?.forEach((t) => {
         if (t.is_void) return;
         const profitVal = (t.selling_price || 0) - (t.cost_price || 0) - (t.commission || 0);
-        const isMonth = t.date >= monthStart && t.date <= today;
+        const isMonth = t.date >= monthStart && t.date <= monthEnd;
 
         // Cash balances
         if (t.type === 'sale') {
