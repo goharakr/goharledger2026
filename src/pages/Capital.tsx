@@ -506,25 +506,27 @@ export default function Capital() {
 
       {/* Edit Loan Modal */}
       {showEditLoan && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-slate-800 text-sm">Edit Loan</h3>
-            <button onClick={() => setShowEditLoan(null)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
-          </div>
-          <div className="space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              <input type="text" value={editLoanForm.loanName} onChange={(e) => setEditLoanForm({ ...editLoanForm, loanName: e.target.value })} placeholder="Loan Name" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-              <input type="number" value={editLoanForm.totalAmount} onChange={(e) => setEditLoanForm({ ...editLoanForm, totalAmount: e.target.value })} placeholder="Total" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-md">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-slate-800 text-sm">Edit Loan</h3>
+              <button onClick={() => setShowEditLoan(null)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              <input type="number" value={editLoanForm.amountPaid} onChange={(e) => setEditLoanForm({ ...editLoanForm, amountPaid: e.target.value })} placeholder="Paid" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-              <input type="number" value={editLoanForm.monthlyInstallment} onChange={(e) => setEditLoanForm({ ...editLoanForm, monthlyInstallment: e.target.value })} placeholder="Monthly" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-              <input type="date" value={editLoanForm.startDate} onChange={(e) => setEditLoanForm({ ...editLoanForm, startDate: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-            </div>
-            <input type="text" value={editLoanForm.notes} onChange={(e) => setEditLoanForm({ ...editLoanForm, notes: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleEditLoan(); }}} placeholder="Notes" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
-            <div className="flex gap-2 pt-2 border-t border-slate-200">
-              <button onClick={handleEditLoan} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium">Update</button>
-              <button onClick={() => setShowEditLoan(null)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <input type="text" value={editLoanForm.loanName} onChange={(e) => setEditLoanForm({ ...editLoanForm, loanName: e.target.value })} placeholder="Loan Name" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                <input type="number" value={editLoanForm.totalAmount} onChange={(e) => setEditLoanForm({ ...editLoanForm, totalAmount: e.target.value })} placeholder="Total" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <input type="number" value={editLoanForm.amountPaid} onChange={(e) => setEditLoanForm({ ...editLoanForm, amountPaid: e.target.value })} placeholder="Paid" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                <input type="number" value={editLoanForm.monthlyInstallment} onChange={(e) => setEditLoanForm({ ...editLoanForm, monthlyInstallment: e.target.value })} placeholder="Monthly" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                <input type="date" value={editLoanForm.startDate} onChange={(e) => setEditLoanForm({ ...editLoanForm, startDate: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              </div>
+              <input type="text" value={editLoanForm.notes} onChange={(e) => setEditLoanForm({ ...editLoanForm, notes: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleEditLoan(); }}} placeholder="Notes" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <div className="flex gap-2 pt-2 border-t border-slate-200">
+                <button onClick={handleEditLoan} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium">Update</button>
+                <button onClick={() => setShowEditLoan(null)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
+              </div>
             </div>
           </div>
         </div>
