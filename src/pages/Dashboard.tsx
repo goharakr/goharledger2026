@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   TrendingUp,
-  TrendingDown,
   AlertTriangle,
   Wallet,
   ShoppingCart,
@@ -235,7 +234,7 @@ export default function Dashboard() {
       const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][monthFilterMonth - 1];
       const monthEnd = `${monthFilterYear}-${String(monthFilterMonth).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
 
-      const [{ data: txns }, { data: splits }, { data: suppData }, { data: custData }, { data: loans }, { data: reminderData }, { data: capitalData }, { data: histProfit }] = await Promise.all([
+      const [{ data: txns }, { data: splits }, { data: suppData }, { data: custData }, { data: loans }, { data: reminderData }, { data: capitalData }, { data: histProfit }, { data: shareRules }] = await Promise.all([
         supabase.from('transactions').select('*').eq('is_void', false),
         supabase.from('transaction_splits').select('*'),
         supabase.from('suppliers').select('*').eq('is_active', true),
@@ -244,6 +243,7 @@ export default function Dashboard() {
         supabase.from('reminders').select('*').eq('status', 'pending').order('reminder_date', { ascending: true }),
         supabase.from('capital_entries').select('*'),
         supabase.from('historical_profit').select('*'),
+        supabase.from('share_rules').select('*').eq('is_active', true),
       ]);
 
       setSuppliers(suppData || []);
@@ -457,6 +457,74 @@ export default function Dashboard() {
         }
       });
 
+      // Partner cards on this page show 3 separate figures per partner instead of
+      // one lumped balance: (1) profit share still due - accumulates every month
+      // (using the Fixed/Percentage rule from Profit & Loss) until marked taken,
+      // regardless of which month it was earned in, (2) home expenses paid from
+      // their own pocket that the shop still owes back, (3) how much they've
+      // drawn out in the currently-viewed month only.
+      const monthlyFigures = new Map<string, { grossProfit: number; shopExpenses: number; homeExpensesFromShop: number; loanPayments: number }>();
+      txns?.forEach((t) => {
+        if (t.is_void || !t.date) return;
+        const monthKey = t.date.slice(0, 7);
+        if (!monthlyFigures.has(monthKey)) {
+          monthlyFigures.set(monthKey, { grossProfit: 0, shopExpenses: 0, homeExpensesFromShop: 0, loanPayments: 0 });
+        }
+        const m = monthlyFigures.get(monthKey)!;
+        if (t.type === 'sale') {
+          m.grossProfit += (t.selling_price || 0) - (t.cost_price || 0) - (t.commission || 0);
+        } else if (t.type === 'expense' && t.category !== 'stock' && t.category !== 'supplier_payment') {
+          if (t.category === 'home_expense') {
+            if (t.notes?.includes('From Shop')) m.homeExpensesFromShop += t.amount;
+          } else {
+            m.shopExpenses += t.amount;
+          }
+        } else if (t.type === 'loan_payment') {
+          m.loanPayments += t.amount;
+        }
+      });
+
+      const taherRule = shareRules?.find((r) => r.partner_id === 'taher');
+      const abdulRule = shareRules?.find((r) => r.partner_id === 'abdulqadir');
+      let taherShareEarned = 0, abdulShareEarned = 0;
+      monthlyFigures.forEach((m) => {
+        const netProfit = m.grossProfit - m.shopExpenses - m.homeExpensesFromShop - m.loanPayments;
+        if (taherRule) {
+          taherShareEarned += taherRule.rule_type === 'fixed' ? taherRule.value : netProfit * (taherRule.value / 100);
+        }
+        if (abdulRule) {
+          abdulShareEarned += abdulRule.rule_type === 'fixed' ? abdulRule.value : netProfit * (abdulRule.value / 100);
+        }
+      });
+
+      let taherDrawsAllTime = 0, abdulDrawsAllTime = 0;
+      let taherDrawsThisMonth = 0, abdulDrawsThisMonth = 0;
+      let taherHomeOwed = 0, abdulHomeOwed = 0;
+      txns?.forEach((t) => {
+        if (t.is_void) return;
+        if (t.type === 'partner_draw') {
+          const isMonth = t.date >= monthStart && t.date <= monthEnd;
+          if (t.partner_id === 'taher') { taherDrawsAllTime += t.amount; if (isMonth) taherDrawsThisMonth += t.amount; }
+          if (t.partner_id === 'abdulqadir') { abdulDrawsAllTime += t.amount; if (isMonth) abdulDrawsThisMonth += t.amount; }
+        }
+        if (t.type === 'expense' && t.category === 'home_expense') {
+          if (t.notes?.includes('From Own Pocket')) {
+            if (t.partner_id === 'taher') taherHomeOwed += t.amount;
+            if (t.partner_id === 'abdulqadir') abdulHomeOwed += t.amount;
+          }
+          if (t.notes?.includes('From Shop') && t.notes?.includes('repaying')) {
+            if (t.partner_id === 'taher') taherHomeOwed -= t.amount;
+            if (t.partner_id === 'abdulqadir') abdulHomeOwed -= t.amount;
+          }
+        }
+      });
+
+      const histTaherRemaining = (histProfit || []).reduce((s, h) => s + (h.taher_share || 0) - (h.taher_taken || 0), 0);
+      const histAbdulRemaining = (histProfit || []).reduce((s, h) => s + (h.abdulqadir_share || 0) - (h.abdulqadir_taken || 0), 0);
+
+      const taherShareDue = taherShareEarned + histTaherRemaining - taherDrawsAllTime;
+      const abdulShareDue = abdulShareEarned + histAbdulRemaining - abdulDrawsAllTime;
+
       const totalSuppliersOwed = (suppData || []).reduce((sum, s) => sum + (s.balance || 0), 0);
       const totalCustomersPending = (custData || []).reduce((sum, c) => sum + (c.credit_balance || 0), 0);
       const totalNetProfit = totalGrossProfit - totalShopExpenses - totalHomeExpenses - totalLoanPayments;
@@ -486,6 +554,12 @@ export default function Dashboard() {
         totalCustomersPending,
         taherBalance: taherBal,
         abdulqadirBalance: abdulBal,
+        taherShareDue,
+        abdulqadirShareDue: abdulShareDue,
+        taherHomeOwed,
+        abdulqadirHomeOwed: abdulHomeOwed,
+        taherDrawsThisMonth,
+        abdulqadirDrawsThisMonth: abdulDrawsThisMonth,
         totalSalesSinceStart: totalSales,
         totalProfitSinceStart: totalProfit,
         idrisRemaining: idrisLoan?.remaining_balance || 0,
@@ -802,10 +876,22 @@ export default function Dashboard() {
       {/* Partner Balances */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <button onClick={() => navigate('/partners')} className="text-left">
-          <PartnerCard name="Taher" balance={stats?.taherBalance || 0} clickable />
+          <PartnerCard
+            name="Taher"
+            shareDue={stats?.taherShareDue || 0}
+            homeOwed={stats?.taherHomeOwed || 0}
+            takenThisMonth={stats?.taherDrawsThisMonth || 0}
+            clickable
+          />
         </button>
         <button onClick={() => navigate('/partners')} className="text-left">
-          <PartnerCard name="Abdulqadir" balance={stats?.abdulqadirBalance || 0} clickable />
+          <PartnerCard
+            name="Abdulqadir"
+            shareDue={stats?.abdulqadirShareDue || 0}
+            homeOwed={stats?.abdulqadirHomeOwed || 0}
+            takenThisMonth={stats?.abdulqadirDrawsThisMonth || 0}
+            clickable
+          />
         </button>
       </div>
 
@@ -1031,23 +1117,33 @@ function StatBox({ label, value, icon, color, clickable }: { label: string; valu
   );
 }
 
-function PartnerCard({ name, balance, clickable }: { name: string; balance: number; clickable?: boolean }) {
-  const isPositive = balance >= 0;
+function PartnerCard({ name, shareDue, homeOwed, takenThisMonth, clickable }: { name: string; shareDue: number; homeOwed: number; takenThisMonth: number; clickable?: boolean }) {
   return (
-    <div className={`bg-white rounded-xl border border-slate-200 shadow-sm p-5 ${clickable ? 'hover:shadow-md hover:border-emerald-300 transition-all cursor-pointer' : ''}`}>
-      <div className="flex items-center gap-2 mb-3">
-        <Users size={20} className="text-slate-400" />
-        <h3 className="font-semibold text-lg text-slate-800">{name}</h3>
+    <div className={`bg-white rounded-xl border border-slate-200 shadow-sm p-4 ${clickable ? 'hover:shadow-md hover:border-emerald-300 transition-all cursor-pointer' : ''}`}>
+      <div className="flex items-center gap-2 mb-2.5">
+        <Users size={18} className="text-slate-400" />
+        <h3 className="font-semibold text-base text-slate-800">{name}</h3>
       </div>
-      <div className="flex items-center gap-2 mb-2">
-        {isPositive ? <TrendingUp size={18} className="text-emerald-500" /> : <TrendingDown size={18} className="text-red-500" />}
-        <span className={`text-3xl font-bold ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
-          KES {formatKES(Math.abs(balance))}
-        </span>
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-slate-500">Share due</span>
+          <span className={`text-sm font-semibold ${shareDue >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+            KES {formatKES(Math.abs(shareDue))}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-slate-500">Home expenses owed</span>
+          <span className={`text-sm font-semibold ${homeOwed >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
+            KES {formatKES(Math.abs(homeOwed))}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-slate-500">Taken this month</span>
+          <span className="text-sm font-semibold text-slate-700">
+            KES {formatKES(takenThisMonth)}
+          </span>
+        </div>
       </div>
-      <p className={`text-base ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
-        {isPositive ? 'Shop owes ' + name : name + ' owes shop'}
-      </p>
     </div>
   );
 }
