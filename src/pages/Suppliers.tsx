@@ -42,6 +42,7 @@ interface PaymentForm {
   notes: string;
   isPostDated: boolean;
   clearsOn: string;
+  transactionFee: string;
 }
 
 const emptySupplier: SupplierForm = {
@@ -68,6 +69,7 @@ const emptyPayment: PaymentForm = {
   notes: '',
   isPostDated: false,
   clearsOn: '',
+  transactionFee: '',
 };
 
 export default function Suppliers() {
@@ -242,6 +244,24 @@ export default function Suppliers() {
     refreshSupplierData();
   }
 
+  // Mpesa/Paybill payments often lose a small amount to a network/bank fee -
+  // record that as its own separate expense so it shows up as real money out.
+  async function insertTransactionFee(dateStr: string, mode: string, feeStr: string, relatedTo: string) {
+    const fee = parseFloat(feeStr || '0');
+    if (!fee || fee <= 0) return;
+    if (mode !== 'mpesa' && mode !== 'paybill') return;
+    await insertTransactionWithId('FEE-' + dateStr.replace(/-/g, ''), (txnId) => ({
+      transaction_id: txnId,
+      date: dateStr,
+      type: 'expense',
+      category: 'transaction_fee',
+      primary_mode: mode,
+      amount: fee,
+      description: `Transaction fee - ${relatedTo}`,
+      created_by: user?.username || null,
+    }));
+  }
+
   async function handlePayment() {
     if (!selectedSupplier || !paymentForm.amount || parseFloat(paymentForm.amount) <= 0) return;
 
@@ -262,6 +282,7 @@ export default function Suppliers() {
     if (error || !newTxn) { console.error(error); alert('Failed to save payment: ' + (error?.message || 'unknown error')); return; }
 
     await adjustSupplierBalance(selectedSupplier.id, -amt);
+    await insertTransactionFee(paymentForm.date, paymentForm.mode, paymentForm.transactionFee, selectedSupplier.name);
 
     setPaymentForm(emptyPayment);
     setShowPayment(false);
@@ -642,6 +663,15 @@ export default function Suppliers() {
                   <option value="paybill">Paybill</option>
                 </select>
               </div>
+              {(paymentForm.mode === 'mpesa' || paymentForm.mode === 'paybill') && (
+                <input
+                  type="number"
+                  value={paymentForm.transactionFee}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, transactionFee: e.target.value })}
+                  placeholder="Transaction fee (optional)"
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              )}
               {paymentForm.mode === 'paybill' && (
                 <div className="flex items-center gap-2">
                   <input

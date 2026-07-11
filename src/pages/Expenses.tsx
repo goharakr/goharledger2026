@@ -33,6 +33,7 @@ interface ExpenseForm {
   source: 'shop' | 'own_pocket';
   isPostDated: boolean;
   clearsOn: string;
+  transactionFee: string;
 }
 
 const emptyForm: ExpenseForm = {
@@ -48,6 +49,7 @@ const emptyForm: ExpenseForm = {
   source: 'shop',
   isPostDated: false,
   clearsOn: '',
+  transactionFee: '',
 };
 
 export default function Expenses() {
@@ -108,6 +110,24 @@ export default function Expenses() {
     setLoading(false);
   }
 
+  // Mpesa/Paybill payments often lose a small amount to a network/bank fee -
+  // record that as its own separate expense so it shows up as real money out.
+  async function insertTransactionFee(dateStr: string, mode: string, feeStr: string, relatedTo: string) {
+    const fee = parseFloat(feeStr || '0');
+    if (!fee || fee <= 0) return;
+    if (mode !== 'mpesa' && mode !== 'paybill') return;
+    await insertTransactionWithId('FEE-' + dateStr.replace(/-/g, ''), (txnId) => ({
+      transaction_id: txnId,
+      date: dateStr,
+      type: 'expense',
+      category: 'transaction_fee',
+      primary_mode: mode,
+      amount: fee,
+      description: `Transaction fee - ${relatedTo}`,
+      created_by: user?.username || null,
+    }));
+  }
+
   async function handleSaveCategory() {
     if (!newCategoryName.trim()) return;
     await supabase.from('expense_categories').insert({
@@ -149,6 +169,7 @@ export default function Expenses() {
       }));
       if (error || !newTxn) { console.error(error); alert('Failed to save payment: ' + (error?.message || 'unknown error')); return; }
       await adjustSupplierBalance(form.supplierId, -amt);
+      await insertTransactionFee(form.date, form.mode, form.transactionFee, supp.name);
       setForm(emptyForm);
       setShowAdd(false);
       fetchData();
@@ -176,6 +197,7 @@ export default function Expenses() {
       if (error || !newTxn) { console.error(error); alert('Failed to save payment: ' + (error?.message || 'unknown error')); return; }
       // Update loan balance
       await adjustLoanBalance(form.loanId, amt);
+      await insertTransactionFee(form.date, form.mode, form.transactionFee, loan.loan_name);
       setForm(emptyForm);
       setShowAdd(false);
       fetchData();
@@ -218,6 +240,8 @@ export default function Expenses() {
         await adjustLoanBalance(form.loanId, amt);
       }
     }
+
+    await insertTransactionFee(form.date, form.mode, form.transactionFee, form.description || category);
 
     setForm(emptyForm);
     setShowAdd(false);
@@ -517,6 +541,17 @@ export default function Expenses() {
                 <option value="paybill">Paybill</option>
               </select>
             </div>
+
+            {/* Transaction fee (Mpesa/Paybill only lose money to network fees; only offered on new entries) */}
+            {!editingId && (form.mode === 'mpesa' || form.mode === 'paybill') && (
+              <input
+                type="number"
+                value={form.transactionFee}
+                onChange={(e) => setForm({ ...form, transactionFee: e.target.value })}
+                placeholder="Transaction fee (optional)"
+                className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            )}
 
             {/* Post-dated cheque (only makes sense for Paybill/Bank) */}
             {form.mode === 'paybill' && (
