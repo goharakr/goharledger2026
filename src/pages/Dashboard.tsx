@@ -231,7 +231,9 @@ export default function Dashboard() {
       const monthStart = monthFilter + '-01';
       const today = new Date().toISOString().split('T')[0];
       const [monthFilterYear, monthFilterMonth] = monthFilter.split('-').map(Number);
-      const monthEnd = new Date(monthFilterYear, monthFilterMonth, 0).toISOString().split('T')[0];
+      const isLeapYear = (monthFilterYear % 4 === 0 && monthFilterYear % 100 !== 0) || monthFilterYear % 400 === 0;
+      const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][monthFilterMonth - 1];
+      const monthEnd = `${monthFilterYear}-${String(monthFilterMonth).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
 
       const [{ data: txns }, { data: splits }, { data: suppData }, { data: custData }, { data: loans }, { data: reminderData }, { data: capitalData }, { data: histProfit }] = await Promise.all([
         supabase.from('transactions').select('*').eq('is_void', false),
