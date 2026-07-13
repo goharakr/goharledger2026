@@ -60,6 +60,9 @@ export default function Dashboard() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [loading, setLoading] = useState(true);
   const [monthFilter, setMonthFilter] = useState(new Date().toISOString().slice(0, 7));
+  const [monthlyBalances, setMonthlyBalances] = useState<{ id: string; month: string; mpesa: number; cash: number; paybill: number }[]>([]);
+  const [showForwardedBalance, setShowForwardedBalance] = useState(false);
+  const [forwardedBalanceForm, setForwardedBalanceForm] = useState({ mpesa: '', cash: '', paybill: '' });
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [showAlerts, setShowAlerts] = useState(true);
   const [editingReminder, setEditingReminder] = useState<string | null>(null);
@@ -234,7 +237,7 @@ export default function Dashboard() {
       const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][monthFilterMonth - 1];
       const monthEnd = `${monthFilterYear}-${String(monthFilterMonth).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
 
-      const [{ data: txns }, { data: splits }, { data: suppData }, { data: custData }, { data: loans }, { data: reminderData }, { data: capitalData }, { data: histProfit }, { data: shareRules }] = await Promise.all([
+      const [{ data: txns }, { data: splits }, { data: suppData }, { data: custData }, { data: loans }, { data: reminderData }, { data: capitalData }, { data: histProfit }, { data: shareRules }, { data: monthlyBalancesData }] = await Promise.all([
         supabase.from('transactions').select('*').eq('is_void', false),
         supabase.from('transaction_splits').select('*'),
         supabase.from('suppliers').select('*').eq('is_active', true),
@@ -244,11 +247,13 @@ export default function Dashboard() {
         supabase.from('capital_entries').select('*'),
         supabase.from('historical_profit').select('*'),
         supabase.from('share_rules').select('*').eq('is_active', true),
+        supabase.from('monthly_balances').select('*'),
       ]);
 
       setSuppliers(suppData || []);
       setCustomers(custData || []);
       setReminders(reminderData || []);
+      setMonthlyBalances(monthlyBalancesData || []);
 
       const idrisLoan = loans?.find((l) => l.loan_name.toLowerCase().includes('idris'));
       const activeLoansList = (loans || []).filter((l) => l.status === 'active');
@@ -627,6 +632,17 @@ export default function Dashboard() {
     fetchDashboardData();
   }
 
+  async function handleSaveForwardedBalance() {
+    await supabase.from('monthly_balances').upsert({
+      month: monthFilter,
+      mpesa: parseFloat(forwardedBalanceForm.mpesa || '0'),
+      cash: parseFloat(forwardedBalanceForm.cash || '0'),
+      paybill: parseFloat(forwardedBalanceForm.paybill || '0'),
+    }, { onConflict: 'month' });
+    setShowForwardedBalance(false);
+    fetchDashboardData();
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -861,6 +877,43 @@ export default function Dashboard() {
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
           />
         </div>
+
+        {/* Forwarded Balance - balance carried in at the start of the selected month */}
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 rounded-lg px-4 py-3 mb-4">
+          {(() => {
+            const fb = monthlyBalances.find((m) => m.month === monthFilter);
+            return (
+              <>
+                <div className="flex flex-wrap gap-4 text-sm">
+                  <span className="text-slate-500">Forwarded Balance:</span>
+                  {fb ? (
+                    <>
+                      <span>Mpesa <span className="font-medium text-slate-800">KES {formatKES(fb.mpesa)}</span></span>
+                      <span>Cash <span className="font-medium text-slate-800">KES {formatKES(fb.cash)}</span></span>
+                      <span>Paybill <span className="font-medium text-slate-800">KES {formatKES(fb.paybill)}</span></span>
+                    </>
+                  ) : (
+                    <span className="text-slate-400">Not set for this month</span>
+                  )}
+                </div>
+                <button
+                  onClick={() => {
+                    setForwardedBalanceForm({
+                      mpesa: String(fb?.mpesa ?? ''),
+                      cash: String(fb?.cash ?? ''),
+                      paybill: String(fb?.paybill ?? ''),
+                    });
+                    setShowForwardedBalance(true);
+                  }}
+                  className="text-xs bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 px-3 py-1.5 rounded-lg font-medium flex items-center gap-1"
+                >
+                  <Edit2 size={12} /> {fb ? 'Edit' : 'Add'}
+                </button>
+              </>
+            );
+          })()}
+        </div>
+
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <button onClick={() => navigate('/sales')} className="text-left"><StatBox label="Sales" value={stats?.monthSales || 0} icon={<ShoppingCart size={16} />} clickable /></button>
           <button onClick={() => navigate('/profit-loss')} className="text-left"><StatBox label="Gross Profit" value={stats?.monthGrossProfit || 0} icon={<TrendingUp size={16} />} color="text-emerald-600" clickable /></button>
@@ -1045,6 +1098,49 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      {/* Forwarded Balance Modal */}
+      {showForwardedBalance && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-slate-800">Forwarded Balance - {monthFilter}</h3>
+              <button onClick={() => setShowForwardedBalance(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18} /></button>
+            </div>
+            <p className="text-sm text-slate-500 mb-4">Balance carried in at the start of this month.</p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Mpesa</label>
+                <input
+                  type="number"
+                  value={forwardedBalanceForm.mpesa}
+                  onChange={(e) => setForwardedBalanceForm({ ...forwardedBalanceForm, mpesa: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Cash</label>
+                <input
+                  type="number"
+                  value={forwardedBalanceForm.cash}
+                  onChange={(e) => setForwardedBalanceForm({ ...forwardedBalanceForm, cash: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Paybill (Bank)</label>
+                <input
+                  type="number"
+                  value={forwardedBalanceForm.paybill}
+                  onChange={(e) => setForwardedBalanceForm({ ...forwardedBalanceForm, paybill: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <button onClick={handleSaveForwardedBalance} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-medium">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Reminder Modal */}
       {showReminderModal && (
