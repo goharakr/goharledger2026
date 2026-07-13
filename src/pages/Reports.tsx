@@ -12,10 +12,14 @@ import {
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, getMonthLabel } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
+import DateFilterBar from '../components/DateFilterBar';
+import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
 import type { Transaction, Customer, Supplier, ExpenseCategory } from '../types';
 
 interface ReportFilters {
-  datePreset: 'today' | 'yesterday' | 'week' | 'month' | 'last_month' | 'custom';
+  datePreset: DatePreset;
+  customFrom: string;
+  customTo: string;
   fromDate: string;
   toDate: string;
   entityType: string;
@@ -27,6 +31,8 @@ interface ReportFilters {
 
 const emptyFilters: ReportFilters = {
   datePreset: 'month',
+  customFrom: '',
+  customTo: '',
   fromDate: '',
   toDate: '',
   entityType: 'all',
@@ -72,7 +78,7 @@ export default function Reports() {
 
   useEffect(() => {
     fetchReferenceData();
-    applyDatePreset('month');
+    applyDatePreset('month', '', '');
   }, []);
 
   useEffect(() => {
@@ -115,41 +121,9 @@ export default function Reports() {
     setPhysicalCounts(data || []);
   }
 
-  function applyDatePreset(preset: string) {
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
-    let from = '';
-    let to = todayStr;
-
-    switch (preset) {
-      case 'today':
-        from = todayStr;
-        break;
-      case 'yesterday': {
-        const y = new Date(today);
-        y.setDate(y.getDate() - 1);
-        from = y.toISOString().split('T')[0];
-        to = from;
-        break;
-      }
-      case 'week': {
-        const w = new Date(today);
-        w.setDate(w.getDate() - 6);
-        from = w.toISOString().split('T')[0];
-        break;
-      }
-      case 'month':
-        from = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
-        break;
-      case 'last_month': {
-        const lm = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-        from = `${lm.getFullYear()}-${String(lm.getMonth() + 1).padStart(2, '0')}-01`;
-        to = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
-        break;
-      }
-    }
-
-    setFilters((f) => ({ ...f, datePreset: preset as any, fromDate: from, toDate: to }));
+  function applyDatePreset(preset: DatePreset, customFrom: string, customTo: string) {
+    const { from, to } = getDatePresetRange(preset, customFrom, customTo);
+    setFilters((f) => ({ ...f, datePreset: preset, customFrom, customTo, fromDate: from, toDate: to }));
   }
 
   async function fetchData() {
@@ -512,45 +486,15 @@ export default function Reports() {
           <div className="px-4 pb-4 border-t border-slate-100 pt-4">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Date Preset */}
-              <div>
+              <div className="md:col-span-2 lg:col-span-4">
                 <label className="block text-sm font-medium text-slate-700 mb-1">Date Range</label>
-                <select
-                  value={filters.datePreset}
-                  onChange={(e) => applyDatePreset(e.target.value)}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-                >
-                  <option value="today">Today</option>
-                  <option value="yesterday">Yesterday</option>
-                  <option value="week">This Week</option>
-                  <option value="month">This Month</option>
-                  <option value="last_month">Last Month</option>
-                  <option value="custom">Custom Range</option>
-                </select>
+                <DateFilterBar
+                  preset={filters.datePreset}
+                  customFrom={filters.customFrom}
+                  customTo={filters.customTo}
+                  onChange={(p, from, to) => applyDatePreset(p, from, to)}
+                />
               </div>
-
-              {/* Custom Date */}
-              {filters.datePreset === 'custom' && (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">From</label>
-                    <input
-                      type="date"
-                      value={filters.fromDate}
-                      onChange={(e) => setFilters((f) => ({ ...f, fromDate: e.target.value }))}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">To</label>
-                    <input
-                      type="date"
-                      value={filters.toDate}
-                      onChange={(e) => setFilters((f) => ({ ...f, toDate: e.target.value }))}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
-                    />
-                  </div>
-                </>
-              )}
 
               {/* Entity Type */}
               <div>
@@ -632,7 +576,7 @@ export default function Reports() {
 
             <div className="mt-4 flex items-center gap-2">
               <button
-                onClick={() => { setFilters(emptyFilters); applyDatePreset('month'); }}
+                onClick={() => { setFilters(emptyFilters); applyDatePreset('month', '', ''); }}
                 className="text-sm text-slate-500 hover:text-slate-700 flex items-center gap-1"
               >
                 <X size={14} /> Reset Filters
