@@ -1056,7 +1056,7 @@ export default function Dashboard() {
 
       {/* Partner Balances */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <button onClick={() => navigate('/partners')} className="text-left">
+        <button onClick={() => navigate('/partners?partner=taher')} className="text-left">
           <PartnerCard
             name="Taher"
             shareDue={stats?.taherShareDue || 0}
@@ -1065,7 +1065,7 @@ export default function Dashboard() {
             clickable
           />
         </button>
-        <button onClick={() => navigate('/partners')} className="text-left">
+        <button onClick={() => navigate('/partners?partner=abdulqadir')} className="text-left">
           <PartnerCard
             name="Abdulqadir"
             shareDue={stats?.abdulqadirShareDue || 0}

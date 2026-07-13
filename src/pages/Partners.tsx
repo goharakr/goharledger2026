@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   TrendingUp,
   TrendingDown,
@@ -34,11 +35,16 @@ const emptyDraw: DrawForm = {
 export default function Partners() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const partnerParam = searchParams.get('partner');
   const [activePartner, setActivePartner] = useState<'taher' | 'abdulqadir'>(
-    user?.username === 'abdulqadir' ? 'abdulqadir' : 'taher'
+    partnerParam === 'abdulqadir' || partnerParam === 'taher'
+      ? partnerParam
+      : user?.username === 'abdulqadir' ? 'abdulqadir' : 'taher'
   );
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
+  const [shareRules, setShareRules] = useState<{ partner_id: string; rule_type: string; value: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [showDraw, setShowDraw] = useState(false);
   const [showReturn, setShowReturn] = useState(false);
@@ -49,18 +55,86 @@ export default function Partners() {
   const [showLedger, setShowLedger] = useState(false);
 
   useEffect(() => {
+    if (partnerParam === 'abdulqadir' || partnerParam === 'taher') {
+      setActivePartner(partnerParam);
+    }
+  }, [partnerParam]);
+
+  useEffect(() => {
     fetchData();
   }, [activePartner, refreshKey]);
 
   async function fetchData() {
     setLoading(true);
-    const [{ data: txns }, { data: hist }] = await Promise.all([
+    const [{ data: txns }, { data: hist }, { data: rules }] = await Promise.all([
       supabase.from('transactions').select('*').order('date', { ascending: false }),
       supabase.from('historical_profit').select('*').order('month', { ascending: false }),
+      supabase.from('share_rules').select('*').eq('is_active', true),
     ]);
     setTransactions(txns || []);
     setHistoricalProfit(hist || []);
+    setShareRules(rules || []);
     setLoading(false);
+  }
+
+  // Mirrors Dashboard's "Share due" calc: applies the active share rule across
+  // every month with transactions, plus any historical carry-over, minus draws.
+  function calculateShareDue(partner: string) {
+    const rule = shareRules.find((r) => r.partner_id === partner);
+    if (!rule) return 0;
+
+    const monthly = new Map<string, { grossProfit: number; shopExpenses: number; homeExpensesFromShop: number; loanPayments: number }>();
+    transactions.forEach((t) => {
+      if (t.is_void || !t.date) return;
+      const key = t.date.slice(0, 7);
+      if (!monthly.has(key)) monthly.set(key, { grossProfit: 0, shopExpenses: 0, homeExpensesFromShop: 0, loanPayments: 0 });
+      const m = monthly.get(key)!;
+      if (t.type === 'sale') {
+        m.grossProfit += (t.selling_price || 0) - (t.cost_price || 0) - (t.commission || 0);
+      } else if (t.type === 'expense' && t.category !== 'stock' && t.category !== 'supplier_payment') {
+        if (t.category === 'home_expense') {
+          if (t.notes?.includes('From Shop')) m.homeExpensesFromShop += t.amount;
+        } else {
+          m.shopExpenses += t.amount;
+        }
+      } else if (t.type === 'loan_payment') {
+        m.loanPayments += t.amount;
+      }
+    });
+
+    let earned = 0;
+    monthly.forEach((m) => {
+      const netProfit = m.grossProfit - m.shopExpenses - m.homeExpensesFromShop - m.loanPayments;
+      earned += rule.rule_type === 'fixed' ? rule.value : netProfit * (rule.value / 100);
+    });
+
+    const histRemaining = historicalProfit.reduce((s, h) => {
+      const share = partner === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);
+      const taken = partner === 'taher' ? (h.taher_taken || 0) : (h.abdulqadir_taken || 0);
+      return s + share - taken;
+    }, 0);
+
+    const drawsAllTime = transactions.reduce((s, t) => (t.type === 'partner_draw' && t.partner_id === partner && !t.is_void ? s + t.amount : s), 0);
+
+    return earned + histRemaining - drawsAllTime;
+  }
+
+  function calculateHomeOwed(partner: string) {
+    let owed = 0;
+    transactions.forEach((t) => {
+      if (t.type === 'expense' && t.category === 'home_expense' && t.partner_id === partner && !t.is_void) {
+        if (t.notes?.includes('From Own Pocket')) owed += t.amount;
+        if (t.notes?.includes('From Shop') && t.notes?.includes('repaying')) owed -= t.amount;
+      }
+    });
+    return owed;
+  }
+
+  function calculateTakenThisMonth(partner: string) {
+    const monthStart = new Date().toISOString().slice(0, 7) + '-01';
+    return transactions.reduce((s, t) => (
+      t.type === 'partner_draw' && t.partner_id === partner && !t.is_void && t.date >= monthStart ? s + t.amount : s
+    ), 0);
   }
 
   function calculatePartnerBalance(partner: string) {
@@ -195,6 +269,9 @@ export default function Partners() {
 
   const balance = calculatePartnerBalance(activePartner);
   const isPositive = balance >= 0;
+  const shareDue = calculateShareDue(activePartner);
+  const homeOwed = calculateHomeOwed(activePartner);
+  const takenThisMonth = calculateTakenThisMonth(activePartner);
 
   const profitShares = historicalProfit.map((h) => {
     const earned = activePartner === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);
@@ -251,6 +328,22 @@ export default function Partners() {
               KES {formatKES(Math.abs(balance))}
             </p>
           </div>
+        </div>
+      </div>
+
+      {/* Summary figures - same numbers shown on the Dashboard card */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+          <p className="text-sm text-slate-500">Share due</p>
+          <p className={`text-xl font-bold ${shareDue >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>KES {formatKES(Math.abs(shareDue))}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+          <p className="text-sm text-slate-500">Home expenses owed</p>
+          <p className="text-xl font-bold text-blue-600">KES {formatKES(homeOwed)}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+          <p className="text-sm text-slate-500">Taken this month</p>
+          <p className="text-xl font-bold text-slate-800">KES {formatKES(takenThisMonth)}</p>
         </div>
       </div>
 
