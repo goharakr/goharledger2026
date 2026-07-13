@@ -692,7 +692,7 @@ export default function Dashboard() {
       notes: reminderForm.notes || null,
     });
 
-    setReminderForm({ entityType: 'supplier', entityId: '', amount: '', dueDate: '', reminderDate: '', notes: '' });
+    setReminderForm({ entityType: 'supplier', entityId: '', amount: '', dueDate: '', reminderDate: '', reminderTime: '09:00', notes: '' });
     setShowReminderModal(false);
     fetchDashboardData();
   }

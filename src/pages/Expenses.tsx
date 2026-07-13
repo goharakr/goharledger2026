@@ -287,6 +287,7 @@ export default function Expenses() {
       source: source as 'shop' | 'own_pocket',
       isPostDated: !!expense.clears_on,
       clearsOn: expense.clears_on || '',
+      transactionFee: '',
     });
     if (expense.type === 'supplier_payment') setActiveTab('suppliers');
     else if (expense.type === 'loan_payment') setActiveTab('loans');

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import DateFilterBar from '../components/DateFilterBar';
+import { getDatePresetRange, DatePreset, DATE_PRESET_OPTIONS } from '../utils/dateFilters';
 import {
   TrendingUp,
   TrendingDown,
@@ -53,6 +55,11 @@ export default function Partners() {
   const [showMarkTaken, setShowMarkTaken] = useState<{ type: 'profit' | 'expense'; amount: number; id: string } | null>(null);
   const [markForm, setMarkForm] = useState<DrawForm>(emptyDraw);
   const [showLedger, setShowLedger] = useState(false);
+  const [takenPreset, setTakenPreset] = useState<DatePreset>('month');
+  const [takenCustomFrom, setTakenCustomFrom] = useState('');
+  const [takenCustomTo, setTakenCustomTo] = useState('');
+  const [showEditRules, setShowEditRules] = useState(false);
+  const [ruleForm, setRuleForm] = useState({ type: 'fixed' as 'fixed' | 'percentage', taherValue: '100000', abdulqadirValue: '100000' });
 
   useEffect(() => {
     if (partnerParam === 'abdulqadir' || partnerParam === 'taher') {
@@ -74,7 +81,30 @@ export default function Partners() {
     setTransactions(txns || []);
     setHistoricalProfit(hist || []);
     setShareRules(rules || []);
+
+    const taherRule = rules?.find((r) => r.partner_id === 'taher');
+    const abdulRule = rules?.find((r) => r.partner_id === 'abdulqadir');
+    if (taherRule && abdulRule) {
+      setRuleForm({
+        type: taherRule.rule_type as 'fixed' | 'percentage',
+        taherValue: String(taherRule.value),
+        abdulqadirValue: String(abdulRule.value),
+      });
+    }
+
     setLoading(false);
+  }
+
+  async function handleSaveRules() {
+    const now = new Date().toISOString().split('T')[0];
+    await supabase.from('share_rules').update({ is_active: false, effective_to: now }).eq('is_active', true);
+    await supabase.from('share_rules').insert([
+      { partner_id: 'taher', rule_type: ruleForm.type, value: parseFloat(ruleForm.taherValue), effective_from: now, is_active: true },
+      { partner_id: 'abdulqadir', rule_type: ruleForm.type, value: parseFloat(ruleForm.abdulqadirValue), effective_from: now, is_active: true },
+    ]);
+    setShowEditRules(false);
+    fetchData();
+    triggerRefresh();
   }
 
   // Mirrors Dashboard's "Share due" calc: applies the active share rule across
@@ -130,10 +160,9 @@ export default function Partners() {
     return owed;
   }
 
-  function calculateTakenThisMonth(partner: string) {
-    const monthStart = new Date().toISOString().slice(0, 7) + '-01';
+  function calculateTakenInRange(partner: string, from: string, to: string) {
     return transactions.reduce((s, t) => (
-      t.type === 'partner_draw' && t.partner_id === partner && !t.is_void && t.date >= monthStart ? s + t.amount : s
+      t.type === 'partner_draw' && t.partner_id === partner && !t.is_void && t.date >= from && t.date <= to ? s + t.amount : s
     ), 0);
   }
 
@@ -271,7 +300,8 @@ export default function Partners() {
   const isPositive = balance >= 0;
   const shareDue = calculateShareDue(activePartner);
   const homeOwed = calculateHomeOwed(activePartner);
-  const takenThisMonth = calculateTakenThisMonth(activePartner);
+  const takenRange = getDatePresetRange(takenPreset, takenCustomFrom, takenCustomTo);
+  const takenInRange = calculateTakenInRange(activePartner, takenRange.from, takenRange.to);
 
   const profitShares = historicalProfit.map((h) => {
     const earned = activePartner === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);
@@ -334,7 +364,10 @@ export default function Partners() {
       {/* Summary figures - same numbers shown on the Dashboard card */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-          <p className="text-sm text-slate-500">Share due</p>
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-slate-500">Share due</p>
+            <button onClick={() => setShowEditRules(true)} className="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Edit Rule</button>
+          </div>
           <p className={`text-xl font-bold ${shareDue >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>KES {formatKES(Math.abs(shareDue))}</p>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
@@ -342,10 +375,17 @@ export default function Partners() {
           <p className="text-xl font-bold text-blue-600">KES {formatKES(homeOwed)}</p>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-          <p className="text-sm text-slate-500">Taken this month</p>
-          <p className="text-xl font-bold text-slate-800">KES {formatKES(takenThisMonth)}</p>
+          <p className="text-sm text-slate-500">Taken ({DATE_PRESET_OPTIONS.find((o) => o.value === takenPreset)?.label})</p>
+          <p className="text-xl font-bold text-slate-800">KES {formatKES(takenInRange)}</p>
         </div>
       </div>
+
+      <DateFilterBar
+        preset={takenPreset}
+        customFrom={takenCustomFrom}
+        customTo={takenCustomTo}
+        onChange={(p, from, to) => { setTakenPreset(p); setTakenCustomFrom(from); setTakenCustomTo(to); }}
+      />
 
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-3">
@@ -359,6 +399,43 @@ export default function Partners() {
           <BookOpen size={16} /> View Ledger
         </button>
       </div>
+
+      {/* Edit Share Rule Modal - shortcut so you don't have to go to Profit & Loss */}
+      {showEditRules && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-slate-800">Edit Profit Share Rule</h3>
+              <button onClick={() => setShowEditRules(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18} /></button>
+            </div>
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setRuleForm({ ...ruleForm, type: 'fixed' })}
+                  className={`px-3 py-1.5 rounded-lg text-sm ${ruleForm.type === 'fixed' ? 'bg-emerald-100 text-emerald-700 border border-emerald-300' : 'bg-slate-100 text-slate-600 border border-slate-300'}`}
+                >
+                  Fixed Amount
+                </button>
+                <button
+                  onClick={() => setRuleForm({ ...ruleForm, type: 'percentage' })}
+                  className={`px-3 py-1.5 rounded-lg text-sm ${ruleForm.type === 'percentage' ? 'bg-emerald-100 text-emerald-700 border border-emerald-300' : 'bg-slate-100 text-slate-600 border border-slate-300'}`}
+                >
+                  Percentage
+                </button>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Taher {ruleForm.type === 'fixed' ? '(KES)' : '(%)'}</label>
+                <input type="number" value={ruleForm.taherValue} onChange={(e) => setRuleForm({ ...ruleForm, taherValue: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Abdulqadir {ruleForm.type === 'fixed' ? '(KES)' : '(%)'}</label>
+                <input type="number" value={ruleForm.abdulqadirValue} onChange={(e) => setRuleForm({ ...ruleForm, abdulqadirValue: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
+              </div>
+              <button onClick={handleSaveRules} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-medium">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Draw Modal */}
       {showDraw && (
