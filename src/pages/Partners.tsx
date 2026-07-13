@@ -572,7 +572,6 @@ export default function Partners() {
             <thead>
               <tr className="text-left text-xs text-slate-500 border-b border-slate-200 bg-slate-50">
                 <th className="px-4 py-2">Date</th>
-                <th className="px-4 py-2">Description</th>
                 <th className="px-4 py-2 text-right">Amount</th>
                 <th className="px-4 py-2">Status</th>
                 <th className="px-4 py-2 text-center">Action</th>
@@ -580,19 +579,11 @@ export default function Partners() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {homeExpenses.length === 0 ? (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-400">No home expenses from own pocket</td></tr>
+                <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-400">No home expenses from own pocket</td></tr>
               ) : (
                 homeExpenses.map((he) => (
                   <tr key={he.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-4 py-2 text-slate-600">{formatDate(he.date)}</td>
-                    <td className="px-4 py-2 text-slate-700">
-                      {he.description}
-                      {he.createdBy && (
-                        <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500" title="Added by">
-                          {he.createdBy}
-                        </span>
-                      )}
-                    </td>
                     <td className="px-4 py-2 text-right font-medium">{formatKES(he.amount)}</td>
                     <td className="px-4 py-2">
                       <span className={`text-xs px-2 py-0.5 rounded-full ${

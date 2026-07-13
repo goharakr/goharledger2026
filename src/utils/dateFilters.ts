@@ -2,16 +2,15 @@
 // mutation, which shifts by the browser's local timezone offset (a bug this
 // codebase has hit before).
 
-export type DatePreset = 'today' | 'yesterday' | 'week' | 'month' | 'last_month' | 'three_months' | 'year' | 'custom';
+export type DatePreset = 'today' | 'yesterday' | 'week' | 'month' | 'last_month' | 'pick_month' | 'custom';
 
 export const DATE_PRESET_OPTIONS: { value: DatePreset; label: string }[] = [
   { value: 'today', label: 'Today' },
   { value: 'yesterday', label: 'Yesterday' },
   { value: 'week', label: '1 Week' },
-  { value: 'month', label: '1 Month' },
+  { value: 'month', label: 'This Month' },
   { value: 'last_month', label: 'Last Month' },
-  { value: 'three_months', label: '3 Months' },
-  { value: 'year', label: 'This Year' },
+  { value: 'pick_month', label: 'Pick Month' },
   { value: 'custom', label: 'Custom' },
 ];
 
@@ -31,6 +30,9 @@ function addMonths(year: number, month: number, delta: number): { year: number; 
   return { year: y, month: m };
 }
 
+// For 'pick_month' the picked "YYYY-MM" is passed through customFrom - this
+// keeps the (preset, customFrom, customTo) callback shape the same
+// everywhere it's already wired up, no call site changes needed.
 export function getDatePresetRange(preset: DatePreset, customFrom?: string, customTo?: string): { from: string; to: string } {
   const now = new Date();
   const y = now.getFullYear(), m = now.getMonth() + 1, d = now.getDate();
@@ -65,12 +67,11 @@ export function getDatePresetRange(preset: DatePreset, customFrom?: string, cust
       const dim = daysInMonth(prev.year, prev.month);
       return { from: `${prev.year}-${pad(prev.month)}-01`, to: `${prev.year}-${pad(prev.month)}-${pad(dim)}` };
     }
-    case 'three_months': {
-      const start = addMonths(y, m, -2);
-      return { from: `${start.year}-${pad(start.month)}-01`, to: todayStr };
+    case 'pick_month': {
+      const [py, pm] = (customFrom || `${y}-${pad(m)}`).split('-').map(Number);
+      const dim = daysInMonth(py, pm);
+      return { from: `${py}-${pad(pm)}-01`, to: `${py}-${pad(pm)}-${pad(dim)}` };
     }
-    case 'year':
-      return { from: `${y}-01-01`, to: todayStr };
     case 'custom':
       return { from: customFrom || todayStr, to: customTo || todayStr };
   }

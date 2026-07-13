@@ -90,7 +90,7 @@ export default function Suppliers() {
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showLedger, setShowLedger] = useState(false);
-  const [txnDatePreset, setTxnDatePreset] = useState<DatePreset>('three_months');
+  const [txnDatePreset, setTxnDatePreset] = useState<DatePreset>('month');
   const [txnCustomFrom, setTxnCustomFrom] = useState('');
   const [txnCustomTo, setTxnCustomTo] = useState('');
 

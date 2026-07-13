@@ -50,7 +50,7 @@ export default function Capital() {
   const [capitalEntries, setCapitalEntries] = useState<CapitalEntry[]>([]);
   const [loans, setLoans] = useState<LoanTracker[]>([]);
   const [loanPayments, setLoanPayments] = useState<Transaction[]>([]);
-  const [historyDatePreset, setHistoryDatePreset] = useState<DatePreset>('three_months');
+  const [historyDatePreset, setHistoryDatePreset] = useState<DatePreset>('month');
   const [historyCustomFrom, setHistoryCustomFrom] = useState('');
   const [historyCustomTo, setHistoryCustomTo] = useState('');
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);

@@ -92,7 +92,7 @@ export default function Customers() {
   const [showLedger, setShowLedger] = useState(false);
   const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
   const [saleEditForm, setSaleEditForm] = useState<SaleEditForm>(emptySaleEdit);
-  const [txnDatePreset, setTxnDatePreset] = useState<DatePreset>('three_months');
+  const [txnDatePreset, setTxnDatePreset] = useState<DatePreset>('month');
   const [txnCustomFrom, setTxnCustomFrom] = useState('');
   const [txnCustomTo, setTxnCustomTo] = useState('');
 
