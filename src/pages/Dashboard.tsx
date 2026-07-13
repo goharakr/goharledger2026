@@ -26,9 +26,9 @@ import {
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
+import DateFilterBar from '../components/DateFilterBar';
+import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
 import type { Transaction, Supplier, Customer, Reminder, LoanTracker, CapitalEntry } from '../types';
-
-type DateFilterType = 'today' | 'yesterday' | 'last7days' | 'thismonth' | 'lastmonth' | 'custom';
 
 interface DailySalesBreakdown {
   totalSales: number;
@@ -150,15 +150,17 @@ export default function Dashboard() {
   });
 
   // Daily sales with date filter
-  const [dailySalesDateFilter, setDailySalesDateFilter] = useState<DateFilterType>('today');
-  const [dailySalesFrom, setDailySalesFrom] = useState(new Date().toISOString().split('T')[0]);
-  const [dailySalesTo, setDailySalesTo] = useState(new Date().toISOString().split('T')[0]);
+  const [dailySalesPreset, setDailySalesPreset] = useState<DatePreset>('today');
+  const [dailySalesCustomFrom, setDailySalesCustomFrom] = useState('');
+  const [dailySalesCustomTo, setDailySalesCustomTo] = useState('');
+  const { from: dailySalesFrom, to: dailySalesTo } = getDatePresetRange(dailySalesPreset, dailySalesCustomFrom, dailySalesCustomTo);
   const [dailySalesBreakdown, setDailySalesBreakdown] = useState<DailySalesBreakdown | null>(null);
 
   // Monthly capital filter
-  const [capitalDateFilter, setCapitalDateFilter] = useState<DateFilterType>('thismonth');
-  const [capitalFrom, setCapitalFrom] = useState('');
-  const [capitalTo, setCapitalTo] = useState('');
+  const [capitalPreset, setCapitalPreset] = useState<DatePreset>('month');
+  const [capitalCustomFrom, setCapitalCustomFrom] = useState('');
+  const [capitalCustomTo, setCapitalCustomTo] = useState('');
+  const { from: capitalFrom, to: capitalTo } = getDatePresetRange(capitalPreset, capitalCustomFrom, capitalCustomTo);
   const [monthlyCapital, setMonthlyCapital] = useState<MonthlyCapital | null>(null);
 
   useEffect(() => {
@@ -181,42 +183,13 @@ export default function Dashboard() {
     if (dailySalesFrom && dailySalesTo) {
       calculateDailySalesBreakdown();
     }
-  }, [dailySalesDateFilter, dailySalesFrom, dailySalesTo, refreshKey]);
+  }, [dailySalesFrom, dailySalesTo, refreshKey]);
 
   useEffect(() => {
     if (capitalFrom && capitalTo) {
       calculateMonthlyCapital();
     }
-  }, [capitalDateFilter, capitalFrom, capitalTo, refreshKey]);
-
-  function updateDateRange(filter: DateFilterType, setFrom: (v: string) => void, setTo: (v: string) => void) {
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
-
-    if (filter === 'today') {
-      setFrom(todayStr);
-      setTo(todayStr);
-    } else if (filter === 'yesterday') {
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      setFrom(yesterday.toISOString().split('T')[0]);
-      setTo(yesterday.toISOString().split('T')[0]);
-    } else if (filter === 'last7days') {
-      const weekAgo = new Date(today);
-      weekAgo.setDate(weekAgo.getDate() - 6);
-      setFrom(weekAgo.toISOString().split('T')[0]);
-      setTo(todayStr);
-    } else if (filter === 'thismonth') {
-      const monthStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
-      setFrom(monthStart);
-      setTo(todayStr);
-    } else if (filter === 'lastmonth') {
-      const firstDayLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-      const lastDayLastMonth = new Date(today.getFullYear(), today.getMonth(), 0);
-      setFrom(firstDayLastMonth.toISOString().split('T')[0]);
-      setTo(lastDayLastMonth.toISOString().split('T')[0]);
-    }
-  }
+  }, [capitalFrom, capitalTo, refreshKey]);
 
   async function calculateDailySalesBreakdown() {
     const { data: txns } = await supabase
@@ -670,9 +643,6 @@ export default function Dashboard() {
         activeLoans: activeLoansList,
       });
 
-      // Set initial date ranges
-      updateDateRange('today', setDailySalesFrom, setDailySalesTo);
-      updateDateRange('thismonth', setCapitalFrom, setCapitalTo);
     } catch (err) {
       console.error('Dashboard error:', err);
     }
@@ -847,31 +817,12 @@ export default function Dashboard() {
             Sales Breakdown
           </h2>
           <div className="flex items-center gap-2 flex-wrap">
-            <select
-              value={dailySalesDateFilter}
-              onChange={(e) => {
-                const val = e.target.value as DateFilterType;
-                setDailySalesDateFilter(val);
-                if (val !== 'custom') {
-                  updateDateRange(val, setDailySalesFrom, setDailySalesTo);
-                }
-              }}
-              className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-            >
-              <option value="today">Today</option>
-              <option value="yesterday">Yesterday</option>
-              <option value="last7days">Last 7 Days</option>
-              <option value="thismonth">This Month</option>
-              <option value="lastmonth">Last Month</option>
-              <option value="custom">Custom Range</option>
-            </select>
-            {dailySalesDateFilter === 'custom' && (
-              <>
-                <input type="date" value={dailySalesFrom} onChange={(e) => setDailySalesFrom(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" />
-                <span className="text-slate-400">to</span>
-                <input type="date" value={dailySalesTo} onChange={(e) => setDailySalesTo(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" />
-              </>
-            )}
+            <DateFilterBar
+              preset={dailySalesPreset}
+              customFrom={dailySalesCustomFrom}
+              customTo={dailySalesCustomTo}
+              onChange={(p, from, to) => { setDailySalesPreset(p); setDailySalesCustomFrom(from); setDailySalesCustomTo(to); }}
+            />
             <button onClick={() => navigate('/sales')} className="text-sm text-emerald-600 hover:text-emerald-700 font-medium">View Sales</button>
           </div>
         </div>
@@ -940,31 +891,12 @@ export default function Dashboard() {
             Capital Injected (from Retained Profit)
           </h2>
           <div className="flex items-center gap-2 flex-wrap">
-            <select
-              value={capitalDateFilter}
-              onChange={(e) => {
-                const val = e.target.value as DateFilterType;
-                setCapitalDateFilter(val);
-                if (val !== 'custom') {
-                  updateDateRange(val, setCapitalFrom, setCapitalTo);
-                }
-              }}
-              className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-            >
-              <option value="today">Today</option>
-              <option value="yesterday">Yesterday</option>
-              <option value="last7days">Last 7 Days</option>
-              <option value="thismonth">This Month</option>
-              <option value="lastmonth">Last Month</option>
-              <option value="custom">Custom Range</option>
-            </select>
-            {capitalDateFilter === 'custom' && (
-              <>
-                <input type="date" value={capitalFrom} onChange={(e) => setCapitalFrom(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" />
-                <span className="text-slate-400">to</span>
-                <input type="date" value={capitalTo} onChange={(e) => setCapitalTo(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" />
-              </>
-            )}
+            <DateFilterBar
+              preset={capitalPreset}
+              customFrom={capitalCustomFrom}
+              customTo={capitalCustomTo}
+              onChange={(p, from, to) => { setCapitalPreset(p); setCapitalCustomFrom(from); setCapitalCustomTo(to); }}
+            />
             <button onClick={() => navigate('/capital')} className="text-sm text-emerald-600 hover:text-emerald-700 font-medium">View Capital</button>
           </div>
         </div>
