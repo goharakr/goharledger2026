@@ -66,11 +66,20 @@ export default function Reports() {
   const [loading, setLoading] = useState(false);
   const [showFilters, setShowFilters] = useState(true);
   const [monthlyProfit, setMonthlyProfit] = useState<any[]>([]);
+  const [physicalCounts, setPhysicalCounts] = useState<{ id: string; month: string; mpesa_actual: number; cash_actual: number; paybill_actual: number; mpesa_system: number; cash_system: number; paybill_system: number }[]>([]);
+  const [editingCountId, setEditingCountId] = useState<string | null>(null);
+  const [editCountForm, setEditCountForm] = useState({ mpesa: '', cash: '', paybill: '' });
 
   useEffect(() => {
     fetchReferenceData();
     applyDatePreset('month');
   }, []);
+
+  useEffect(() => {
+    supabase.from('physical_cash_counts').select('*').order('month', { ascending: false }).then(({ data }) => {
+      setPhysicalCounts(data || []);
+    });
+  }, [refreshKey]);
 
   useEffect(() => {
     if (filters.fromDate && filters.toDate) {
@@ -87,6 +96,23 @@ export default function Reports() {
     setCustomers(c || []);
     setSuppliers(s || []);
     setExpenseCategories(ec || []);
+  }
+
+  function startEditCount(c: { id: string; mpesa_actual: number; cash_actual: number; paybill_actual: number }) {
+    setEditingCountId(c.id);
+    setEditCountForm({ mpesa: String(c.mpesa_actual), cash: String(c.cash_actual), paybill: String(c.paybill_actual) });
+  }
+
+  async function handleUpdateCount() {
+    if (!editingCountId) return;
+    await supabase.from('physical_cash_counts').update({
+      mpesa_actual: parseFloat(editCountForm.mpesa || '0'),
+      cash_actual: parseFloat(editCountForm.cash || '0'),
+      paybill_actual: parseFloat(editCountForm.paybill || '0'),
+    }).eq('id', editingCountId);
+    setEditingCountId(null);
+    const { data } = await supabase.from('physical_cash_counts').select('*').order('month', { ascending: false });
+    setPhysicalCounts(data || []);
   }
 
   function applyDatePreset(preset: string) {
@@ -392,6 +418,82 @@ export default function Reports() {
           </button>
         </div>
       </div>
+
+      {/* Cash Reconciliation - physical count vs what the system calculated */}
+      {physicalCounts.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+          <h3 className="font-semibold text-slate-800 mb-3">Cash Reconciliation</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-slate-500 border-b border-slate-200">
+                  <th className="px-3 py-2">Month</th>
+                  <th className="px-3 py-2">Mode</th>
+                  <th className="px-3 py-2 text-right">System Said</th>
+                  <th className="px-3 py-2 text-right">You Counted</th>
+                  <th className="px-3 py-2 text-right">Difference</th>
+                  <th className="px-3 py-2 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {physicalCounts.map((c) => {
+                  const modes: { label: string; system: number; actual: number }[] = [
+                    { label: 'Mpesa', system: c.mpesa_system, actual: c.mpesa_actual },
+                    { label: 'Cash', system: c.cash_system, actual: c.cash_actual },
+                    { label: 'Paybill', system: c.paybill_system, actual: c.paybill_actual },
+                  ];
+                  return modes.map((m, i) => {
+                    const diff = m.actual - m.system;
+                    return (
+                      <tr key={`${c.id}-${m.label}`} className="hover:bg-slate-50">
+                        {i === 0 && <td className="px-3 py-2 font-medium text-slate-700" rowSpan={3}>{c.month}</td>}
+                        <td className="px-3 py-2 text-slate-600">{m.label}</td>
+                        <td className="px-3 py-2 text-right">KES {formatKES(m.system)}</td>
+                        <td className="px-3 py-2 text-right">KES {formatKES(m.actual)}</td>
+                        <td className={`px-3 py-2 text-right font-medium ${diff === 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          {diff === 0 ? 'Match' : `${diff > 0 ? '+' : ''}${formatKES(diff)}`}
+                        </td>
+                        {i === 0 && (
+                          <td className="px-3 py-2 text-center" rowSpan={3}>
+                            <button onClick={() => startEditCount(c)} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded">Edit</button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  });
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Physical Count Modal */}
+      {editingCountId && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-slate-800">Edit Physical Count</h3>
+              <button onClick={() => setEditingCountId(null)} className="p-1 hover:bg-slate-100 rounded"><X size={18} /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Mpesa (actual)</label>
+                <input type="number" value={editCountForm.mpesa} onChange={(e) => setEditCountForm({ ...editCountForm, mpesa: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Cash (actual)</label>
+                <input type="number" value={editCountForm.cash} onChange={(e) => setEditCountForm({ ...editCountForm, cash: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Paybill / Bank (actual)</label>
+                <input type="number" value={editCountForm.paybill} onChange={(e) => setEditCountForm({ ...editCountForm, paybill: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
+              </div>
+              <button onClick={handleUpdateCount} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-medium">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm">

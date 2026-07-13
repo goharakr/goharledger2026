@@ -51,6 +51,75 @@ interface MonthlyCapital {
   entries: CapitalEntry[];
 }
 
+// Computes the Mpesa/Cash/Paybill balance from only the transactions dated
+// before cutoffDate - used to auto-fill "balance carried in" for a month,
+// mirroring the same rules as the live balance calc below.
+function calculateBalanceAsOf(allTxns: Transaction[] | null | undefined, splitMap: Map<string, { mode: string; amount: number }[]>, cutoffDate: string) {
+  let mpesa = 0, cash = 0, bank = 0;
+  allTxns?.forEach((t) => {
+    if (t.is_void || t.date >= cutoffDate) return;
+    if (t.type === 'sale') {
+      if (t.primary_mode === 'mpesa') mpesa += t.amount;
+      else if (t.primary_mode === 'cash') cash += t.amount;
+      else if (t.primary_mode === 'paybill') bank += t.amount;
+      else if (t.primary_mode === 'split') {
+        const s = splitMap.get(t.transaction_id) || [];
+        s.forEach((sp) => {
+          if (sp.mode === 'mpesa') mpesa += sp.amount;
+          else if (sp.mode === 'cash') cash += sp.amount;
+          else if (sp.mode === 'paybill') bank += sp.amount;
+        });
+      }
+      if (t.commission && t.commission > 0 && t.commission_mode) {
+        if (t.commission_mode === 'mpesa') mpesa -= t.commission;
+        else if (t.commission_mode === 'cash') cash -= t.commission;
+        else if (t.commission_mode === 'paybill') bank -= t.commission;
+      }
+    } else if (t.type === 'expense') {
+      if (t.category !== 'stock' && t.category !== 'supplier_payment') {
+        const isHomeExpenseFromOwnPocket = t.category === 'home_expense' && t.notes?.includes('From Own Pocket');
+        const isPendingClear = t.clears_on && t.clears_on >= cutoffDate;
+        if (!isHomeExpenseFromOwnPocket && !isPendingClear) {
+          if (t.primary_mode === 'mpesa') mpesa -= t.amount;
+          else if (t.primary_mode === 'cash') cash -= t.amount;
+          else if (t.primary_mode === 'paybill') bank -= t.amount;
+        }
+      }
+    } else if (t.type === 'fund_transfer') {
+      const desc = (t.description || '').toLowerCase();
+      if (desc.includes('mpesa to cash')) { mpesa -= t.amount; cash += t.amount; }
+      else if (desc.includes('cash to mpesa')) { cash -= t.amount; mpesa += t.amount; }
+      else if (desc.includes('mpesa to paybill')) { mpesa -= t.amount; bank += t.amount; }
+      else if (desc.includes('paybill to mpesa')) { bank -= t.amount; mpesa += t.amount; }
+      else if (desc.includes('cash to paybill')) { cash -= t.amount; bank += t.amount; }
+      else if (desc.includes('paybill to cash')) { bank -= t.amount; cash += t.amount; }
+    } else if (t.type === 'customer_payment') {
+      if (t.primary_mode === 'mpesa') mpesa += t.amount;
+      else if (t.primary_mode === 'cash') cash += t.amount;
+      else if (t.primary_mode === 'paybill') bank += t.amount;
+    } else if (t.type === 'supplier_payment' || t.type === 'supplier_invoice') {
+      if (!(t.clears_on && t.clears_on >= cutoffDate)) {
+        if (t.primary_mode === 'mpesa') mpesa -= t.amount;
+        else if (t.primary_mode === 'cash') cash -= t.amount;
+        else if (t.primary_mode === 'paybill') bank -= t.amount;
+      }
+    } else if (t.type === 'partner_draw') {
+      if (t.primary_mode === 'mpesa') mpesa -= t.amount;
+      else if (t.primary_mode === 'cash') cash -= t.amount;
+      else if (t.primary_mode === 'paybill') bank -= t.amount;
+    } else if (t.type === 'loan_payment') {
+      if (t.primary_mode === 'mpesa') mpesa -= t.amount;
+      else if (t.primary_mode === 'cash') cash -= t.amount;
+      else if (t.primary_mode === 'paybill') bank -= t.amount;
+    } else if (t.type === 'opening_balance') {
+      if (t.primary_mode === 'mpesa') mpesa += t.amount;
+      else if (t.primary_mode === 'cash') cash += t.amount;
+      else if (t.primary_mode === 'paybill') bank += t.amount;
+    }
+  });
+  return { mpesa, cash, bank };
+}
+
 export default function Dashboard() {
   const { refreshKey } = useDataRefresh();
   const navigate = useNavigate();
@@ -61,8 +130,12 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [monthFilter, setMonthFilter] = useState(new Date().toISOString().slice(0, 7));
   const [monthlyBalances, setMonthlyBalances] = useState<{ id: string; month: string; mpesa: number; cash: number; paybill: number }[]>([]);
+  const [computedForwardedBalance, setComputedForwardedBalance] = useState({ mpesa: 0, cash: 0, bank: 0 });
   const [showForwardedBalance, setShowForwardedBalance] = useState(false);
   const [forwardedBalanceForm, setForwardedBalanceForm] = useState({ mpesa: '', cash: '', paybill: '' });
+  const [physicalCounts, setPhysicalCounts] = useState<{ id: string; month: string; mpesa_actual: number; cash_actual: number; paybill_actual: number; mpesa_system: number; cash_system: number; paybill_system: number }[]>([]);
+  const [showPhysicalCount, setShowPhysicalCount] = useState(false);
+  const [physicalCountForm, setPhysicalCountForm] = useState({ mpesa: '', cash: '', paybill: '' });
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [showAlerts, setShowAlerts] = useState(true);
   const [editingReminder, setEditingReminder] = useState<string | null>(null);
@@ -91,6 +164,18 @@ export default function Dashboard() {
   useEffect(() => {
     fetchDashboardData();
   }, [monthFilter, refreshKey]);
+
+  useEffect(() => {
+    if (!stats) return;
+    const thisMonth = new Date().toISOString().slice(0, 7);
+    const alreadyCounted = physicalCounts.some((c) => c.month === thisMonth);
+    if (alreadyCounted) return;
+    const skipDate = localStorage.getItem('physicalCountSkipDate');
+    const today = new Date().toISOString().split('T')[0];
+    if (skipDate === today) return;
+    setPhysicalCountForm({ mpesa: '', cash: '', paybill: '' });
+    setShowPhysicalCount(true);
+  }, [stats, physicalCounts]);
 
   useEffect(() => {
     if (dailySalesFrom && dailySalesTo) {
@@ -237,7 +322,7 @@ export default function Dashboard() {
       const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][monthFilterMonth - 1];
       const monthEnd = `${monthFilterYear}-${String(monthFilterMonth).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
 
-      const [{ data: txns }, { data: splits }, { data: suppData }, { data: custData }, { data: loans }, { data: reminderData }, { data: capitalData }, { data: histProfit }, { data: shareRules }, { data: monthlyBalancesData }] = await Promise.all([
+      const [{ data: txns }, { data: splits }, { data: suppData }, { data: custData }, { data: loans }, { data: reminderData }, { data: capitalData }, { data: histProfit }, { data: shareRules }, { data: monthlyBalancesData }, { data: physicalCountsData }] = await Promise.all([
         supabase.from('transactions').select('*').eq('is_void', false),
         supabase.from('transaction_splits').select('*'),
         supabase.from('suppliers').select('*').eq('is_active', true),
@@ -248,12 +333,14 @@ export default function Dashboard() {
         supabase.from('historical_profit').select('*'),
         supabase.from('share_rules').select('*').eq('is_active', true),
         supabase.from('monthly_balances').select('*'),
+        supabase.from('physical_cash_counts').select('*'),
       ]);
 
       setSuppliers(suppData || []);
       setCustomers(custData || []);
       setReminders(reminderData || []);
       setMonthlyBalances(monthlyBalancesData || []);
+      setPhysicalCounts(physicalCountsData || []);
 
       const idrisLoan = loans?.find((l) => l.loan_name.toLowerCase().includes('idris'));
       const activeLoansList = (loans || []).filter((l) => l.status === 'active');
@@ -273,6 +360,8 @@ export default function Dashboard() {
         if (!splitMap.has(s.transaction_id)) splitMap.set(s.transaction_id, []);
         splitMap.get(s.transaction_id)!.push(s);
       });
+
+      setComputedForwardedBalance(calculateBalanceAsOf(txns, splitMap, monthStart));
 
       txns?.forEach((t) => {
         if (t.is_void) return;
@@ -643,6 +732,32 @@ export default function Dashboard() {
     fetchDashboardData();
   }
 
+  function todayMonthStr() {
+    return new Date().toISOString().slice(0, 7);
+  }
+
+  async function handleSavePhysicalCount() {
+    const month = todayMonthStr();
+    await supabase.from('physical_cash_counts').upsert({
+      month,
+      mpesa_actual: parseFloat(physicalCountForm.mpesa || '0'),
+      cash_actual: parseFloat(physicalCountForm.cash || '0'),
+      paybill_actual: parseFloat(physicalCountForm.paybill || '0'),
+      mpesa_system: stats?.mpesaBalance || 0,
+      cash_system: stats?.cashBalance || 0,
+      paybill_system: stats?.bankBalance || 0,
+      counted_at: new Date().toISOString(),
+    }, { onConflict: 'month' });
+    setShowPhysicalCount(false);
+    localStorage.removeItem('physicalCountSkipDate');
+    fetchDashboardData();
+  }
+
+  function skipPhysicalCountToday() {
+    localStorage.setItem('physicalCountSkipDate', new Date().toISOString().split('T')[0]);
+    setShowPhysicalCount(false);
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -690,6 +805,17 @@ export default function Dashboard() {
           <CashCard title="Bank Balance" amount={stats?.bankBalance || 0} advance={stats?.bankAdvance || 0} icon={<Landmark size={24} />} color="bg-amber-500" clickable />
         </button>
       </div>
+
+      {/* Physical Cash Count reminder - shows until this month's count is filled in */}
+      {!physicalCounts.some((c) => c.month === new Date().toISOString().slice(0, 7)) && (
+        <button
+          onClick={() => { setPhysicalCountForm({ mpesa: '', cash: '', paybill: '' }); setShowPhysicalCount(true); }}
+          className="w-full flex items-center justify-between bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-xl px-4 py-3 text-sm transition-colors"
+        >
+          <span className="text-blue-800 font-medium">Physical Count - not done for this month yet. Tap to add.</span>
+          <Edit2 size={14} className="text-blue-600" />
+        </button>
+      )}
 
       {/* Supplier Total Owed - MOVED UP */}
       <button onClick={() => navigate('/suppliers')} className="w-full text-left">
@@ -878,36 +1004,38 @@ export default function Dashboard() {
           />
         </div>
 
-        {/* Forwarded Balance - balance carried in at the start of the selected month */}
+        {/* Forwarded Balance - balance carried in at the start of the selected month.
+            Auto-calculated from transactions before the month starts; a saved
+            override (if you've corrected it) takes priority over the auto value. */}
         <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 rounded-lg px-4 py-3 mb-4">
           {(() => {
             const fb = monthlyBalances.find((m) => m.month === monthFilter);
+            const display = fb
+              ? { mpesa: fb.mpesa, cash: fb.cash, paybill: fb.paybill }
+              : { mpesa: computedForwardedBalance.mpesa, cash: computedForwardedBalance.cash, paybill: computedForwardedBalance.bank };
             return (
               <>
-                <div className="flex flex-wrap gap-4 text-sm">
+                <div className="flex flex-wrap items-center gap-4 text-sm">
                   <span className="text-slate-500">Forwarded Balance:</span>
-                  {fb ? (
-                    <>
-                      <span>Mpesa <span className="font-medium text-slate-800">KES {formatKES(fb.mpesa)}</span></span>
-                      <span>Cash <span className="font-medium text-slate-800">KES {formatKES(fb.cash)}</span></span>
-                      <span>Paybill <span className="font-medium text-slate-800">KES {formatKES(fb.paybill)}</span></span>
-                    </>
-                  ) : (
-                    <span className="text-slate-400">Not set for this month</span>
-                  )}
+                  <span>Mpesa <span className="font-medium text-slate-800">KES {formatKES(display.mpesa)}</span></span>
+                  <span>Cash <span className="font-medium text-slate-800">KES {formatKES(display.cash)}</span></span>
+                  <span>Paybill <span className="font-medium text-slate-800">KES {formatKES(display.paybill)}</span></span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${fb ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-600'}`}>
+                    {fb ? 'Manually set' : 'Auto-calculated'}
+                  </span>
                 </div>
                 <button
                   onClick={() => {
                     setForwardedBalanceForm({
-                      mpesa: String(fb?.mpesa ?? ''),
-                      cash: String(fb?.cash ?? ''),
-                      paybill: String(fb?.paybill ?? ''),
+                      mpesa: String(display.mpesa),
+                      cash: String(display.cash),
+                      paybill: String(display.paybill),
                     });
                     setShowForwardedBalance(true);
                   }}
                   className="text-xs bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 px-3 py-1.5 rounded-lg font-medium flex items-center gap-1"
                 >
-                  <Edit2 size={12} /> {fb ? 'Edit' : 'Add'}
+                  <Edit2 size={12} /> Edit
                 </button>
               </>
             );
@@ -1098,6 +1226,52 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      {/* Physical Cash Count Modal - pops up automatically until filled in for the month */}
+      {showPhysicalCount && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-slate-800">Physical Cash Count - {todayMonthStr()}</h3>
+              <button onClick={skipPhysicalCountToday} className="p-1 hover:bg-slate-100 rounded"><X size={18} /></button>
+            </div>
+            <p className="text-sm text-slate-500 mb-4">Type in what you physically have right now. It's fine if it doesn't match - this is just a record.</p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Mpesa (actual)</label>
+                <input
+                  type="number"
+                  value={physicalCountForm.mpesa}
+                  onChange={(e) => setPhysicalCountForm({ ...physicalCountForm, mpesa: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Cash (actual)</label>
+                <input
+                  type="number"
+                  value={physicalCountForm.cash}
+                  onChange={(e) => setPhysicalCountForm({ ...physicalCountForm, cash: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Paybill / Bank (actual)</label>
+                <input
+                  type="number"
+                  value={physicalCountForm.paybill}
+                  onChange={(e) => setPhysicalCountForm({ ...physicalCountForm, paybill: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={handleSavePhysicalCount} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-medium">Save</button>
+                <button onClick={skipPhysicalCountToday} className="flex-1 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 py-2 rounded-lg text-sm font-medium">Skip for now</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Forwarded Balance Modal */}
       {showForwardedBalance && (
