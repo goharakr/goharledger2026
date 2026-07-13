@@ -1076,24 +1076,6 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* Quick Stats (Since Start) */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-        <h2 className="font-semibold text-lg text-slate-800 mb-4">Quick Stats (Since Start)</h2>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          <button onClick={() => navigate('/sales')} className="text-left"><StatBox label="Total Sales" value={stats?.totalSalesSinceStart || 0} clickable /></button>
-          <button onClick={() => navigate('/profit-loss')} className="text-left"><StatBox label="Gross Profit" value={stats?.totalGrossProfit || 0} color="text-emerald-600" clickable /></button>
-          <button onClick={() => navigate('/profit-loss')} className="text-left"><StatBox label="Net Profit" value={stats?.totalNetProfit || 0} color="text-emerald-600" clickable /></button>
-          <button onClick={() => navigate('/expenses')} className="text-left"><StatBox label="Shop Expenses" value={stats?.totalShopExpenses || 0} color="text-red-600" clickable /></button>
-          <button onClick={() => navigate('/expenses')} className="text-left"><StatBox label="Home Expenses" value={stats?.totalHomeExpenses || 0} color="text-orange-600" clickable /></button>
-          <button onClick={() => navigate('/partners')} className="text-left"><StatBox label="Partner Draws" value={stats?.totalPartnerDraws || 0} color="text-purple-600" clickable /></button>
-          <button onClick={() => navigate('/suppliers')} className="text-left"><StatBox label="Supplier Payments" value={stats?.totalSupplierPayments || 0} color="text-amber-600" clickable /></button>
-          <button onClick={() => navigate('/customers')} className="text-left"><StatBox label="Customer Collections" value={stats?.totalCustomerCollections || 0} color="text-blue-600" clickable /></button>
-          <button onClick={() => navigate('/suppliers')} className="text-left"><StatBox label="Suppliers Owed" value={stats?.totalSuppliersOwed || 0} color="text-red-600" clickable /></button>
-          <button onClick={() => navigate('/capital')} className="text-left"><StatBox label="Idris Loan Remaining" value={stats?.idrisRemaining || 0} color="text-orange-600" clickable /></button>
-          <button onClick={() => navigate('/capital')} className="text-left"><StatBox label="Total Capital" value={stats?.totalCapital || 0} color="text-emerald-600" clickable /></button>
-        </div>
-      </div>
-
       {/* Active Loans - Clickable */}
       {stats?.activeLoans && stats.activeLoans.length > 0 && (
         <button onClick={() => navigate('/capital')} className="w-full text-left">
