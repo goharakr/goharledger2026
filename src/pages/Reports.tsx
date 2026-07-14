@@ -10,7 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, getMonthLabel } from '../utils/format';
+import { formatKES, formatDate, getMonthLabel, saleProfit, isSaleIncomplete } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
@@ -231,7 +231,7 @@ export default function Reports() {
     let totalIn = 0;
     let totalOut = 0;
     let salesTotal = 0;
-    let costTotal = 0;
+    let grossProfitTotal = 0;
     let commissionTotal = 0;
     let expenseTotal = 0;
     let shopExpenseTotal = 0;
@@ -248,7 +248,7 @@ export default function Reports() {
         // so counting the settlement here too would double it.
         if (t.primary_mode !== 'advance') totalIn += t.amount;
         salesTotal += t.selling_price || t.amount;
-        costTotal += t.cost_price || 0;
+        grossProfitTotal += saleProfit(t);
         commissionTotal += t.commission || 0;
       } else if (t.type === 'customer_payment') {
         totalIn += t.amount;
@@ -284,7 +284,11 @@ export default function Reports() {
       // adding both here would count the same money leaving twice.
     });
 
-    const grossProfit = salesTotal - costTotal - commissionTotal;
+    // grossProfitTotal already treats a sale with no cost price yet as 0
+    // profit (see saleProfit()) instead of the full selling price. Cost of
+    // Goods is derived backward so it stays consistent with that.
+    const grossProfit = grossProfitTotal;
+    const costTotal = salesTotal - commissionTotal - grossProfit;
     // Partner draws are money partners take out of already-earned profit,
     // not a business expense - excluded here to match Dashboard/Profit & Loss.
     const netProfit = grossProfit - shopExpenseTotal - homeExpenseTotal - loanPaymentTotal;
@@ -639,7 +643,7 @@ export default function Reports() {
                 {filteredTransactions.map((t) => {
                   const dc = getDebitCredit(t);
                   return (
-                    <tr key={t.id} className="hover:bg-slate-50 transition-colors">
+                    <tr key={t.id} className={`hover:bg-slate-50 transition-colors ${isSaleIncomplete(t) ? 'bg-green-50' : ''}`} title={isSaleIncomplete(t) ? 'Missing payment mode, cost price, or selling price' : undefined}>
                       <td className="px-4 py-2 text-slate-600">{formatDate(t.date)}</td>
                       <td className="px-4 py-2 text-slate-500 text-xs">{t.transaction_id}</td>
                       <td className="px-4 py-2">

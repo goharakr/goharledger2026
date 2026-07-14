@@ -34,3 +34,21 @@ export function getMonthLabel(dateStr: string): string {
   return d.toLocaleDateString('en-KE', { year: 'numeric', month: 'long' });
 }
 
+// A sale whose cost price hasn't been entered yet (cost not yet billed by a
+// supplier, or genuinely unknown) has an unknown profit - not a profit equal
+// to the full selling price. Until the real cost is filled in (via Edit),
+// this sale contributes 0 to every profit total, matching how it's tracked
+// on paper: profit deferred, not assumed to be 100%.
+export function saleProfit(t: { selling_price?: number | null; cost_price?: number | null; commission?: number | null }): number {
+  if (t.cost_price === null || t.cost_price === undefined) return 0;
+  return (t.selling_price || 0) - t.cost_price - (t.commission || 0);
+}
+
+// Flags a sale row that's missing its payment mode, cost price, or selling
+// price - used to highlight rows in a ledger/list that still need something
+// filled in, rather than letting them blend in silently.
+export function isSaleIncomplete(t: { type?: string; primary_mode?: string | null; cost_price?: number | null; selling_price?: number | null }): boolean {
+  if (t.type !== 'sale') return false;
+  return !t.primary_mode || t.cost_price === null || t.cost_price === undefined || t.selling_price === null || t.selling_price === undefined;
+}
+

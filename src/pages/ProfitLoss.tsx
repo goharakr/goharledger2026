@@ -7,7 +7,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, getMonthLabel } from '../utils/format';
+import { formatKES, getMonthLabel, saleProfit } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
 import LedgerModal from '../components/LedgerModal';
 import { fetchAllRows } from '../utils/fetchAll';
@@ -93,9 +93,13 @@ export default function ProfitLoss() {
 
     const sales = monthTxns.filter((t) => t.type === 'sale');
     const totalSP = sales.reduce((s, t) => s + (t.selling_price || 0), 0);
-    const totalCP = sales.reduce((s, t) => s + (t.cost_price || 0), 0);
     const totalCommission = sales.reduce((s, t) => s + (t.commission || 0), 0);
-    const grossProfit = totalSP - totalCP - totalCommission;
+    // A sale with no cost price yet contributes 0 profit (not full selling
+    // price) until the real cost is filled in - see saleProfit(). Cost of
+    // Goods is then derived backward so the waterfall (SP - CP - Commission
+    // = Gross Profit) stays internally consistent.
+    const grossProfit = sales.reduce((s, t) => s + saleProfit(t), 0);
+    const totalCP = totalSP - totalCommission - grossProfit;
 
     const shopExpenses = monthTxns
       .filter((t) => t.type === 'expense' && t.category !== 'home_expense' && t.category !== 'stock' && t.category !== 'supplier_payment')

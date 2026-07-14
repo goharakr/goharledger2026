@@ -10,7 +10,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, todayStr } from '../utils/format';
+import { formatKES, formatDate, todayStr, isSaleIncomplete } from '../utils/format';
 import { adjustSupplierBalance } from '../utils/balances';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
@@ -527,7 +527,7 @@ export default function Suppliers() {
                       <tr><td colSpan={5} className="px-3 py-4 text-center text-slate-400 text-xs">No transactions</td></tr>
                     ) : (
                       getSupplierTransactions(selectedSupplier.id).map((t) => (
-                        <tr key={t.id} className="hover:bg-slate-50 transition-colors">
+                        <tr key={t.id} className={`hover:bg-slate-50 transition-colors ${isSaleIncomplete(t) ? 'bg-green-50' : ''}`} title={isSaleIncomplete(t) ? 'Missing payment mode, cost price, or selling price' : undefined}>
                           <td className="px-3 py-2 text-slate-600">{formatDate(t.date)}</td>
                           <td className="px-3 py-2">
                             <span className={`text-xs px-2 py-0.5 rounded-full ${

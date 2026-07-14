@@ -14,7 +14,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, todayStr } from '../utils/format';
+import { formatKES, formatDate, todayStr, saleProfit, isSaleIncomplete } from '../utils/format';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance } from '../utils/balances';
@@ -199,6 +199,12 @@ export default function Sales() {
     if ((form.mode === 'credit' || form.mode === 'advance') && !form.customerId) return;
     if (form.mode === 'supplier' && !form.supplierId) return;
 
+    // Not a hard block - just a heads-up. The sale still saves either way;
+    // profit will show as 0 until the cost price is filled in via Edit.
+    if (!form.costPrice || form.costPrice.trim() === '') {
+      alert('Cost Price not entered. The sale will still be saved - profit will show as 0 until you edit it later and fill in the real cost.');
+    }
+
     const sp = parseFloat(form.sellingPrice);
     const cp = parseFloat(form.costPrice || '0');
     const comm = parseFloat(form.commission || '0');
@@ -309,6 +315,13 @@ export default function Sales() {
         return true;
       });
     if (validForms.length === 0) return;
+
+    // Not a hard block - just a heads-up. These rows still save either way;
+    // profit will show as 0 until the cost price is filled in via Edit.
+    const missingCostRows = validForms.filter(({ f }) => !f.costPrice || f.costPrice.trim() === '').map(({ originalIndex }) => originalIndex + 1);
+    if (missingCostRows.length > 0) {
+      alert(`Cost Price not entered for row(s) ${missingCostRows.join(', ')}. They will still be saved - profit will show as 0 until you edit them later and fill in the real cost.`);
+    }
 
     const failedRows: number[] = [];
 
@@ -856,7 +869,7 @@ export default function Sales() {
               const daySales = grouped.get(date) || [];
               const isExpanded = expandedDates.has(date);
               const dayTotal = daySales.reduce((s, sale) => s + (sale.selling_price || 0), 0);
-              const dayProfit = daySales.reduce((s, sale) => s + ((sale.selling_price || 0) - (sale.cost_price || 0) - (sale.commission || 0)), 0);
+              const dayProfit = daySales.reduce((s, sale) => s + saleProfit(sale), 0);
 
               return (
                 <div key={date}>
@@ -890,9 +903,10 @@ export default function Sales() {
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {daySales.map((sale) => {
-                            const profit = (sale.selling_price || 0) - (sale.cost_price || 0) - (sale.commission || 0);
+                            const profit = saleProfit(sale);
+                            const incomplete = isSaleIncomplete(sale);
                             return (
-                              <tr key={sale.id} className="hover:bg-white transition-colors">
+                              <tr key={sale.id} className={`hover:bg-white transition-colors ${incomplete ? 'bg-green-50' : ''}`} title={incomplete ? 'Missing payment mode, cost price, or selling price' : undefined}>
                                 <td className="px-4 py-2 font-mono text-xs text-slate-500">{sale.transaction_id}</td>
                                 <td className="px-4 py-2">
                                   <span className={`text-xs px-2 py-0.5 rounded-full ${

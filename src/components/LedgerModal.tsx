@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { X, Filter, Download, Trash2, Edit2, Save } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate } from '../utils/format';
+import { formatKES, formatDate, isSaleIncomplete } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
 import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance, adjustLoanBalance } from '../utils/balances';
 import type { Transaction, Customer, Supplier } from '../types';
@@ -379,7 +379,7 @@ export default function LedgerModal({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {entries.map((e) => (
-                  <tr key={e.id} className="hover:bg-slate-50 transition-colors">
+                  <tr key={e.id} className={`hover:bg-slate-50 transition-colors ${isSaleIncomplete(e) ? 'bg-green-50' : ''}`} title={isSaleIncomplete(e) ? 'Missing payment mode, cost price, or selling price' : undefined}>
                     <td className="px-3 py-2 text-slate-600">{formatDate(e.date)}</td>
                     <td className="px-3 py-2 text-slate-500 text-xs">{e.transaction_id}</td>
                     <td className="px-3 py-2">

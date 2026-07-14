@@ -24,7 +24,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate } from '../utils/format';
+import { formatKES, formatDate, saleProfit } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
@@ -227,7 +227,7 @@ export default function Dashboard() {
 
     txns?.forEach((t) => {
       totalSales += t.selling_price || 0;
-      profit += (t.selling_price || 0) - (t.cost_price || 0) - (t.commission || 0);
+      profit += saleProfit(t);
       commission += t.commission || 0;
 
       if (t.primary_mode === 'advance') {
@@ -347,7 +347,7 @@ export default function Dashboard() {
 
       txns?.forEach((t) => {
         if (t.is_void) return;
-        const profitVal = (t.selling_price || 0) - (t.cost_price || 0) - (t.commission || 0);
+        const profitVal = saleProfit(t);
         const isMonth = t.date >= monthStart && t.date <= monthEnd;
 
         // Cash balances
@@ -564,7 +564,7 @@ export default function Dashboard() {
         if (t.is_void || !t.date) return;
         const monthKey = t.date.slice(0, 7);
         if (t.type === 'sale') {
-          touchMonth(monthKey).grossProfit += (t.selling_price || 0) - (t.cost_price || 0) - (t.commission || 0);
+          touchMonth(monthKey).grossProfit += saleProfit(t);
         } else if (t.type === 'expense' && t.category !== 'stock' && t.category !== 'supplier_payment') {
           if (t.category === 'home_expense') {
             if (t.notes?.includes('From Shop')) touchMonth(monthKey).homeExpensesFromShop += t.amount;

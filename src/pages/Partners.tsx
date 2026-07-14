@@ -14,7 +14,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, getMonthLabel, todayStr } from '../utils/format';
+import { formatKES, formatDate, getMonthLabel, todayStr, saleProfit } from '../utils/format';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
@@ -130,7 +130,7 @@ export default function Partners() {
       if (t.is_void || !t.date) return;
       const key = t.date.slice(0, 7);
       if (t.type === 'sale') {
-        touchMonth(key).grossProfit += (t.selling_price || 0) - (t.cost_price || 0) - (t.commission || 0);
+        touchMonth(key).grossProfit += saleProfit(t);
       } else if (t.type === 'expense' && t.category !== 'stock' && t.category !== 'supplier_payment') {
         if (t.category === 'home_expense') {
           if (t.notes?.includes('From Shop')) touchMonth(key).homeExpensesFromShop += t.amount;
