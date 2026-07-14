@@ -676,8 +676,8 @@ export default function Capital() {
               <p className="text-lg font-bold text-emerald-600">KES {formatKES(idrisLoan.amount_paid || 0)}</p>
             </div>
             <div className="bg-slate-50 rounded-lg p-3">
-              <p className="text-xs text-slate-500">Remaining</p>
-              <p className="text-lg font-bold text-red-600">KES {formatKES(idrisLoan.remaining_balance)}</p>
+              <p className="text-xs text-slate-500">{idrisLoan.remaining_balance < 0 ? 'Overpaid (credit)' : 'Remaining'}</p>
+              <p className={`text-lg font-bold ${idrisLoan.remaining_balance < 0 ? 'text-emerald-600' : 'text-red-600'}`}>KES {formatKES(Math.abs(idrisLoan.remaining_balance))}</p>
             </div>
           </div>
           <div className="w-full bg-slate-200 rounded-full h-3">
@@ -718,7 +718,7 @@ export default function Capital() {
                     <div className="space-y-1 text-sm">
                       <div className="flex justify-between"><span className="text-slate-500">Total:</span><span className="font-medium">KES {formatKES(loan.total_amount)}</span></div>
                       <div className="flex justify-between"><span className="text-slate-500">Paid:</span><span className="font-medium text-emerald-600">KES {formatKES(loan.amount_paid || 0)}</span></div>
-                      <div className="flex justify-between"><span className="text-slate-500">Remaining:</span><span className="font-medium text-red-600">KES {formatKES(loan.remaining_balance)}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">{loan.remaining_balance < 0 ? 'Overpaid (credit):' : 'Remaining:'}</span><span className={`font-medium ${loan.remaining_balance < 0 ? 'text-emerald-600' : 'text-red-600'}`}>KES {formatKES(Math.abs(loan.remaining_balance))}</span></div>
                       {loan.monthly_installment && (
                         <div className="flex justify-between"><span className="text-slate-500">Monthly:</span><span className="font-medium">KES {formatKES(loan.monthly_installment)}</span></div>
                       )}

@@ -42,10 +42,14 @@ export async function adjustCustomerAdvance(customerId: string, delta: number): 
 
 // positive paymentDelta = a payment was made (remaining down, paid up)
 // negative paymentDelta = reversing a payment (remaining up, paid down)
+//
+// remaining_balance is allowed to go negative on purpose: a payment bigger
+// than what was left overpays the loan, and the negative amount is the
+// credit the loan is now ahead by, instead of silently discarding it.
 export async function adjustLoanBalance(loanId: string, paymentDelta: number): Promise<boolean> {
   const { data, error: selectError } = await supabase.from('loan_trackers').select('remaining_balance, amount_paid').eq('id', loanId).single();
   if (selectError) { console.error('adjustLoanBalance: could not read current balance', selectError); return false; }
-  const newBal = Math.max(0, (data?.remaining_balance || 0) - paymentDelta);
+  const newBal = (data?.remaining_balance || 0) - paymentDelta;
   const newPaid = Math.max(0, (data?.amount_paid || 0) + paymentDelta);
   const { error } = await supabase.from('loan_trackers').update({
     remaining_balance: newBal,
