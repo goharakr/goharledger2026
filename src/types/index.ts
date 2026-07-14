@@ -53,6 +53,7 @@ export interface Transaction {
   created_by: string | null;
   created_at: string;
   edited_at: string | null;
+  refunded_of: string | null;
 }
 
 export interface TransactionSplit {

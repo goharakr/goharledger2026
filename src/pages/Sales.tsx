@@ -386,10 +386,30 @@ export default function Sales() {
     triggerRefresh();
   }
 
+  // How much of a sale is still refundable - the original amount minus
+  // whatever's already been refunded against it (tracked via refunded_of,
+  // not by matching description text).
+  function alreadyRefunded(sale: Transaction): number {
+    return sales
+      .filter((s) => s.refunded_of === sale.transaction_id && !s.is_void)
+      .reduce((sum, s) => sum + Math.abs(s.selling_price ?? s.amount ?? 0), 0);
+  }
+
+  function refundableAmount(sale: Transaction): number {
+    const original = Math.abs(sale.selling_price ?? sale.amount ?? 0);
+    return Math.max(0, original - alreadyRefunded(sale));
+  }
+
   async function handleRefund() {
     if (!refundingSale) return;
     const amount = parseFloat(refundForm.amount);
     if (!amount || amount <= 0) return;
+
+    const maxRefundable = refundableAmount(refundingSale);
+    if (amount > maxRefundable) {
+      alert(`You can refund at most KES ${formatKES(maxRefundable)} on this sale (KES ${formatKES(alreadyRefunded(refundingSale))} already refunded).`);
+      return;
+    }
 
     // Use the cost price you entered if given; otherwise work out this
     // refund's share of the original cost automatically, so a partial refund
@@ -403,15 +423,25 @@ export default function Sales() {
       refundCp = originalSp > 0 ? (amount / originalSp) * originalCp : 0;
     }
 
+    // A credit/advance/supplier sale never moved physical cash, so its refund
+    // shouldn't either - it just reverses the balance the original sale
+    // affected. Only a cash/mpesa/paybill/split sale's refund actually pays
+    // cash back out of a wallet, using whichever wallet was chosen above.
+    const isWalletMode = ['cash', 'mpesa', 'paybill', 'split'].includes(refundingSale.primary_mode || '');
+    const refundMode = isWalletMode ? refundForm.mode : refundingSale.primary_mode;
+
     const prefix = 'REF-' + refundForm.date.replace(/-/g, '');
     const { data: newTxn, error } = await insertTransactionWithId(prefix, (transactionId) => ({
       transaction_id: transactionId,
       date: refundForm.date,
       type: 'sale',
-      primary_mode: refundForm.mode,
+      primary_mode: refundMode,
       selling_price: -amount,
       cost_price: -refundCp,
       amount: -amount,
+      customer_id: refundingSale.customer_id || null,
+      supplier_id: refundingSale.supplier_id || null,
+      refunded_of: refundingSale.transaction_id,
       description: `Refund - ${refundingSale.transaction_id}`,
       created_by: user?.username || null,
     }));
@@ -419,6 +449,16 @@ export default function Sales() {
       console.error(error);
       alert('Failed to save refund: ' + (error?.message || 'unknown error'));
       return;
+    }
+
+    if (!isWalletMode) {
+      if (refundingSale.primary_mode === 'credit' && refundingSale.customer_id) {
+        await adjustCustomerCredit(refundingSale.customer_id, -amount);
+      } else if (refundingSale.primary_mode === 'advance' && refundingSale.customer_id) {
+        await adjustCustomerAdvance(refundingSale.customer_id, amount);
+      } else if (refundingSale.primary_mode === 'supplier' && refundingSale.supplier_id) {
+        await adjustSupplierBalance(refundingSale.supplier_id, amount);
+      }
     }
 
     setRefundingSale(null);
@@ -836,16 +876,18 @@ export default function Sales() {
                                     <button onClick={() => startEdit(sale)} className="p-1 hover:bg-slate-200 rounded">
                                       <Edit2 size={14} className="text-slate-500" />
                                     </button>
-                                    <button
-                                      onClick={() => {
-                                        setRefundingSale(sale);
-                                        setRefundForm({ amount: '', costPrice: '', mode: 'cash', date: todayStr() });
-                                      }}
-                                      className="p-1 hover:bg-amber-100 rounded"
-                                      title="Refund"
-                                    >
-                                      <RotateCcw size={14} className="text-amber-600" />
-                                    </button>
+                                    {!sale.refunded_of && refundableAmount(sale) > 0 && (
+                                      <button
+                                        onClick={() => {
+                                          setRefundingSale(sale);
+                                          setRefundForm({ amount: '', costPrice: '', mode: 'cash', date: todayStr() });
+                                        }}
+                                        className="p-1 hover:bg-amber-100 rounded"
+                                        title="Refund"
+                                      >
+                                        <RotateCcw size={14} className="text-amber-600" />
+                                      </button>
+                                    )}
                                     <button
                                       onClick={() => {
                                         const reason = prompt('Enter void reason:');
@@ -891,6 +933,15 @@ export default function Sales() {
             <p className="text-xs text-slate-500">
               Original sale: {formatKES(refundingSale.selling_price || 0)} (cost {formatKES(refundingSale.cost_price || 0)})
             </p>
+            <p className="text-xs text-slate-500">
+              Refundable: KES {formatKES(refundableAmount(refundingSale))}
+              {alreadyRefunded(refundingSale) > 0 && ` (KES ${formatKES(alreadyRefunded(refundingSale))} already refunded)`}
+            </p>
+            {!['cash', 'mpesa', 'paybill', 'split'].includes(refundingSale.primary_mode || '') && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                This was a {refundingSale.primary_mode} sale - no cash changes hands, this will just reduce the {refundingSale.primary_mode === 'supplier' ? "supplier's" : "customer's"} balance.
+              </p>
+            )}
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Amount to refund</label>
               <input
@@ -911,18 +962,20 @@ export default function Sales() {
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Paid back via</label>
-                <select
-                  value={refundForm.mode}
-                  onChange={(e) => setRefundForm({ ...refundForm, mode: e.target.value })}
-                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-                >
-                  <option value="cash">Cash</option>
-                  <option value="mpesa">Mpesa</option>
-                  <option value="paybill">Paybill</option>
-                </select>
-              </div>
+              {['cash', 'mpesa', 'paybill', 'split'].includes(refundingSale.primary_mode || '') && (
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Paid back via</label>
+                  <select
+                    value={refundForm.mode}
+                    onChange={(e) => setRefundForm({ ...refundForm, mode: e.target.value })}
+                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  >
+                    <option value="cash">Cash</option>
+                    <option value="mpesa">Mpesa</option>
+                    <option value="paybill">Paybill</option>
+                  </select>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Date</label>
                 <input
