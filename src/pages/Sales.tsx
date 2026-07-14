@@ -16,6 +16,7 @@ import {
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr } from '../utils/format';
 import { insertTransactionWithId } from '../utils/transactionId';
+import { fetchAllRows } from '../utils/fetchAll';
 import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance } from '../utils/balances';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
@@ -104,7 +105,9 @@ export default function Sales() {
   async function fetchData() {
     setLoading(true);
     const [{ data: txns }, { data: splitData }, { data: cust }, { data: supp }] = await Promise.all([
-      supabase.from('transactions').select('*').eq('type', 'sale').order('date', { ascending: false }).order('created_at', { ascending: false }),
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').eq('type', 'sale').order('date', { ascending: false }).order('created_at', { ascending: false }).range(from, to)
+      ),
       supabase.from('transaction_splits').select('*'),
       supabase.from('customers').select('*').eq('is_active', true),
       supabase.from('suppliers').select('*').eq('is_active', true),

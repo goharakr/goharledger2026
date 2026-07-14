@@ -15,6 +15,7 @@ import {
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, getMonthLabel, todayStr } from '../utils/format';
 import { insertTransactionWithId } from '../utils/transactionId';
+import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
@@ -74,7 +75,9 @@ export default function Partners() {
   async function fetchData() {
     setLoading(true);
     const [{ data: txns }, { data: hist }, { data: rules }] = await Promise.all([
-      supabase.from('transactions').select('*').order('date', { ascending: false }),
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').order('date', { ascending: false }).range(from, to)
+      ),
       supabase.from('historical_profit').select('*').order('month', { ascending: false }),
       supabase.from('share_rules').select('*').eq('is_active', true),
     ]);

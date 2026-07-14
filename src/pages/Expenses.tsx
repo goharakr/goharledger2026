@@ -15,6 +15,7 @@ import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr } from '../utils/format';
 import { adjustSupplierBalance, adjustLoanBalance } from '../utils/balances';
 import { insertTransactionWithId } from '../utils/transactionId';
+import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
@@ -84,12 +85,18 @@ export default function Expenses() {
   async function fetchData() {
     setLoading(true);
     const [{ data: txns }, { data: suppData }, { data: loanData }, { data: catData }, { data: suppPayments }, { data: loanPayments }] = await Promise.all([
-      supabase.from('transactions').select('*').eq('type', 'expense').order('date', { ascending: false }),
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').eq('type', 'expense').order('date', { ascending: false }).range(from, to)
+      ),
       supabase.from('suppliers').select('*').eq('is_active', true),
       supabase.from('loan_trackers').select('*'),
       supabase.from('expense_categories').select('*').eq('is_active', true).order('name'),
-      supabase.from('transactions').select('*').eq('type', 'supplier_payment').order('date', { ascending: false }),
-      supabase.from('transactions').select('*').eq('type', 'loan_payment').order('date', { ascending: false }),
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').eq('type', 'supplier_payment').order('date', { ascending: false }).range(from, to)
+      ),
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').eq('type', 'loan_payment').order('date', { ascending: false }).range(from, to)
+      ),
     ]);
 
     let filtered = txns || [];

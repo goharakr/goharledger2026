@@ -19,7 +19,8 @@ import { useAuth } from '../context/AuthContext';
 import { useDataRefresh } from '../context/DataContext';
 import { formatKES, todayStr } from '../utils/format';
 import { adjustCustomerCredit, adjustSupplierBalance } from '../utils/balances';
-import type { Customer, Supplier } from '../types';
+import { fetchAllRows } from '../utils/fetchAll';
+import type { Customer, Supplier, Transaction } from '../types';
 
 export default function Settings() {
   const { user } = useAuth();
@@ -496,7 +497,9 @@ function NotificationsSettings() {
 
 async function fetchReportData() {
   const [{ data: txns }, { data: customers }, { data: suppliers }, { data: profile }] = await Promise.all([
-    supabase.from('transactions').select('*').eq('is_void', false).order('date', { ascending: false }),
+    fetchAllRows<Transaction>((from, to) =>
+      supabase.from('transactions').select('*').eq('is_void', false).order('date', { ascending: false }).range(from, to)
+    ),
     supabase.from('customers').select('*'),
     supabase.from('suppliers').select('*'),
     supabase.from('business_profile').select('*').limit(1).maybeSingle(),
@@ -567,7 +570,9 @@ function DataExport() {
   async function exportJSON() {
     setExporting('json');
     try {
-      const { data: txns } = await supabase.from('transactions').select('*').eq('is_void', false);
+      const { data: txns } = await fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').eq('is_void', false).range(from, to)
+      );
       const { data: customers } = await supabase.from('customers').select('*').eq('is_active', true);
       const { data: suppliers } = await supabase.from('suppliers').select('*').eq('is_active', true);
       const { data: capital } = await supabase.from('capital_entries').select('*');

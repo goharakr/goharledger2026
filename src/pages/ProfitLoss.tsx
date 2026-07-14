@@ -10,6 +10,7 @@ import { supabase } from '../utils/supabase';
 import { formatKES, getMonthLabel } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
 import LedgerModal from '../components/LedgerModal';
+import { fetchAllRows } from '../utils/fetchAll';
 import type { Transaction, ShareRule, HistoricalProfit } from '../types';
 
 export default function ProfitLoss() {
@@ -33,7 +34,9 @@ export default function ProfitLoss() {
   async function fetchData() {
     setLoading(true);
     const [{ data: txns }, { data: rules }, { data: hist }] = await Promise.all([
-      supabase.from('transactions').select('*').eq('is_void', false),
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').eq('is_void', false).range(from, to)
+      ),
       supabase.from('share_rules').select('*').eq('is_active', true),
       supabase.from('historical_profit').select('*').order('month', { ascending: false }),
     ]);
