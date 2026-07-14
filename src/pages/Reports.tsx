@@ -141,19 +141,19 @@ export default function Reports() {
     if (filters.entityType !== 'all') {
       switch (filters.entityType) {
         case 'cash_received':
-          query = query.in('type', ['sale', 'customer_payment']).eq('primary_mode', 'cash');
+          query = query.in('type', ['sale', 'customer_payment', 'partner_loan', 'opening_balance']).eq('primary_mode', 'cash');
           break;
         case 'cash_spent':
           query = query.in('type', ['expense', 'supplier_payment', 'partner_draw', 'loan_payment']).eq('primary_mode', 'cash');
           break;
         case 'mpesa_received':
-          query = query.in('type', ['sale', 'customer_payment']).eq('primary_mode', 'mpesa');
+          query = query.in('type', ['sale', 'customer_payment', 'partner_loan', 'opening_balance']).eq('primary_mode', 'mpesa');
           break;
         case 'mpesa_spent':
           query = query.in('type', ['expense', 'supplier_payment', 'partner_draw', 'loan_payment']).eq('primary_mode', 'mpesa');
           break;
         case 'paybill_received':
-          query = query.in('type', ['sale', 'customer_payment']).eq('primary_mode', 'paybill');
+          query = query.in('type', ['sale', 'customer_payment', 'partner_loan', 'opening_balance']).eq('primary_mode', 'paybill');
           break;
         case 'paybill_spent':
           query = query.in('type', ['expense', 'supplier_payment', 'partner_draw', 'loan_payment']).eq('primary_mode', 'paybill');

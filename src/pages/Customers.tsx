@@ -142,7 +142,7 @@ export default function Customers() {
     const openingAdvance = parseFloat(form.advanceBalance || '0');
     const openingCredit = parseFloat(form.openingCredit || '0');
 
-    const { data: newCustomer } = await supabase.from('customers').insert({
+    const { data: newCustomer, error } = await supabase.from('customers').insert({
       name: form.name.trim(),
       phone: form.phone || null,
       credit_limit: parseFloat(form.creditLimit || '0'),
@@ -150,6 +150,7 @@ export default function Customers() {
       credit_balance: openingCredit,
       notes: form.notes || null,
     }).select().single();
+    if (error || !newCustomer) { alert('Failed to save customer: ' + (error?.message || 'unknown error')); return; }
 
     // Mirror nonzero opening balances into transactions so they show up in
     // Reports/the Ledger with a visible origin, and can be edited/deleted later
@@ -379,6 +380,10 @@ export default function Customers() {
     if (!oldTxn) return;
 
     const sp = parseFloat(saleEditForm.sellingPrice || '0');
+    if (!saleEditForm.sellingPrice || isNaN(sp) || sp <= 0) {
+      alert('Enter a valid selling price greater than 0');
+      return;
+    }
     const cp = parseFloat(saleEditForm.costPrice || '0');
     const comm = parseFloat(saleEditForm.commission || '0');
     const isAdvance = oldTxn.primary_mode === 'advance';
@@ -792,6 +797,7 @@ export default function Customers() {
                                 />
                                 <input
                                   type="number"
+                                  min="0"
                                   value={saleEditForm.sellingPrice}
                                   onChange={(e) => setSaleEditForm({ ...saleEditForm, sellingPrice: e.target.value })}
                                   placeholder="Selling Price"

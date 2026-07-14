@@ -26,11 +26,17 @@ function authEmail(username: string): string {
   return `${username.trim().toLowerCase()}@goharledger.internal`;
 }
 
+// Escape ILIKE wildcard characters so a username containing "%" or "_"
+// can't accidentally (or deliberately) match more than the exact name.
+function escapeLike(value: string): string {
+  return value.replace(/[%_]/g, (c) => `\\${c}`);
+}
+
 async function loadAppUser(username: string): Promise<AppUser | null> {
   const { data: row } = await supabase
     .from('users')
     .select('*')
-    .ilike('username', username)
+    .ilike('username', escapeLike(username))
     .eq('is_active', true)
     .maybeSingle();
   if (!row) return null;
@@ -89,7 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: row } = await supabase
       .from('users')
       .select('*')
-      .ilike('username', trimmed)
+      .ilike('username', escapeLike(trimmed))
       .eq('is_active', true)
       .maybeSingle();
     if (!row) return { ok: false };
@@ -131,7 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: row } = await supabase
       .from('users')
       .select('*')
-      .ilike('username', trimmed)
+      .ilike('username', escapeLike(trimmed))
       .eq('is_active', true)
       .maybeSingle();
     if (!row) return { ok: false, error: 'Account not found' };
@@ -181,7 +187,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { data: existing } = await supabase
         .from('users')
         .select('id')
-        .ilike('username', trimmedUsername)
+        .ilike('username', escapeLike(trimmedUsername))
         .neq('id', user.id)
         .maybeSingle();
       if (existing) return { ok: false, error: 'That username is already taken' };

@@ -189,7 +189,8 @@ export default function LedgerModal({
       await supabase.from('capital_entries').delete().eq('id', txn.transaction_id.slice(4));
     }
 
-    await supabase.from('transactions').update({ is_void: true, void_reason: 'Deleted from ledger' }).eq('id', id);
+    const { error } = await supabase.from('transactions').update({ is_void: true, void_reason: 'Deleted from ledger' }).eq('id', id);
+    if (error) { alert('Failed to void: ' + error.message); return; }
     fetchEntries();
     triggerRefresh();
   }
@@ -208,6 +209,14 @@ export default function LedgerModal({
     if (!txn) return;
 
     const newAmount = parseFloat(editForm.amount);
+    if (!editForm.amount || isNaN(newAmount) || newAmount <= 0) {
+      alert('Enter a valid amount greater than 0');
+      return;
+    }
+    if (txn.type === 'sale' && txn.primary_mode === 'split') {
+      alert('Split-mode sales can\'t have their amount edited here - void and re-enter it instead.');
+      return;
+    }
     const delta = newAmount - (txn.amount || 0);
 
     const updatePayload: Record<string, unknown> = {
@@ -220,7 +229,8 @@ export default function LedgerModal({
       updatePayload.selling_price = newAmount;
     }
 
-    await supabase.from('transactions').update(updatePayload).eq('id', editingEntry);
+    const { error } = await supabase.from('transactions').update(updatePayload).eq('id', editingEntry);
+    if (error) { alert('Failed to save: ' + error.message); return; }
 
     // Capital entries are mirrored here from the Capital page - keep the
     // actual record in sync with whatever was just edited on the mirror
@@ -252,6 +262,8 @@ export default function LedgerModal({
         if (txn.loan_id) await adjustLoanBalance(txn.loan_id, delta);
       } else if (txn.type === 'loan_payment' && txn.loan_id) {
         await adjustLoanBalance(txn.loan_id, delta);
+      } else if (txn.type === 'opening_balance' && txn.customer_id) {
+        await adjustCustomerCredit(txn.customer_id, delta);
       }
     }
 

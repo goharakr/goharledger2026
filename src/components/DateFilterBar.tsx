@@ -31,6 +31,11 @@ export default function DateFilterBar({ preset, customFrom, customTo, onChange }
           if (next === 'pick_month' && !customFrom) {
             const now = new Date();
             onChange(next, `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`, customTo);
+          } else if (next === 'custom' && preset === 'pick_month') {
+            // customFrom held a "YYYY-MM" value for Pick Month - that's not a
+            // valid date for the Custom date inputs, so clear it instead of
+            // carrying it over.
+            onChange(next, '', '');
           } else {
             onChange(next, customFrom, customTo);
           }

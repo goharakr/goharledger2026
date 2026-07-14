@@ -107,6 +107,10 @@ function calculateBalanceAsOf(allTxns: Transaction[] | null | undefined, splitMa
       if (t.primary_mode === 'mpesa') mpesa -= t.amount;
       else if (t.primary_mode === 'cash') cash -= t.amount;
       else if (t.primary_mode === 'paybill') bank -= t.amount;
+    } else if (t.type === 'partner_loan') {
+      if (t.primary_mode === 'mpesa') mpesa += t.amount;
+      else if (t.primary_mode === 'cash') cash += t.amount;
+      else if (t.primary_mode === 'paybill') bank += t.amount;
     } else if (t.type === 'loan_payment') {
       if (t.primary_mode === 'mpesa') mpesa -= t.amount;
       else if (t.primary_mode === 'cash') cash -= t.amount;
@@ -411,6 +415,10 @@ export default function Dashboard() {
           if (t.primary_mode === 'mpesa') mpesa -= t.amount;
           else if (t.primary_mode === 'cash') cash -= t.amount;
           else if (t.primary_mode === 'paybill') bank -= t.amount;
+        } else if (t.type === 'partner_loan') {
+          if (t.primary_mode === 'mpesa') mpesa += t.amount;
+          else if (t.primary_mode === 'cash') cash += t.amount;
+          else if (t.primary_mode === 'paybill') bank += t.amount;
         } else if (t.type === 'loan_payment') {
           if (t.primary_mode === 'mpesa') mpesa -= t.amount;
           else if (t.primary_mode === 'cash') cash -= t.amount;
@@ -459,8 +467,13 @@ export default function Dashboard() {
           const isSupplierPayment = t.category === 'supplier_payment' || t.category === 'stock';
           if (!isSupplierPayment) {
             if (t.category === 'home_expense') {
-              totalHomeExpenses += t.amount;
-              if (isMonth) monthHomeExpenses += t.amount;
+              // Only the shop's own reimbursement ("From Shop") is a real shop
+              // expense - the original "From Own Pocket" entry is the partner's
+              // own money, counted once (here) instead of twice (also here).
+              if (t.notes?.includes('From Shop')) {
+                totalHomeExpenses += t.amount;
+                if (isMonth) monthHomeExpenses += t.amount;
+              }
             } else {
               totalShopExpenses += t.amount;
               if (isMonth) monthShopExpenses += t.amount;
@@ -692,12 +705,13 @@ export default function Dashboard() {
   }
 
   async function handleSaveForwardedBalance() {
-    await supabase.from('monthly_balances').upsert({
+    const { error } = await supabase.from('monthly_balances').upsert({
       month: monthFilter,
       mpesa: parseFloat(forwardedBalanceForm.mpesa || '0'),
       cash: parseFloat(forwardedBalanceForm.cash || '0'),
       paybill: parseFloat(forwardedBalanceForm.paybill || '0'),
     }, { onConflict: 'month' });
+    if (error) { alert('Failed to save: ' + error.message); return; }
     setShowForwardedBalance(false);
     fetchDashboardData();
   }
@@ -708,7 +722,7 @@ export default function Dashboard() {
 
   async function handleSavePhysicalCount() {
     const month = todayMonthStr();
-    await supabase.from('physical_cash_counts').upsert({
+    const { error } = await supabase.from('physical_cash_counts').upsert({
       month,
       mpesa_actual: parseFloat(physicalCountForm.mpesa || '0'),
       cash_actual: parseFloat(physicalCountForm.cash || '0'),
@@ -718,6 +732,7 @@ export default function Dashboard() {
       paybill_system: stats?.bankBalance || 0,
       counted_at: new Date().toISOString(),
     }, { onConflict: 'month' });
+    if (error) { alert('Failed to save: ' + error.message); return; }
     setShowPhysicalCount(false);
     localStorage.removeItem('physicalCountSkipDate');
     fetchDashboardData();
@@ -1110,8 +1125,8 @@ export default function Dashboard() {
             {/* General Alerts */}
             {alerts.length > 0 && (
               <div className="divide-y divide-slate-100">
-                {alerts.map((alert, i) => (
-                  <div key={i} className="px-4 py-3 flex items-center gap-3 hover:bg-slate-50 transition-colors">
+                {alerts.map((alert) => (
+                  <div key={alert.message} className="px-4 py-3 flex items-center gap-3 hover:bg-slate-50 transition-colors">
                     <div className={`w-2.5 h-2.5 rounded-full ${
                       alert.type === 'red' ? 'bg-red-500' :
                       alert.type === 'orange' ? 'bg-orange-500' :

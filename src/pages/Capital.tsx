@@ -231,13 +231,14 @@ export default function Capital() {
   }
 
   async function handleAddLoan() {
-    if (!newLoanForm.loanName || !newLoanForm.totalAmount) return;
-
+    if (!newLoanForm.loanName.trim() || !newLoanForm.totalAmount) return;
     const total = parseFloat(newLoanForm.totalAmount);
+    if (isNaN(total) || total <= 0) { alert('Enter a valid total amount greater than 0'); return; }
+
     const paid = parseFloat(newLoanForm.amountPaid || '0');
 
     await supabase.from('loan_trackers').insert({
-      loan_name: newLoanForm.loanName,
+      loan_name: newLoanForm.loanName.trim(),
       loan_type: 'shop_loan',
       total_amount: total,
       remaining_balance: total - paid,
@@ -262,12 +263,19 @@ export default function Capital() {
 
   async function handleEditLoan() {
     if (!showEditLoan) return;
+    if (!editLoanForm.loanName.trim() || !editLoanForm.totalAmount) return;
+    const total = parseFloat(editLoanForm.totalAmount);
+    const paid = parseFloat(editLoanForm.amountPaid || '0');
+    if (isNaN(total) || total <= 0 || isNaN(paid) || paid < 0) {
+      alert('Enter valid amounts (total greater than 0, paid 0 or more)');
+      return;
+    }
 
     await supabase.from('loan_trackers').update({
-      loan_name: editLoanForm.loanName,
-      total_amount: parseFloat(editLoanForm.totalAmount),
-      amount_paid: parseFloat(editLoanForm.amountPaid),
-      remaining_balance: parseFloat(editLoanForm.totalAmount) - parseFloat(editLoanForm.amountPaid),
+      loan_name: editLoanForm.loanName.trim(),
+      total_amount: total,
+      amount_paid: paid,
+      remaining_balance: total - paid,
       monthly_installment: editLoanForm.monthlyInstallment ? parseFloat(editLoanForm.monthlyInstallment) : null,
       start_date: editLoanForm.startDate,
       notes: editLoanForm.notes || null,

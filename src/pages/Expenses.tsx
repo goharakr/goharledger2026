@@ -269,7 +269,8 @@ export default function Expenses() {
       await adjustLoanBalance(txn.loan_id, -(txn.amount || 0));
     }
 
-    await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', id);
+    const { error } = await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', id);
+    if (error) { alert('Failed to void: ' + error.message); return; }
     fetchData();
     triggerRefresh();
   }
@@ -313,7 +314,7 @@ export default function Expenses() {
     // would otherwise overwrite `type` with 'expense' and corrupt the record.
     if (oldTxn.type === 'supplier_payment') {
       if (oldTxn.supplier_id) await adjustSupplierBalance(oldTxn.supplier_id, oldTxn.amount || 0);
-      await supabase.from('transactions').update({
+      const { error } = await supabase.from('transactions').update({
         date: form.date,
         primary_mode: form.mode,
         amount: amt,
@@ -323,6 +324,7 @@ export default function Expenses() {
         clears_on: form.mode === 'paybill' && form.isPostDated && form.clearsOn ? form.clearsOn : null,
         edited_at: new Date().toISOString(),
       }).eq('id', editingId);
+      if (error) { alert('Failed to save: ' + error.message); return; }
       if (form.supplierId) await adjustSupplierBalance(form.supplierId, -amt);
 
       setEditingId(null);
@@ -335,7 +337,7 @@ export default function Expenses() {
 
     if (oldTxn.type === 'loan_payment') {
       if (oldTxn.loan_id) await adjustLoanBalance(oldTxn.loan_id, -(oldTxn.amount || 0));
-      await supabase.from('transactions').update({
+      const { error } = await supabase.from('transactions').update({
         date: form.date,
         primary_mode: form.mode,
         amount: amt,
@@ -344,6 +346,7 @@ export default function Expenses() {
         notes: form.notes || null,
         edited_at: new Date().toISOString(),
       }).eq('id', editingId);
+      if (error) { alert('Failed to save: ' + error.message); return; }
       if (form.loanId) await adjustLoanBalance(form.loanId, amt);
 
       setEditingId(null);
@@ -367,7 +370,7 @@ export default function Expenses() {
     }
 
     // Update transaction
-    await supabase.from('transactions').update({
+    const { error } = await supabase.from('transactions').update({
       date: form.date,
       primary_mode: form.mode,
       amount: amt,
@@ -381,6 +384,7 @@ export default function Expenses() {
       clears_on: form.mode === 'paybill' && form.isPostDated && form.clearsOn ? form.clearsOn : null,
       edited_at: new Date().toISOString(),
     }).eq('id', editingId);
+    if (error) { alert('Failed to save: ' + error.message); return; }
 
     // Apply new effects
     if (form.supplierId && (category === 'supplier_payment' || category === 'stock')) {

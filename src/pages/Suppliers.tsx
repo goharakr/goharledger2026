@@ -298,8 +298,8 @@ export default function Suppliers() {
     const txn = transactions.find((t) => t.id === id);
     if (!txn) return;
 
-    if (txn.supplier_id && txn.type === 'expense') {
-      await adjustSupplierBalance(txn.supplier_id, -(txn.amount || 0));
+    if (txn.supplier_id && txn.type === 'expense' && (txn.category === 'supplier_payment' || txn.category === 'stock')) {
+      await adjustSupplierBalance(txn.supplier_id, txn.amount || 0);
     }
     if (txn.supplier_id && txn.type === 'supplier_payment') {
       await adjustSupplierBalance(txn.supplier_id, txn.amount || 0);
@@ -311,7 +311,8 @@ export default function Suppliers() {
       await adjustSupplierBalance(txn.supplier_id, txn.selling_price ?? txn.amount ?? 0);
     }
 
-    await supabase.from('transactions').update({ is_void: true }).eq('id', id);
+    const { error } = await supabase.from('transactions').update({ is_void: true }).eq('id', id);
+    if (error) { alert('Failed to void: ' + error.message); return; }
     fetchData();
     triggerRefresh();
   }

@@ -103,13 +103,16 @@ function BusinessProfile() {
       email: form.email || null,
       currency: form.currency,
     };
+    let error;
     if (profileId) {
-      await supabase.from('business_profile').update(payload).eq('id', profileId);
+      ({ error } = await supabase.from('business_profile').update(payload).eq('id', profileId));
     } else {
-      const { data } = await supabase.from('business_profile').insert(payload).select().single();
-      if (data) setProfileId(data.id);
+      const result = await supabase.from('business_profile').insert(payload).select().single();
+      error = result.error;
+      if (result.data) setProfileId(result.data.id);
     }
     setSaving(false);
+    if (error) { alert('Failed to save: ' + error.message); return; }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   }
@@ -169,14 +172,15 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
     const txnId = `OPN-${mode.toUpperCase()}`;
     const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
 
+    let error;
     if (existing) {
       if (amt > 0) {
-        await supabase.from('transactions').update({ amount: amt, is_void: false, edited_at: new Date().toISOString() }).eq('id', existing.id);
+        ({ error } = await supabase.from('transactions').update({ amount: amt, is_void: false, edited_at: new Date().toISOString() }).eq('id', existing.id));
       } else if (!existing.is_void) {
-        await supabase.from('transactions').update({ is_void: true, void_reason: 'Opening balance removed' }).eq('id', existing.id);
+        ({ error } = await supabase.from('transactions').update({ is_void: true, void_reason: 'Opening balance removed' }).eq('id', existing.id));
       }
     } else if (amt > 0) {
-      await supabase.from('transactions').insert({
+      ({ error } = await supabase.from('transactions').insert({
         transaction_id: txnId,
         date: todayStr(),
         type: 'opening_balance',
@@ -184,8 +188,9 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
         amount: amt,
         description: `Opening balance - ${mode}`,
         created_by: user?.username || null,
-      });
+      }));
     }
+    if (error) { alert('Failed to save: ' + error.message); return; }
     setSaved(`${mode} balance saved`);
     setTimeout(() => setSaved(''), 2000);
     triggerRefresh();
@@ -201,12 +206,14 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
     const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
     const oldAmount = existing && !existing.is_void ? existing.amount || 0 : 0;
 
-    await adjustCustomerCredit(customerId, amt - oldAmount);
+    const ok = await adjustCustomerCredit(customerId, amt - oldAmount);
+    if (!ok) { alert('Failed to update the customer balance'); return; }
 
+    let error;
     if (existing) {
-      await supabase.from('transactions').update({ amount: amt, is_void: false, edited_at: new Date().toISOString() }).eq('id', existing.id);
+      ({ error } = await supabase.from('transactions').update({ amount: amt, is_void: false, edited_at: new Date().toISOString() }).eq('id', existing.id));
     } else {
-      await supabase.from('transactions').insert({
+      ({ error } = await supabase.from('transactions').insert({
         transaction_id: txnId,
         date: todayStr(),
         type: 'opening_balance',
@@ -215,8 +222,9 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
         customer_id: customerId,
         description: `Opening balance owed - ${customer.name}`,
         created_by: user?.username || null,
-      });
+      }));
     }
+    if (error) { alert('Failed to save: ' + error.message); return; }
     setCustomerAmount('');
     setSaved(`${customer.name}'s opening balance saved`);
     setTimeout(() => setSaved(''), 2000);
@@ -233,12 +241,14 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
     const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
     const oldAmount = existing && !existing.is_void ? existing.amount || 0 : 0;
 
-    await adjustSupplierBalance(supplierId, amt - oldAmount);
+    const ok = await adjustSupplierBalance(supplierId, amt - oldAmount);
+    if (!ok) { alert('Failed to update the supplier balance'); return; }
 
+    let error;
     if (existing) {
-      await supabase.from('transactions').update({ amount: amt, is_void: false, edited_at: new Date().toISOString() }).eq('id', existing.id);
+      ({ error } = await supabase.from('transactions').update({ amount: amt, is_void: false, edited_at: new Date().toISOString() }).eq('id', existing.id));
     } else {
-      await supabase.from('transactions').insert({
+      ({ error } = await supabase.from('transactions').insert({
         transaction_id: txnId,
         date: todayStr(),
         type: 'supplier_invoice',
@@ -247,8 +257,9 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
         supplier_id: supplierId,
         description: `Opening balance - ${supplier.name}`,
         created_by: user?.username || null,
-      });
+      }));
     }
+    if (error) { alert('Failed to save: ' + error.message); return; }
     setSupplierAmount('');
     setSaved(`${supplier.name}'s opening balance saved`);
     setTimeout(() => setSaved(''), 2000);
@@ -691,19 +702,29 @@ function DangerZone({ triggerRefresh, navigate }: { triggerRefresh: () => void; 
 
   async function handleDeleteAllCustomersSuppliers() {
     setDeletingAll(true);
-    try {
-      // Transactions/reminders reference customers and suppliers by id, so they
-      // have to go first or the delete below would be blocked/orphan them.
-      await supabase.from('transaction_splits').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-      await supabase.from('transactions').delete().or('customer_id.not.is.null,supplier_id.not.is.null');
-      await supabase.from('reminders').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-      await supabase.from('customers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-      await supabase.from('suppliers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-      triggerRefresh();
-      navigate('/');
-    } catch (err) {
-      console.error('Delete all failed:', err);
+    // Transactions/reminders reference customers and suppliers by id, so they
+    // have to go first or the delete below would be blocked/orphan them.
+    // transaction_splits has ON DELETE CASCADE back to transactions, so it
+    // doesn't need a separate delete here - deleting the transaction below is
+    // enough, and deleting it separately would also wipe splits belonging to
+    // unrelated transactions that aren't being removed.
+    const steps: Array<() => PromiseLike<{ error: { message: string } | null }>> = [
+      () => supabase.from('transactions').delete().or('customer_id.not.is.null,supplier_id.not.is.null'),
+      () => supabase.from('reminders').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+      () => supabase.from('customers').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+      () => supabase.from('suppliers').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+    ];
+    for (const step of steps) {
+      const { error } = await step();
+      if (error) {
+        console.error('Delete all failed:', error);
+        alert('Delete failed partway through: ' + error.message + '. Some data may already be removed - check Customers/Suppliers before retrying.');
+        setDeletingAll(false);
+        return;
+      }
     }
+    triggerRefresh();
+    navigate('/');
     setDeletingAll(false);
   }
 
@@ -718,44 +739,42 @@ function DangerZone({ triggerRefresh, navigate }: { triggerRefresh: () => void; 
     }
 
     setResetting(true);
-    try {
+    const steps: Array<() => PromiseLike<{ error: { message: string } | null }>> = [
       // Clear all transactions and splits
-      await supabase.from('transaction_splits').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-      await supabase.from('transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-
+      () => supabase.from('transaction_splits').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+      () => supabase.from('transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
       // Clear reminders
-      await supabase.from('reminders').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-
+      () => supabase.from('reminders').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
       // Clear loan payments
-      await supabase.from('loan_payments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-
+      () => supabase.from('loan_payments').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
       // Clear historical profit
-      await supabase.from('historical_profit').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-
+      () => supabase.from('historical_profit').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
       // Clear capital entries
-      await supabase.from('capital_entries').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-
+      () => supabase.from('capital_entries').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
       // Clear loan trackers
-      await supabase.from('loan_trackers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-
+      () => supabase.from('loan_trackers').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
       // Reset customer balances (all of them, including soft-deleted ones, so
       // nothing carries a stale balance if it's ever reactivated)
-      await supabase.from('customers').update({ credit_balance: 0, advance_balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
-
+      () => supabase.from('customers').update({ credit_balance: 0, advance_balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000'),
       // Reset supplier balances (same reasoning)
-      await supabase.from('suppliers').update({ balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
-
+      () => supabase.from('suppliers').update({ balance: 0 }).neq('id', '00000000-0000-0000-0000-000000000000'),
       // Reset share rules
-      await supabase.from('share_rules').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-
-      setShowResetModal(false);
-      setResetStep(1);
-      setResetConfirmation('');
-      triggerRefresh();
-      navigate('/');
-    } catch (err) {
-      console.error('Reset failed:', err);
+      () => supabase.from('share_rules').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+    ];
+    for (const step of steps) {
+      const { error } = await step();
+      if (error) {
+        console.error('Reset failed:', error);
+        alert('Reset failed partway through: ' + error.message + '. Some data may already be cleared - check the app before retrying.');
+        setResetting(false);
+        return;
+      }
     }
+    setShowResetModal(false);
+    setResetStep(1);
+    setResetConfirmation('');
+    triggerRefresh();
+    navigate('/');
     setResetting(false);
   }
 

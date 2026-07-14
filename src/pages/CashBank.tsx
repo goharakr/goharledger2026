@@ -147,6 +147,10 @@ export default function CashBank() {
         if (t.primary_mode === 'mpesa') mpesa -= t.amount;
         else if (t.primary_mode === 'cash') cash -= t.amount;
         else if (t.primary_mode === 'paybill') paybill -= t.amount;
+      } else if (t.type === 'partner_loan') {
+        if (t.primary_mode === 'mpesa') mpesa += t.amount;
+        else if (t.primary_mode === 'cash') cash += t.amount;
+        else if (t.primary_mode === 'paybill') paybill += t.amount;
       } else if (t.type === 'loan_payment') {
         if (t.primary_mode === 'mpesa') mpesa -= t.amount;
         else if (t.primary_mode === 'cash') cash -= t.amount;
@@ -307,6 +311,8 @@ export default function CashBank() {
         if (!(t.clears_on && t.clears_on > todayStr()) && (mode === 'all' || t.primary_mode === mode)) debit += t.amount;
       } else if (t.type === 'partner_draw') {
         if (mode === 'all' || t.primary_mode === mode) debit += t.amount;
+      } else if (t.type === 'partner_loan') {
+        if (mode === 'all' || t.primary_mode === mode) credit += t.amount;
       } else if (t.type === 'loan_payment') {
         if (mode === 'all' || t.primary_mode === mode) debit += t.amount;
       } else if (t.type === 'fund_transfer') {

@@ -152,7 +152,7 @@ export default function Sales() {
     if (data) {
       // Mirror a nonzero opening balance into transactions so it shows up in
       // Reports/the Ledger with a visible origin, and can be edited/deleted later
-      if (openingBalance > 0) {
+      if (openingBalance !== 0) {
         await supabase.from('transactions').insert({
           transaction_id: `OPN-BAL-${data.id}`,
           date: todayStr(),
@@ -297,18 +297,20 @@ export default function Sales() {
   }
 
   async function handleBulkSave() {
-    const validForms = bulkForms.filter((f) => {
-      if (!f.sellingPrice || parseFloat(f.sellingPrice) <= 0) return false;
-      if ((f.mode === 'credit' || f.mode === 'advance') && !f.customerId) return false;
-      if (f.mode === 'supplier' && !f.supplierId) return false;
-      return true;
-    });
+    const validForms = bulkForms
+      .map((f, originalIndex) => ({ f, originalIndex }))
+      .filter(({ f }) => {
+        if (!f.sellingPrice || parseFloat(f.sellingPrice) <= 0) return false;
+        if ((f.mode === 'credit' || f.mode === 'advance') && !f.customerId) return false;
+        if (f.mode === 'supplier' && !f.supplierId) return false;
+        return true;
+      });
     if (validForms.length === 0) return;
 
     const failedRows: number[] = [];
 
     for (let i = 0; i < validForms.length; i++) {
-      const f = validForms[i];
+      const { f, originalIndex } = validForms[i];
       const sp = parseFloat(f.sellingPrice);
       const cp = parseFloat(f.costPrice || '0');
       const comm = parseFloat(f.commission || '0');
@@ -332,7 +334,7 @@ export default function Sales() {
         supplier_id: f.mode === 'supplier' ? (f.supplierId || null) : null,
         created_by: user?.username || null,
       }));
-      if (error || !newTxn) { console.error(error); failedRows.push(i + 1); continue; }
+      if (error || !newTxn) { console.error(error); failedRows.push(originalIndex + 1); continue; }
 
       if (f.mode === 'split') {
         const splits = [];
@@ -378,7 +380,8 @@ export default function Sales() {
       await adjustSupplierBalance(txn.supplier_id, txn.amount || 0);
     }
 
-    await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', id);
+    const { error } = await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', id);
+    if (error) { alert('Failed to void: ' + error.message); return; }
     fetchData();
     triggerRefresh();
   }
