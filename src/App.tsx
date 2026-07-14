@@ -4,6 +4,7 @@ import { AuthProvider } from './context/AuthContext';
 import { DataProvider } from './context/DataContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Login from './pages/Login';
+import ResetPassword from './pages/ResetPassword';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Sales = lazy(() => import('./pages/Sales'));
@@ -33,6 +34,7 @@ function App() {
           <Suspense fallback={<PageLoading />}>
             <Routes>
               <Route path="/login" element={<Login />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
               <Route path="/sales" element={<ProtectedRoute><Sales /></ProtectedRoute>} />
               <Route path="/expenses" element={<ProtectedRoute><Expenses /></ProtectedRoute>} />
