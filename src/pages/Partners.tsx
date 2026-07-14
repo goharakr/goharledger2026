@@ -14,9 +14,10 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, getMonthLabel, todayStr, saleProfit } from '../utils/format';
+import { formatKES, formatDate, getMonthLabel, todayStr } from '../utils/format';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
+import { buildMonthlyFigures, calculateShareEarned, getDoubleCountedMonths as getDoubleCountedMonthsShared, calculateHomeExpensesOwed } from '../utils/shareDue';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
@@ -117,36 +118,8 @@ export default function Partners() {
     const rule = shareRules.find((r) => r.partner_id === partner);
     if (!rule) return 0;
 
-    const monthly = new Map<string, { grossProfit: number; shopExpenses: number; homeExpensesFromShop: number; loanPayments: number }>();
-    // Only a month with real business activity (a sale, a shop expense, a
-    // home-expense reimbursement, or a loan payment) earns a share - a month
-    // that only has something like a fund transfer or opening balance
-    // shouldn't create an entry here at all.
-    function touchMonth(key: string) {
-      if (!monthly.has(key)) monthly.set(key, { grossProfit: 0, shopExpenses: 0, homeExpensesFromShop: 0, loanPayments: 0 });
-      return monthly.get(key)!;
-    }
-    transactions.forEach((t) => {
-      if (t.is_void || !t.date) return;
-      const key = t.date.slice(0, 7);
-      if (t.type === 'sale') {
-        touchMonth(key).grossProfit += saleProfit(t);
-      } else if (t.type === 'expense' && t.category !== 'stock' && t.category !== 'supplier_payment') {
-        if (t.category === 'home_expense') {
-          if (t.notes?.includes('From Shop')) touchMonth(key).homeExpensesFromShop += t.amount;
-        } else {
-          touchMonth(key).shopExpenses += t.amount;
-        }
-      } else if (t.type === 'loan_payment') {
-        touchMonth(key).loanPayments += t.amount;
-      }
-    });
-
-    let earned = 0;
-    monthly.forEach((m) => {
-      const netProfit = m.grossProfit - m.shopExpenses - m.homeExpensesFromShop - m.loanPayments;
-      earned += rule.rule_type === 'fixed' ? rule.value : netProfit * (rule.value / 100);
-    });
+    const monthly = buildMonthlyFigures(transactions);
+    const earned = calculateShareEarned(monthly, rule);
 
     const histRemaining = historicalProfit.reduce((s, h) => {
       const share = partner === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);
@@ -159,25 +132,13 @@ export default function Partners() {
     return earned + histRemaining - drawsAllTime;
   }
 
-  // A month covered by a manually-entered Historical Profit record should not
-  // also have live transactions counted separately into Share Due - that
-  // would count the same month's profit twice. This doesn't fix it
-  // automatically; it just flags the overlap so it can be reviewed.
   function getDoubleCountedMonths() {
-    const txnMonths = new Set(transactions.filter((t) => !t.is_void && t.date).map((t) => t.date.slice(0, 7)));
-    const histMonths = new Set(historicalProfit.map((h) => h.month));
-    return Array.from(txnMonths).filter((m) => histMonths.has(m)).sort();
+    const monthly = buildMonthlyFigures(transactions);
+    return getDoubleCountedMonthsShared(monthly, historicalProfit.map((h) => h.month));
   }
 
   function calculateHomeOwed(partner: string) {
-    let owed = 0;
-    transactions.forEach((t) => {
-      if (t.type === 'expense' && t.category === 'home_expense' && t.partner_id === partner && !t.is_void) {
-        if (t.notes?.includes('From Own Pocket')) owed += t.amount;
-        if (t.notes?.includes('From Shop') && t.notes?.includes('repaying')) owed -= t.amount;
-      }
-    });
-    return owed;
+    return calculateHomeExpensesOwed(transactions, partner);
   }
 
   function calculateTakenInRange(partner: string, from: string, to: string) {

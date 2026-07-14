@@ -30,6 +30,7 @@ import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
 import { fetchAllRows } from '../utils/fetchAll';
 import { computeWalletBalance, tomorrowStr } from '../utils/walletBalance';
+import { buildMonthlyFigures, calculateShareEarned, getDoubleCountedMonths, calculateHomeExpensesOwed } from '../utils/shareDue';
 import type { Transaction, Supplier, Customer, Reminder, LoanTracker, CapitalEntry } from '../types';
 
 interface DailySalesBreakdown {
@@ -379,77 +380,27 @@ export default function Dashboard() {
       // regardless of which month it was earned in, (2) home expenses paid from
       // their own pocket that the shop still owes back, (3) how much they've
       // drawn out in the currently-viewed month only.
-      const monthlyFigures = new Map<string, { grossProfit: number; shopExpenses: number; homeExpensesFromShop: number; loanPayments: number }>();
-      // Only a month with real business activity (a sale, a shop expense, a
-      // home-expense reimbursement, or a loan payment) earns a share - a month
-      // that only has something like a fund transfer or opening balance
-      // shouldn't create an entry here at all.
-      function touchMonth(key: string) {
-        if (!monthlyFigures.has(key)) {
-          monthlyFigures.set(key, { grossProfit: 0, shopExpenses: 0, homeExpensesFromShop: 0, loanPayments: 0 });
-        }
-        return monthlyFigures.get(key)!;
-      }
-      txns?.forEach((t) => {
-        if (t.is_void || !t.date) return;
-        const monthKey = t.date.slice(0, 7);
-        if (t.type === 'sale') {
-          touchMonth(monthKey).grossProfit += saleProfit(t);
-        } else if (t.type === 'expense' && t.category !== 'stock' && t.category !== 'supplier_payment') {
-          if (t.category === 'home_expense') {
-            if (t.notes?.includes('From Shop')) touchMonth(monthKey).homeExpensesFromShop += t.amount;
-          } else {
-            touchMonth(monthKey).shopExpenses += t.amount;
-          }
-        } else if (t.type === 'loan_payment') {
-          touchMonth(monthKey).loanPayments += t.amount;
-        }
-      });
-
+      const monthly = buildMonthlyFigures(txns);
       const taherRule = shareRules?.find((r) => r.partner_id === 'taher');
       const abdulRule = shareRules?.find((r) => r.partner_id === 'abdulqadir');
-      let taherShareEarned = 0, abdulShareEarned = 0;
-      monthlyFigures.forEach((m) => {
-        const netProfit = m.grossProfit - m.shopExpenses - m.homeExpensesFromShop - m.loanPayments;
-        if (taherRule) {
-          taherShareEarned += taherRule.rule_type === 'fixed' ? taherRule.value : netProfit * (taherRule.value / 100);
-        }
-        if (abdulRule) {
-          abdulShareEarned += abdulRule.rule_type === 'fixed' ? abdulRule.value : netProfit * (abdulRule.value / 100);
-        }
-      });
+      const taherShareEarned = calculateShareEarned(monthly, taherRule);
+      const abdulShareEarned = calculateShareEarned(monthly, abdulRule);
 
       let taherDrawsAllTime = 0, abdulDrawsAllTime = 0;
       let taherDrawsThisMonth = 0, abdulDrawsThisMonth = 0;
-      let taherHomeOwed = 0, abdulHomeOwed = 0;
       txns?.forEach((t) => {
-        if (t.is_void) return;
-        if (t.type === 'partner_draw') {
-          const isMonth = t.date >= monthStart && t.date <= monthEnd;
-          if (t.partner_id === 'taher') { taherDrawsAllTime += t.amount; if (isMonth) taherDrawsThisMonth += t.amount; }
-          if (t.partner_id === 'abdulqadir') { abdulDrawsAllTime += t.amount; if (isMonth) abdulDrawsThisMonth += t.amount; }
-        }
-        if (t.type === 'expense' && t.category === 'home_expense') {
-          if (t.notes?.includes('From Own Pocket')) {
-            if (t.partner_id === 'taher') taherHomeOwed += t.amount;
-            if (t.partner_id === 'abdulqadir') abdulHomeOwed += t.amount;
-          }
-          if (t.notes?.includes('From Shop') && t.notes?.includes('repaying')) {
-            if (t.partner_id === 'taher') taherHomeOwed -= t.amount;
-            if (t.partner_id === 'abdulqadir') abdulHomeOwed -= t.amount;
-          }
-        }
+        if (t.is_void || t.type !== 'partner_draw') return;
+        const isMonth = t.date >= monthStart && t.date <= monthEnd;
+        if (t.partner_id === 'taher') { taherDrawsAllTime += t.amount; if (isMonth) taherDrawsThisMonth += t.amount; }
+        if (t.partner_id === 'abdulqadir') { abdulDrawsAllTime += t.amount; if (isMonth) abdulDrawsThisMonth += t.amount; }
       });
+      const taherHomeOwed = calculateHomeExpensesOwed(txns, 'taher');
+      const abdulHomeOwed = calculateHomeExpensesOwed(txns, 'abdulqadir');
 
       const histTaherRemaining = (histProfit || []).reduce((s, h) => s + (h.taher_share || 0) - (h.taher_taken || 0), 0);
       const histAbdulRemaining = (histProfit || []).reduce((s, h) => s + (h.abdulqadir_share || 0) - (h.abdulqadir_taken || 0), 0);
 
-      // A month covered by a manually-entered Historical Profit record should
-      // not also have live transactions counted separately into Share Due -
-      // that would count the same month's profit twice. This doesn't fix it
-      // automatically; it just flags the overlap so it can be reviewed.
-      const histMonths = new Set((histProfit || []).map((h) => h.month));
-      const doubleCountedMonths = Array.from(monthlyFigures.keys()).filter((m) => histMonths.has(m)).sort();
+      const doubleCountedMonths = getDoubleCountedMonths(monthly, (histProfit || []).map((h) => h.month));
 
       const taherShareDue = taherShareEarned + histTaherRemaining - taherDrawsAllTime;
       const abdulShareDue = abdulShareEarned + histAbdulRemaining - abdulDrawsAllTime;
