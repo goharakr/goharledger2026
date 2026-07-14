@@ -14,6 +14,7 @@ import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, getMonthLabel, todayStr } from '../utils/format';
 import { adjustLoanBalance } from '../utils/balances';
 import { insertTransactionWithId } from '../utils/transactionId';
+import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
@@ -101,7 +102,9 @@ export default function Capital() {
     const [{ data: cap }, { data: loanData }, { data: paymentData }, { data: hist }] = await Promise.all([
       supabase.from('capital_entries').select('*').order('date', { ascending: false }),
       supabase.from('loan_trackers').select('*'),
-      supabase.from('transactions').select('*').eq('type', 'loan_payment').eq('is_void', false).order('date', { ascending: false }),
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').eq('type', 'loan_payment').eq('is_void', false).order('date', { ascending: false }).range(from, to)
+      ),
       supabase.from('historical_profit').select('*').order('month', { ascending: false }),
     ]);
     setCapitalEntries(cap || []);

@@ -15,6 +15,7 @@ import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr } from '../utils/format';
 import { adjustCustomerCredit, adjustCustomerAdvance } from '../utils/balances';
 import { insertTransactionWithId } from '../utils/transactionId';
+import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
@@ -111,7 +112,9 @@ export default function Customers() {
     setLoading(true);
     const [{ data: cust }, { data: txns }] = await Promise.all([
       supabase.from('customers').select('*').eq('is_active', true).order('name'),
-      supabase.from('transactions').select('*').eq('is_void', false).order('date', { ascending: false }),
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').eq('is_void', false).order('date', { ascending: false }).range(from, to)
+      ),
     ]);
     setCustomers(cust || []);
     setTransactions(txns || []);

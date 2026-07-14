@@ -28,6 +28,7 @@ import { formatKES, formatDate } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
+import { fetchAllRows } from '../utils/fetchAll';
 import type { Transaction, Supplier, Customer, Reminder, LoanTracker, CapitalEntry } from '../types';
 
 interface DailySalesBreakdown {
@@ -300,7 +301,9 @@ export default function Dashboard() {
       const monthEnd = `${monthFilterYear}-${String(monthFilterMonth).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
 
       const [{ data: txns }, { data: splits }, { data: suppData }, { data: custData }, { data: loans }, { data: reminderData }, { data: capitalData }, { data: histProfit }, { data: shareRules }, { data: monthlyBalancesData }, { data: physicalCountsData }] = await Promise.all([
-        supabase.from('transactions').select('*').eq('is_void', false),
+        fetchAllRows<Transaction>((from, to) =>
+          supabase.from('transactions').select('*').eq('is_void', false).range(from, to)
+        ),
         supabase.from('transaction_splits').select('*'),
         supabase.from('suppliers').select('*').eq('is_active', true),
         supabase.from('customers').select('*').eq('is_active', true),
