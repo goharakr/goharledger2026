@@ -542,23 +542,29 @@ export default function Dashboard() {
       // their own pocket that the shop still owes back, (3) how much they've
       // drawn out in the currently-viewed month only.
       const monthlyFigures = new Map<string, { grossProfit: number; shopExpenses: number; homeExpensesFromShop: number; loanPayments: number }>();
+      // Only a month with real business activity (a sale, a shop expense, a
+      // home-expense reimbursement, or a loan payment) earns a share - a month
+      // that only has something like a fund transfer or opening balance
+      // shouldn't create an entry here at all.
+      function touchMonth(key: string) {
+        if (!monthlyFigures.has(key)) {
+          monthlyFigures.set(key, { grossProfit: 0, shopExpenses: 0, homeExpensesFromShop: 0, loanPayments: 0 });
+        }
+        return monthlyFigures.get(key)!;
+      }
       txns?.forEach((t) => {
         if (t.is_void || !t.date) return;
         const monthKey = t.date.slice(0, 7);
-        if (!monthlyFigures.has(monthKey)) {
-          monthlyFigures.set(monthKey, { grossProfit: 0, shopExpenses: 0, homeExpensesFromShop: 0, loanPayments: 0 });
-        }
-        const m = monthlyFigures.get(monthKey)!;
         if (t.type === 'sale') {
-          m.grossProfit += (t.selling_price || 0) - (t.cost_price || 0) - (t.commission || 0);
+          touchMonth(monthKey).grossProfit += (t.selling_price || 0) - (t.cost_price || 0) - (t.commission || 0);
         } else if (t.type === 'expense' && t.category !== 'stock' && t.category !== 'supplier_payment') {
           if (t.category === 'home_expense') {
-            if (t.notes?.includes('From Shop')) m.homeExpensesFromShop += t.amount;
+            if (t.notes?.includes('From Shop')) touchMonth(monthKey).homeExpensesFromShop += t.amount;
           } else {
-            m.shopExpenses += t.amount;
+            touchMonth(monthKey).shopExpenses += t.amount;
           }
         } else if (t.type === 'loan_payment') {
-          m.loanPayments += t.amount;
+          touchMonth(monthKey).loanPayments += t.amount;
         }
       });
 
@@ -599,6 +605,13 @@ export default function Dashboard() {
 
       const histTaherRemaining = (histProfit || []).reduce((s, h) => s + (h.taher_share || 0) - (h.taher_taken || 0), 0);
       const histAbdulRemaining = (histProfit || []).reduce((s, h) => s + (h.abdulqadir_share || 0) - (h.abdulqadir_taken || 0), 0);
+
+      // A month covered by a manually-entered Historical Profit record should
+      // not also have live transactions counted separately into Share Due -
+      // that would count the same month's profit twice. This doesn't fix it
+      // automatically; it just flags the overlap so it can be reviewed.
+      const histMonths = new Set((histProfit || []).map((h) => h.month));
+      const doubleCountedMonths = Array.from(monthlyFigures.keys()).filter((m) => histMonths.has(m)).sort();
 
       const taherShareDue = taherShareEarned + histTaherRemaining - taherDrawsAllTime;
       const abdulShareDue = abdulShareEarned + histAbdulRemaining - abdulDrawsAllTime;
@@ -652,6 +665,7 @@ export default function Dashboard() {
         totalNetProfit,
         totalCapital: totalCapitalVal,
         activeLoans: activeLoansList,
+        doubleCountedMonths,
       });
 
     } catch (err) {
@@ -998,6 +1012,21 @@ export default function Dashboard() {
           <button onClick={() => navigate('/customers')} className="text-left"><StatBox label="Customers Pending" value={stats?.totalCustomersPending || 0} icon={<ArrowDown size={16} />} color="text-blue-600" clickable /></button>
         </div>
       </div>
+
+      {stats?.doubleCountedMonths?.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+          <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-amber-800">
+              Check Share Due for {stats.doubleCountedMonths.join(', ')}
+            </p>
+            <p className="text-sm text-amber-700">
+              These month(s) have both a Historical Profit entry (Capital page) and live transactions.
+              Both are being counted in Share Due, which may be counting that month's profit twice.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Partner Balances */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

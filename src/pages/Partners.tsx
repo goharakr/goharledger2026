@@ -11,6 +11,7 @@ import {
   ArrowDownCircle,
   ArrowUpCircle,
   BookOpen,
+  AlertTriangle,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, getMonthLabel, todayStr } from '../utils/format';
@@ -117,21 +118,27 @@ export default function Partners() {
     if (!rule) return 0;
 
     const monthly = new Map<string, { grossProfit: number; shopExpenses: number; homeExpensesFromShop: number; loanPayments: number }>();
+    // Only a month with real business activity (a sale, a shop expense, a
+    // home-expense reimbursement, or a loan payment) earns a share - a month
+    // that only has something like a fund transfer or opening balance
+    // shouldn't create an entry here at all.
+    function touchMonth(key: string) {
+      if (!monthly.has(key)) monthly.set(key, { grossProfit: 0, shopExpenses: 0, homeExpensesFromShop: 0, loanPayments: 0 });
+      return monthly.get(key)!;
+    }
     transactions.forEach((t) => {
       if (t.is_void || !t.date) return;
       const key = t.date.slice(0, 7);
-      if (!monthly.has(key)) monthly.set(key, { grossProfit: 0, shopExpenses: 0, homeExpensesFromShop: 0, loanPayments: 0 });
-      const m = monthly.get(key)!;
       if (t.type === 'sale') {
-        m.grossProfit += (t.selling_price || 0) - (t.cost_price || 0) - (t.commission || 0);
+        touchMonth(key).grossProfit += (t.selling_price || 0) - (t.cost_price || 0) - (t.commission || 0);
       } else if (t.type === 'expense' && t.category !== 'stock' && t.category !== 'supplier_payment') {
         if (t.category === 'home_expense') {
-          if (t.notes?.includes('From Shop')) m.homeExpensesFromShop += t.amount;
+          if (t.notes?.includes('From Shop')) touchMonth(key).homeExpensesFromShop += t.amount;
         } else {
-          m.shopExpenses += t.amount;
+          touchMonth(key).shopExpenses += t.amount;
         }
       } else if (t.type === 'loan_payment') {
-        m.loanPayments += t.amount;
+        touchMonth(key).loanPayments += t.amount;
       }
     });
 
@@ -150,6 +157,16 @@ export default function Partners() {
     const drawsAllTime = transactions.reduce((s, t) => (t.type === 'partner_draw' && t.partner_id === partner && !t.is_void ? s + t.amount : s), 0);
 
     return earned + histRemaining - drawsAllTime;
+  }
+
+  // A month covered by a manually-entered Historical Profit record should not
+  // also have live transactions counted separately into Share Due - that
+  // would count the same month's profit twice. This doesn't fix it
+  // automatically; it just flags the overlap so it can be reviewed.
+  function getDoubleCountedMonths() {
+    const txnMonths = new Set(transactions.filter((t) => !t.is_void && t.date).map((t) => t.date.slice(0, 7)));
+    const histMonths = new Set(historicalProfit.map((h) => h.month));
+    return Array.from(txnMonths).filter((m) => histMonths.has(m)).sort();
   }
 
   function calculateHomeOwed(partner: string) {
@@ -330,8 +347,25 @@ export default function Partners() {
       status: transactions.some((tx) => tx.notes?.includes(t.id) && tx.type === 'expense') ? 'taken' : 'pending',
     }));
 
+  const doubleCountedMonths = getDoubleCountedMonths();
+
   return (
     <div className="space-y-6">
+      {doubleCountedMonths.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+          <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-amber-800">
+              Check Share Due for {doubleCountedMonths.join(', ')}
+            </p>
+            <p className="text-sm text-amber-700">
+              These month(s) have both a Historical Profit entry (Capital page) and live transactions.
+              Both are being counted in Share Due, which may be counting that month's profit twice.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Partner Tabs */}
       <div className="flex gap-1 bg-slate-100 p-1 rounded-lg w-fit">
         {(['taher', 'abdulqadir'] as const).map((p) => (
