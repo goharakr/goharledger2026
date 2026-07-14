@@ -12,8 +12,22 @@ export default function Login() {
   const [needsNewPassword, setNeedsNewPassword] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
-  const { login, completeBootstrap } = useAuth();
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
+  const { login, completeBootstrap, sendPasswordResetEmail } = useAuth();
   const navigate = useNavigate();
+
+  const handleForgotPassword = async (forUsername: string) => {
+    setError('');
+    setLoading(true);
+    const result = await sendPasswordResetEmail(forUsername);
+    setLoading(false);
+    if (result.ok) {
+      setForgotSent(true);
+    } else {
+      setError(result.error || 'Could not send reset link');
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,7 +80,7 @@ export default function Login() {
             </div>
             <h1 className="text-2xl font-bold text-slate-800">Gohar Records</h1>
             <p className="text-sm text-slate-500 mt-1">
-              {needsNewPassword ? 'Set a new password to continue' : 'Sign in to your account'}
+              {needsNewPassword ? 'Set a new password to continue' : showForgot ? 'Reset your password' : 'Sign in to your account'}
             </p>
           </div>
 
@@ -76,7 +90,49 @@ export default function Login() {
             </div>
           )}
 
-          {needsNewPassword ? (
+          {showForgot ? (
+            <div className="space-y-4">
+              {forgotSent ? (
+                <>
+                  <p className="text-sm text-slate-600">
+                    If that account has password recovery set up, a reset link was just sent to it. Check the inbox and click the link to set a new password.
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Recovery isn't set up yet? Ask the other partner to log in and turn it on from Settings &gt; User Management.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-slate-500">Which account do you want to reset?</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={() => handleForgotPassword('taher')}
+                      className="border border-slate-300 hover:bg-slate-50 rounded-lg py-3 text-sm font-medium text-slate-700 disabled:opacity-50"
+                    >
+                      Taher
+                    </button>
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={() => handleForgotPassword('abdulqadir')}
+                      className="border border-slate-300 hover:bg-slate-50 rounded-lg py-3 text-sm font-medium text-slate-700 disabled:opacity-50"
+                    >
+                      Abdulqadir
+                    </button>
+                  </div>
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => { setShowForgot(false); setForgotSent(false); setError(''); }}
+                className="w-full text-sm text-slate-500 hover:text-slate-700"
+              >
+                Back to sign in
+              </button>
+            </div>
+          ) : needsNewPassword ? (
             <form onSubmit={handleSetNewPassword} className="space-y-4">
               <p className="text-sm text-slate-500">
                 Your current password is too short for the more secure login system. Choose a new password (at least 6 characters) to finish signing in as <span className="font-medium text-slate-700">{username}</span>.
@@ -188,6 +244,13 @@ export default function Login() {
                 ) : (
                   'Sign In'
                 )}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowForgot(true); setError(''); }}
+                className="w-full text-sm text-slate-500 hover:text-slate-700"
+              >
+                Forgot password?
               </button>
             </form>
           )}

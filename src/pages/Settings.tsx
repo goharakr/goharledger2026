@@ -337,7 +337,7 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
 }
 
 function UserManagement() {
-  const { user, changeCredentials } = useAuth();
+  const { user, changeCredentials, enableRecoveryEmail } = useAuth();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newUsername, setNewUsername] = useState(user?.username || '');
   const [newPassword, setNewPassword] = useState('');
@@ -345,6 +345,20 @@ function UserManagement() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [saving, setSaving] = useState(false);
+  const [recoveryStatus, setRecoveryStatus] = useState('');
+  const [sendingRecovery, setSendingRecovery] = useState(false);
+
+  async function handleEnableRecovery() {
+    setRecoveryStatus('');
+    setSendingRecovery(true);
+    const result = await enableRecoveryEmail();
+    setSendingRecovery(false);
+    setRecoveryStatus(
+      result.ok
+        ? `Confirmation email sent to ${result.email}. Check that inbox and click the link to finish - until then, "Forgot Password" won't work for this account.`
+        : result.error || 'Could not send confirmation email'
+    );
+  }
 
   async function handleSave() {
     setError('');
@@ -424,6 +438,21 @@ function UserManagement() {
         </button>
       </div>
       <p className="text-xs text-slate-500">Only your own account can be changed here - the other partner changes theirs the same way, from their own login.</p>
+
+      <div className="bg-slate-50 rounded-lg p-4 space-y-3 max-w-md">
+        <h4 className="font-medium text-slate-800 text-sm">Forgot Password Recovery</h4>
+        <p className="text-sm text-slate-600">
+          Turn this on so you can reset your own password from the login page in future, without needing help. This sends a one-time confirmation email - click the link in it to finish.
+        </p>
+        {recoveryStatus && <p className="text-sm text-slate-700">{recoveryStatus}</p>}
+        <button
+          onClick={handleEnableRecovery}
+          disabled={sendingRecovery}
+          className="bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+        >
+          {sendingRecovery ? 'Sending...' : 'Enable Forgot Password'}
+        </button>
+      </div>
     </div>
   );
 }
