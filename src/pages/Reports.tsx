@@ -278,10 +278,10 @@ export default function Reports() {
       } else if (t.type === 'partner_loan' || t.type === 'capital_entry') {
         // Money a partner puts into (or returns to) the shop
         totalIn += t.amount;
-      } else if (t.type === 'supplier_invoice') {
-        // New debt owed to a supplier - not cash out yet, but tracked here as it is elsewhere
-        totalOut += t.amount;
       }
+      // supplier_invoice is a new debt owed, not cash leaving the shop - the
+      // real cash out is the supplier_payment when it's actually paid, so
+      // adding both here would count the same money leaving twice.
     });
 
     const grossProfit = salesTotal - costTotal - commissionTotal;
