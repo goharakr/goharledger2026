@@ -156,6 +156,10 @@ export default function CashBank() {
         if (t.primary_mode === 'mpesa') mpesa -= t.amount;
         else if (t.primary_mode === 'cash') cash -= t.amount;
         else if (t.primary_mode === 'paybill') paybill -= t.amount;
+      } else if (t.type === 'capital_entry') {
+        if (t.primary_mode === 'mpesa') mpesa += t.amount;
+        else if (t.primary_mode === 'cash') cash += t.amount;
+        else if (t.primary_mode === 'paybill') paybill += t.amount;
       } else if (t.type === 'fund_transfer') {
         const desc = (t.description || '').toLowerCase();
         if (desc.includes('mpesa to cash')) { mpesa -= t.amount; cash += t.amount; }
@@ -315,6 +319,11 @@ export default function CashBank() {
         if (mode === 'all' || t.primary_mode === mode) credit += t.amount;
       } else if (t.type === 'loan_payment') {
         if (mode === 'all' || t.primary_mode === mode) debit += t.amount;
+      } else if (t.type === 'capital_entry' && t.primary_mode) {
+        // Unlike opening_balance/customer_payment, a capital entry can
+        // legitimately have no wallet mode (e.g. Retained Profit isn't real
+        // new cash), so it must not be counted in the "All" total either.
+        if (mode === 'all' || t.primary_mode === mode) credit += t.amount;
       } else if (t.type === 'fund_transfer') {
         const desc = (t.description || '').toLowerCase();
         if (mode === 'all') {

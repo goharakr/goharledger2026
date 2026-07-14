@@ -118,6 +118,10 @@ function calculateBalanceAsOf(allTxns: Transaction[] | null | undefined, splitMa
       if (t.primary_mode === 'mpesa') mpesa += t.amount;
       else if (t.primary_mode === 'cash') cash += t.amount;
       else if (t.primary_mode === 'paybill') bank += t.amount;
+    } else if (t.type === 'capital_entry') {
+      if (t.primary_mode === 'mpesa') mpesa += t.amount;
+      else if (t.primary_mode === 'cash') cash += t.amount;
+      else if (t.primary_mode === 'paybill') bank += t.amount;
     }
   });
   return { mpesa, cash, bank };
@@ -422,6 +426,10 @@ export default function Dashboard() {
           else if (t.primary_mode === 'cash') cash -= t.amount;
           else if (t.primary_mode === 'paybill') bank -= t.amount;
         } else if (t.type === 'opening_balance') {
+          if (t.primary_mode === 'mpesa') mpesa += t.amount;
+          else if (t.primary_mode === 'cash') cash += t.amount;
+          else if (t.primary_mode === 'paybill') bank += t.amount;
+        } else if (t.type === 'capital_entry') {
           if (t.primary_mode === 'mpesa') mpesa += t.amount;
           else if (t.primary_mode === 'cash') cash += t.amount;
           else if (t.primary_mode === 'paybill') bank += t.amount;

@@ -28,6 +28,7 @@ interface CapitalForm {
   amount: string;
   date: string;
   description: string;
+  mode: string;
 }
 
 interface LoanPaymentForm {
@@ -43,12 +44,14 @@ const emptyCapital: CapitalForm = {
   amount: '',
   date: new Date().toISOString().split('T')[0],
   description: '',
+  mode: '',
 };
 
 export default function Capital() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
   const { user } = useAuth();
   const [capitalEntries, setCapitalEntries] = useState<CapitalEntry[]>([]);
+  const [capitalTxns, setCapitalTxns] = useState<Transaction[]>([]);
   const [loans, setLoans] = useState<LoanTracker[]>([]);
   const [loanPayments, setLoanPayments] = useState<Transaction[]>([]);
   const [historyDatePreset, setHistoryDatePreset] = useState<DatePreset>('month');
@@ -99,18 +102,20 @@ export default function Capital() {
 
   async function fetchData() {
     setLoading(true);
-    const [{ data: cap }, { data: loanData }, { data: paymentData }, { data: hist }] = await Promise.all([
+    const [{ data: cap }, { data: loanData }, { data: paymentData }, { data: hist }, { data: capTxnData }] = await Promise.all([
       supabase.from('capital_entries').select('*').order('date', { ascending: false }),
       supabase.from('loan_trackers').select('*'),
       fetchAllRows<Transaction>((from, to) =>
         supabase.from('transactions').select('*').eq('type', 'loan_payment').eq('is_void', false).order('date', { ascending: false }).range(from, to)
       ),
       supabase.from('historical_profit').select('*').order('month', { ascending: false }),
+      supabase.from('transactions').select('*').eq('type', 'capital_entry').eq('is_void', false),
     ]);
     setCapitalEntries(cap || []);
     setLoans(loanData || []);
     setLoanPayments(paymentData || []);
     setHistoricalProfit(hist || []);
+    setCapitalTxns(capTxnData || []);
     setLoading(false);
   }
 
@@ -136,7 +141,7 @@ export default function Capital() {
         transaction_id: `CAP-${entry.id}`,
         date: entry.date,
         type: 'capital_entry',
-        primary_mode: null,
+        primary_mode: capitalForm.mode || null,
         amount: entry.amount,
         partner_id: entry.partner_id,
         category: entry.entry_type,
@@ -154,12 +159,14 @@ export default function Capital() {
 
   function startEditCapital(entry: CapitalEntry) {
     setEditingCapitalId(entry.id);
+    const txn = capitalTxns.find((t) => t.transaction_id === `CAP-${entry.id}`);
     setCapitalForm({
       partnerId: entry.partner_id,
       entryType: entry.entry_type,
       amount: String(entry.amount),
       date: entry.date,
       description: entry.description || '',
+      mode: txn?.primary_mode || '',
     });
     setShowCapital(true);
   }
@@ -180,6 +187,7 @@ export default function Capital() {
     await supabase.from('transactions').update({
       date: payload.date,
       amount: payload.amount,
+      primary_mode: capitalForm.mode || null,
       partner_id: payload.partner_id,
       category: payload.entry_type,
       description: capitalDescription(capitalForm),
@@ -465,6 +473,14 @@ export default function Capital() {
               </select>
               <input type="number" value={capitalForm.amount} onChange={(e) => setCapitalForm({ ...capitalForm, amount: e.target.value })} placeholder="Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
               <input type="date" value={capitalForm.date} onChange={(e) => setCapitalForm({ ...capitalForm, date: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+            </div>
+            <div>
+              <select value={capitalForm.mode} onChange={(e) => setCapitalForm({ ...capitalForm, mode: e.target.value })} className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm">
+                <option value="">No real cash (e.g. Retained Profit) - don't add to wallet balance</option>
+                <option value="mpesa">Mpesa - add to Mpesa balance</option>
+                <option value="cash">Cash - add to Cash in Hand</option>
+                <option value="paybill">Paybill - add to Bank balance</option>
+              </select>
             </div>
             <input type="text" value={capitalForm.description} onChange={(e) => setCapitalForm({ ...capitalForm, description: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (editingCapitalId ? handleUpdateCapital : handleSaveCapital)(); }}} placeholder="Description (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
             <div className="flex gap-2 pt-2 border-t border-slate-200">
