@@ -488,6 +488,32 @@ export default function Sales() {
       }
     }
 
+    // A full refund (nothing left refundable) means the sale is completely
+    // reversed, so also reverse a linked "pay cost to supplier now" pair,
+    // the same way handleVoid does - a partial refund leaves it alone since
+    // there's no clean way to partially reverse it.
+    if (amount >= maxRefundable) {
+      const { data: linked } = await supabase
+        .from('transactions')
+        .select('*')
+        .in('type', ['supplier_invoice', 'supplier_payment'])
+        .eq('is_void', false)
+        .or(`description.eq.Cost price taken on sale ${refundingSale.transaction_id},description.eq.Cost price paid on sale ${refundingSale.transaction_id}`);
+      if (linked && linked.length > 0) {
+        for (const lt of linked) {
+          if (lt.type === 'supplier_invoice' && lt.supplier_id) {
+            await adjustSupplierBalance(lt.supplier_id, -(lt.amount || 0));
+          } else if (lt.type === 'supplier_payment' && lt.supplier_id) {
+            await adjustSupplierBalance(lt.supplier_id, lt.amount || 0);
+          }
+        }
+        await supabase
+          .from('transactions')
+          .update({ is_void: true, void_reason: `Refunded - ${refundingSale.transaction_id}` })
+          .in('id', linked.map((lt) => lt.id));
+      }
+    }
+
     setRefundingSale(null);
     setRefundForm({ amount: '', costPrice: '', mode: 'cash', date: todayStr() });
     fetchData();
