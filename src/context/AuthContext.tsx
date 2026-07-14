@@ -254,7 +254,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const enableRecoveryEmail = async (): Promise<{ ok: boolean; error?: string; email?: string }> => {
     if (!user) return { ok: false, error: 'Not logged in' };
     const email = recoveryEmail(user.username);
-    const { error } = await supabase.auth.updateUser({ email });
+    const emailRedirectTo = `${window.location.origin}${import.meta.env.BASE_URL}login`;
+    const { error } = await supabase.auth.updateUser({ email }, { emailRedirectTo });
     if (error) return { ok: false, error: error.message };
     return { ok: true, email };
   };
