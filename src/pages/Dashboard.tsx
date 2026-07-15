@@ -187,8 +187,11 @@ export default function Dashboard() {
     const todayStr = new Date().toISOString().split('T')[0];
     allTxns?.forEach((t) => {
       const isPendingClear = t.clears_on && t.clears_on > todayStr;
-      // Supplier invoices and payments are NOT shop expenses
-      if (t.type === 'expense' && t.category !== 'stock' && t.category !== 'supplier_payment') {
+      // Supplier invoices/payments aren't shop expenses, and a home expense
+      // paid "From Own Pocket" isn't real shop cash moving - only its later
+      // "From Shop" repayment is, so counting both would double it.
+      const isHomeExpenseFromOwnPocket = t.category === 'home_expense' && t.notes?.includes('From Own Pocket');
+      if (t.type === 'expense' && t.category !== 'stock' && t.category !== 'supplier_payment' && !isHomeExpenseFromOwnPocket) {
         totalExpenses += t.amount || 0;
         if (!isPendingClear) {
           if (t.primary_mode === 'cash') cashExpenses += t.amount || 0;
