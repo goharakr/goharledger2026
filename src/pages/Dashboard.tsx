@@ -234,8 +234,8 @@ export default function Dashboard() {
           supabase.from('transactions').select('*').eq('is_void', false).range(from, to)
         ),
         supabase.from('transaction_splits').select('*'),
-        supabase.from('suppliers').select('*').eq('is_active', true),
-        supabase.from('customers').select('*').eq('is_active', true),
+        supabase.from('suppliers').select('*').eq('is_active', true).order('name'),
+        supabase.from('customers').select('*').eq('is_active', true).order('name'),
         supabase.from('loan_trackers').select('*'),
         supabase.from('reminders').select('*').eq('status', 'pending').order('reminder_date', { ascending: true }),
         supabase.from('capital_entries').select('*'),

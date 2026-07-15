@@ -140,7 +140,12 @@ export default function Customers() {
   }
 
   async function handleSaveCustomer() {
-    if (!form.name.trim()) return;
+    const name = form.name.trim();
+    if (!name) return;
+    if (customers.some((c) => c.name.toLowerCase() === name.toLowerCase())) {
+      alert('A customer with this name already exists.');
+      return;
+    }
 
     const openingAdvance = parseFloat(form.advanceBalance || '0');
     const openingCredit = parseFloat(form.openingCredit || '0');

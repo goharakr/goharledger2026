@@ -109,8 +109,8 @@ export default function Sales() {
         supabase.from('transactions').select('*').eq('type', 'sale').order('date', { ascending: false }).order('created_at', { ascending: false }).range(from, to)
       ),
       supabase.from('transaction_splits').select('*'),
-      supabase.from('customers').select('*').eq('is_active', true),
-      supabase.from('suppliers').select('*').eq('is_active', true),
+      supabase.from('customers').select('*').eq('is_active', true).order('name'),
+      supabase.from('suppliers').select('*').eq('is_active', true).order('name'),
     ]);
     setSales(txns || []);
     setSplits(splitData || []);
@@ -132,7 +132,7 @@ export default function Sales() {
       credit_limit: parseFloat(quickCustomer.creditLimit || '0'),
     }).select().single();
     if (data) {
-      setCustomers((prev) => [...prev, data]);
+      setCustomers((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
       setForm((f) => ({ ...f, customerId: data.id }));
       setShowQuickAddCustomer(false);
       setQuickCustomer({ name: '', phone: '', creditLimit: '' });
@@ -167,7 +167,7 @@ export default function Sales() {
           created_by: user?.username || null,
         });
       }
-      setSuppliers((prev) => [...prev, data]);
+      setSuppliers((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
       setForm((f) => ({ ...f, supplierId: data.id }));
       setShowQuickAddSupplier(false);
       setQuickSupplier({ name: '', phone: '', balance: '' });
@@ -187,7 +187,7 @@ export default function Sales() {
       balance: 0,
     }).select().single();
     if (data) {
-      setSuppliers((prev) => [...prev, data]);
+      setSuppliers((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
       setForm((f) => ({ ...f, costSupplierId: data.id }));
       setShowQuickAddCostSupplier(false);
       setQuickCostSupplier({ name: '', phone: '' });
@@ -198,6 +198,13 @@ export default function Sales() {
     if (!form.sellingPrice || parseFloat(form.sellingPrice) <= 0) return;
     if ((form.mode === 'credit' || form.mode === 'advance') && !form.customerId) return;
     if (form.mode === 'supplier' && !form.supplierId) return;
+    if (form.mode === 'split') {
+      const splitTotal = parseFloat(form.splitMpesa || '0') + parseFloat(form.splitCash || '0') + parseFloat(form.splitPaybill || '0');
+      if (splitTotal <= 0) {
+        alert('Enter how much was paid via Mpesa, Cash, and/or Paybill for this split sale - it cannot be saved with nothing entered, or the money would silently disappear from your balance.');
+        return;
+      }
+    }
 
     // Not a hard block - just a heads-up. The sale still saves either way;
     // profit will show as 0 until the cost price is filled in via Edit.
@@ -312,6 +319,10 @@ export default function Sales() {
         if (!f.sellingPrice || parseFloat(f.sellingPrice) <= 0) return false;
         if ((f.mode === 'credit' || f.mode === 'advance') && !f.customerId) return false;
         if (f.mode === 'supplier' && !f.supplierId) return false;
+        if (f.mode === 'split') {
+          const splitTotal = parseFloat(f.splitMpesa || '0') + parseFloat(f.splitCash || '0') + parseFloat(f.splitPaybill || '0');
+          if (splitTotal <= 0) return false;
+        }
         return true;
       });
     if (validForms.length === 0) return;
@@ -540,6 +551,13 @@ export default function Sales() {
     if (!form.sellingPrice || parseFloat(form.sellingPrice) <= 0) return;
     if ((form.mode === 'credit' || form.mode === 'advance') && !form.customerId) return;
     if (form.mode === 'supplier' && !form.supplierId) return;
+    if (form.mode === 'split') {
+      const splitTotal = parseFloat(form.splitMpesa || '0') + parseFloat(form.splitCash || '0') + parseFloat(form.splitPaybill || '0');
+      if (splitTotal <= 0) {
+        alert('Enter how much was paid via Mpesa, Cash, and/or Paybill for this split sale - it cannot be saved with nothing entered, or the money would silently disappear from your balance.');
+        return;
+      }
+    }
 
     const sp = parseFloat(form.sellingPrice);
     const cp = parseFloat(form.costPrice || '0');
