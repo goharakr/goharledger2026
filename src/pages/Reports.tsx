@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, getMonthLabel, saleProfit, isSaleIncomplete } from '../utils/format';
+import { sortCustomersByBalance, sortSuppliersByBalance } from '../utils/sortEntities';
 import { useDataRefresh } from '../context/DataContext';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
@@ -529,7 +530,7 @@ export default function Reports() {
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 >
                   <option value="">All Customers</option>
-                  {customers.map((c) => (
+                  {sortCustomersByBalance(customers).map((c) => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
@@ -544,7 +545,7 @@ export default function Reports() {
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 >
                   <option value="">All Suppliers</option>
-                  {suppliers.map((s) => (
+                  {sortSuppliersByBalance(suppliers).map((s) => (
                     <option key={s.id} value={s.id}>{s.name}</option>
                   ))}
                 </select>

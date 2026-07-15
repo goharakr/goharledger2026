@@ -18,6 +18,7 @@ import { supabase } from '../utils/supabase';
 import { useAuth } from '../context/AuthContext';
 import { useDataRefresh } from '../context/DataContext';
 import { formatKES, todayStr } from '../utils/format';
+import { sortCustomersByBalance, sortSuppliersByBalance } from '../utils/sortEntities';
 import { adjustCustomerCredit, adjustSupplierBalance } from '../utils/balances';
 import { fetchAllRows } from '../utils/fetchAll';
 import type { Customer, Supplier, Transaction } from '../types';
@@ -309,7 +310,7 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
         <div className="flex flex-wrap gap-2">
           <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="flex-1 min-w-[160px] border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
             <option value="">Select customer</option>
-            {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {sortCustomersByBalance(customers).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
           <input type="number" value={customerAmount} onChange={(e) => setCustomerAmount(e.target.value)} placeholder="Amount owed" className="w-40 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
           <button onClick={saveCustomerOpeningBalance} disabled={savingKey === 'customer'} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-3 py-2 rounded-lg text-xs font-medium">{savingKey === 'customer' ? 'Saving...' : 'Save'}</button>
@@ -323,7 +324,7 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
         <div className="flex flex-wrap gap-2">
           <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className="flex-1 min-w-[160px] border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
             <option value="">Select supplier</option>
-            {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            {sortSuppliersByBalance(suppliers).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
           <input type="number" value={supplierAmount} onChange={(e) => setSupplierAmount(e.target.value)} placeholder="Amount owed" className="w-40 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
           <button onClick={saveSupplierOpeningBalance} disabled={savingKey === 'supplier'} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-3 py-2 rounded-lg text-xs font-medium">{savingKey === 'supplier' ? 'Saving...' : 'Save'}</button>

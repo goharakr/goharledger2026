@@ -24,6 +24,7 @@ import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
+import { sortCustomersByBalance, sortSuppliersByBalance } from '../utils/sortEntities';
 import type { Transaction, Customer, Supplier } from '../types';
 
 type SaleMode = 'cash' | 'mpesa' | 'paybill' | 'split' | 'credit' | 'advance' | 'supplier';
@@ -1087,7 +1088,7 @@ export default function Sales() {
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               >
                 <option value="">Select customer</option>
-                {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {sortCustomersByBalance(customers).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -1328,7 +1329,7 @@ function SaleFormFields({
               className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
             >
               <option value="">Customer</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {sortCustomersByBalance(customers).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
             {setShowQuickAddCustomer && (
               <button
@@ -1351,7 +1352,7 @@ function SaleFormFields({
               className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
             >
               <option value="">Supplier</option>
-              {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {sortSuppliersByBalance(suppliers).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
             {setShowQuickAddSupplier && (
               <button
@@ -1464,7 +1465,7 @@ function SaleFormFields({
                   className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 >
                   <option value="">Supplier</option>
-                  {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  {sortSuppliersByBalance(suppliers).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
                 <button
                   type="button"
