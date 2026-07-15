@@ -80,6 +80,7 @@ export default function Sales() {
   const [showAdd, setShowAdd] = useState(false);
   const [showBulk, setShowBulk] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<SaleForm>(emptyForm);
   const [bulkForms, setBulkForms] = useState<SaleForm[]>([emptyForm, emptyForm, emptyForm]);
   const [search, setSearch] = useState('');
@@ -195,6 +196,7 @@ export default function Sales() {
   }
 
   async function handleSave() {
+    if (saving) return;
     if (!form.sellingPrice || parseFloat(form.sellingPrice) <= 0) return;
     if ((form.mode === 'credit' || form.mode === 'advance') && !form.customerId) return;
     if (form.mode === 'supplier' && !form.supplierId) return;
@@ -211,6 +213,9 @@ export default function Sales() {
     if (!form.costPrice || form.costPrice.trim() === '') {
       alert('Cost Price not entered. The sale will still be saved - profit will show as 0 until you edit it later and fill in the real cost.');
     }
+
+    setSaving(true);
+    try {
 
     const sp = parseFloat(form.sellingPrice);
     const cp = parseFloat(form.costPrice || '0');
@@ -310,9 +315,13 @@ export default function Sales() {
     setShowAdd(false);
     fetchData();
     triggerRefresh();
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleBulkSave() {
+    if (saving) return;
     const validForms = bulkForms
       .map((f, originalIndex) => ({ f, originalIndex }))
       .filter(({ f }) => {
@@ -326,6 +335,8 @@ export default function Sales() {
         return true;
       });
     if (validForms.length === 0) return;
+    setSaving(true);
+    try {
 
     // Not a hard block - just a heads-up. These rows still save either way;
     // profit will show as 0 until the cost price is filled in via Edit.
@@ -389,6 +400,9 @@ export default function Sales() {
     if (failedRows.length > 0) {
       alert(`Row(s) ${failedRows.join(', ')} failed to save and were skipped. The rest were saved successfully.`);
     }
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleVoid(id: string, reason: string) {
@@ -451,6 +465,7 @@ export default function Sales() {
   }
 
   async function handleRefund() {
+    if (saving) return;
     if (!refundingSale) return;
     const amount = parseFloat(refundForm.amount);
     if (!amount || amount <= 0) return;
@@ -460,6 +475,8 @@ export default function Sales() {
       alert(`You can refund at most KES ${formatKES(maxRefundable)} on this sale (KES ${formatKES(alreadyRefunded(refundingSale))} already refunded).`);
       return;
     }
+    setSaving(true);
+    try {
 
     // Use the cost price you entered if given; otherwise work out this
     // refund's share of the original cost automatically, so a partial refund
@@ -542,9 +559,13 @@ export default function Sales() {
     setRefundForm({ amount: '', costPrice: '', mode: 'cash', date: todayStr() });
     fetchData();
     triggerRefresh();
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleUpdate() {
+    if (saving) return;
     if (!editingId) return;
     const oldTxn = sales.find((s) => s.id === editingId);
     if (!oldTxn) return;
@@ -558,6 +579,8 @@ export default function Sales() {
         return;
       }
     }
+    setSaving(true);
+    try {
 
     const sp = parseFloat(form.sellingPrice);
     const cp = parseFloat(form.costPrice || '0');
@@ -632,6 +655,9 @@ export default function Sales() {
     setShowAdd(false);
     fetchData();
     triggerRefresh();
+    } finally {
+      setSaving(false);
+    }
   }
 
   function startEdit(sale: Transaction) {
@@ -763,6 +789,7 @@ export default function Sales() {
             onSave={editingId ? handleUpdate : handleSave}
             onCancel={() => { setShowAdd(false); setEditingId(null); }}
             saveLabel={editingId ? 'Update' : 'Save'}
+            saving={saving}
             showQuickAddCustomer={showQuickAddCustomer}
             setShowQuickAddCustomer={setShowQuickAddCustomer}
             quickCustomer={quickCustomer}
@@ -865,8 +892,8 @@ export default function Sales() {
             >
               <Plus size={14} /> Add Row
             </button>
-            <button onClick={handleBulkSave} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium">
-              Save All
+            <button onClick={handleBulkSave} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm font-medium">
+              {saving ? 'Saving...' : 'Save All'}
             </button>
             <button onClick={() => setShowBulk(false)} className="text-slate-500 hover:text-slate-700 text-sm">
               Cancel
@@ -1072,8 +1099,8 @@ export default function Sales() {
               </div>
             </div>
             <div className="flex gap-2 pt-1">
-              <button onClick={handleRefund} className="flex-1 bg-amber-600 hover:bg-amber-700 text-white px-3 py-2 rounded text-sm font-medium">
-                Save Refund
+              <button onClick={handleRefund} disabled={saving} className="flex-1 bg-amber-600 hover:bg-amber-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-3 py-2 rounded text-sm font-medium">
+                {saving ? 'Saving...' : 'Save Refund'}
               </button>
               <button onClick={() => setRefundingSale(null)} className="px-3 py-2 text-slate-500 hover:text-slate-700 text-sm">
                 Cancel
@@ -1094,6 +1121,7 @@ function SaleFormFields({
   onSave,
   onCancel,
   saveLabel,
+  saving,
   hideActions,
   showQuickAddCustomer,
   setShowQuickAddCustomer,
@@ -1120,6 +1148,7 @@ function SaleFormFields({
   onSave: () => void;
   onCancel: () => void;
   saveLabel: string;
+  saving?: boolean;
   hideActions?: boolean;
   showQuickAddCustomer?: boolean;
   setShowQuickAddCustomer?: (v: boolean) => void;
@@ -1480,9 +1509,10 @@ function SaleFormFields({
         <div className="flex items-center gap-3 pt-2 border-t border-slate-200">
           <button
             onClick={onSave}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium"
+            disabled={saving}
+            className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm font-medium"
           >
-            {saveLabel || 'Save'}
+            {saving ? 'Saving...' : (saveLabel || 'Save')}
           </button>
           <button onClick={onCancel} className="text-slate-500 hover:text-slate-700 text-sm">
             Cancel
