@@ -1066,7 +1066,7 @@ export default function Sales() {
         open={showLedger}
         onClose={() => setShowLedger(false)}
         title="Sales Ledger"
-        filterTypes={['sale']}
+        filterTypes={['sale', 'customer_payment']}
       />
 
       {/* Deposit Advance modal */}
