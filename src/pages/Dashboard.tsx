@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, saleProfit, todayStr, thisMonthStr } from '../utils/format';
+import { sortCustomersByBalance, sortSuppliersByBalance } from '../utils/sortEntities';
 import { useDataRefresh } from '../context/DataContext';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
@@ -1085,8 +1086,8 @@ export default function Dashboard() {
                 <select value={reminderForm.entityId} onChange={(e) => setReminderForm({ ...reminderForm, entityId: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
                   <option value="">Select {reminderForm.entityType}</option>
                   {reminderForm.entityType === 'supplier'
-                    ? suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)
-                    : customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)
+                    ? sortSuppliersByBalance(suppliers).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)
+                    : sortCustomersByBalance(customers).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)
                   }
                 </select>
               </div>
