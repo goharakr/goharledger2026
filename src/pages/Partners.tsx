@@ -32,7 +32,7 @@ interface DrawForm {
 
 const emptyDraw: DrawForm = {
   amount: '',
-  date: new Date().toISOString().split('T')[0],
+  date: todayStr(),
   mode: 'cash',
   notes: '',
 };
@@ -101,7 +101,7 @@ export default function Partners() {
   }
 
   async function handleSaveRules() {
-    const now = new Date().toISOString().split('T')[0];
+    const now = todayStr();
     await supabase.from('share_rules').update({ is_active: false, effective_to: now }).eq('is_active', true);
     await supabase.from('share_rules').insert([
       { partner_id: 'taher', rule_type: ruleForm.type, value: parseFloat(ruleForm.taherValue), effective_from: now, is_active: true },

@@ -40,7 +40,7 @@ interface ExpenseForm {
 }
 
 const emptyForm: ExpenseForm = {
-  date: new Date().toISOString().split('T')[0],
+  date: todayStr(),
   category: '',
   amount: '',
   mode: 'cash',
@@ -58,7 +58,7 @@ const emptyForm: ExpenseForm = {
 export default function Expenses() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'shop' | 'home' | 'loans' | 'suppliers'>('shop');
+  const [activeTab, setActiveTab] = useState<'shop' | 'home' | 'partners' | 'loans' | 'suppliers'>('shop');
   const [expenses, setExpenses] = useState<Transaction[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loans, setLoans] = useState<LoanTracker[]>([]);
@@ -84,7 +84,7 @@ export default function Expenses() {
 
   async function fetchData() {
     setLoading(true);
-    const [{ data: txns }, { data: suppData }, { data: loanData }, { data: catData }, { data: suppPayments }, { data: loanPayments }] = await Promise.all([
+    const [{ data: txns }, { data: suppData }, { data: loanData }, { data: catData }, { data: suppPayments }, { data: loanPayments }, { data: partnerDraws }] = await Promise.all([
       fetchAllRows<Transaction>((from, to) =>
         supabase.from('transactions').select('*').eq('type', 'expense').order('date', { ascending: false }).range(from, to)
       ),
@@ -96,6 +96,9 @@ export default function Expenses() {
       ),
       fetchAllRows<Transaction>((from, to) =>
         supabase.from('transactions').select('*').eq('type', 'loan_payment').order('date', { ascending: false }).range(from, to)
+      ),
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').eq('type', 'partner_draw').order('date', { ascending: false }).range(from, to)
       ),
     ]);
 
@@ -113,6 +116,8 @@ export default function Expenses() {
       filtered = [...loanExpenses, ...(loanPayments || [])];
     } else if (activeTab === 'suppliers') {
       filtered = suppPayments || [];
+    } else if (activeTab === 'partners') {
+      filtered = partnerDraws || [];
     }
 
     setExpenses(filtered);
@@ -217,6 +222,30 @@ export default function Expenses() {
       return;
     }
 
+    // Handle partner draw separately
+    if (activeTab === 'partners') {
+      if (!form.partnerId) return;
+
+      const { data: newTxn, error } = await insertTransactionWithId('DRW-' + form.date.replace(/-/g, ''), (txnId) => ({
+        transaction_id: txnId,
+        date: form.date,
+        type: 'partner_draw',
+        primary_mode: form.mode,
+        amount: amt,
+        partner_id: form.partnerId,
+        description: form.description || `Partner draw - ${form.partnerId}`,
+        notes: form.notes || null,
+        created_by: user?.username || null,
+      }));
+      if (error || !newTxn) { console.error(error); alert('Failed to save partner draw: ' + (error?.message || 'unknown error')); return; }
+      await insertTransactionFee(form.date, form.mode, form.transactionFee, form.partnerId);
+      setForm(emptyForm);
+      setShowAdd(false);
+      fetchData();
+      triggerRefresh();
+      return;
+    }
+
     const isHomeExpense = activeTab === 'home';
     const category = isHomeExpense ? 'home_expense' : form.category;
 
@@ -304,6 +333,7 @@ export default function Expenses() {
     });
     if (expense.type === 'supplier_payment') setActiveTab('suppliers');
     else if (expense.type === 'loan_payment') setActiveTab('loans');
+    else if (isPartner) setActiveTab('partners');
     else if (isHome) setActiveTab('home');
     else setActiveTab('shop');
     setShowAdd(true);
@@ -333,6 +363,26 @@ export default function Expenses() {
       }).eq('id', editingId);
       if (error) { alert('Failed to save: ' + error.message); return; }
       if (form.supplierId) await adjustSupplierBalance(form.supplierId, -amt);
+
+      setEditingId(null);
+      setForm(emptyForm);
+      setShowAdd(false);
+      fetchData();
+      triggerRefresh();
+      return;
+    }
+
+    if (oldTxn.type === 'partner_draw') {
+      const { error } = await supabase.from('transactions').update({
+        date: form.date,
+        primary_mode: form.mode,
+        amount: amt,
+        partner_id: form.partnerId || oldTxn.partner_id,
+        description: form.description || `Partner draw - ${form.partnerId || oldTxn.partner_id}`,
+        notes: form.notes || null,
+        edited_at: new Date().toISOString(),
+      }).eq('id', editingId);
+      if (error) { alert('Failed to save: ' + error.message); return; }
 
       setEditingId(null);
       setForm(emptyForm);
@@ -435,7 +485,7 @@ export default function Expenses() {
     <div className="space-y-4">
       {/* Tabs */}
       <div className="flex gap-1 bg-slate-100 p-1 rounded-lg w-fit flex-wrap">
-        {(['shop', 'home', 'suppliers', 'loans'] as const).map((tab) => (
+        {(['shop', 'home', 'partners', 'suppliers', 'loans'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => { setActiveTab(tab); setShowAdd(false); setEditingId(null); }}
@@ -443,7 +493,7 @@ export default function Expenses() {
               activeTab === tab ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
-            {tab === 'shop' ? 'Shop Expenses' : tab === 'home' ? 'Home Expenses' : tab === 'suppliers' ? 'Supplier Payments' : 'Loans'}
+            {tab === 'shop' ? 'Shop Expenses' : tab === 'home' ? 'Home Expenses' : tab === 'partners' ? 'Partners' : tab === 'suppliers' ? 'Supplier Payments' : 'Loans'}
           </button>
         ))}
       </div>
@@ -454,7 +504,7 @@ export default function Expenses() {
           onClick={() => { setShowAdd(true); setEditingId(null); setForm({ ...emptyForm, date: todayStr(), partnerId: user?.username === 'taher' ? 'taher' : user?.username === 'abdulqadir' ? 'abdulqadir' : '' }); }}
           className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
         >
-          <Plus size={16} /> Add {activeTab === 'shop' ? 'Expense' : activeTab === 'home' ? 'Home Expense' : activeTab === 'suppliers' ? 'Supplier Payment' : 'Loan Payment'}
+          <Plus size={16} /> Add {activeTab === 'shop' ? 'Expense' : activeTab === 'home' ? 'Home Expense' : activeTab === 'partners' ? 'Partner Draw' : activeTab === 'suppliers' ? 'Supplier Payment' : 'Loan Payment'}
         </button>
         {activeTab === 'shop' && (
           <button
@@ -536,7 +586,7 @@ export default function Expenses() {
         <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-slate-800 text-sm">
-              {editingId ? 'Edit' : 'Add'} {activeTab === 'shop' ? 'Expense' : activeTab === 'home' ? 'Home Expense' : activeTab === 'suppliers' ? 'Supplier Payment' : 'Loan Payment'}
+              {editingId ? 'Edit' : 'Add'} {activeTab === 'shop' ? 'Expense' : activeTab === 'home' ? 'Home Expense' : activeTab === 'partners' ? 'Partner Draw' : activeTab === 'suppliers' ? 'Supplier Payment' : 'Loan Payment'}
             </h3>
             <button onClick={() => { setShowAdd(false); setEditingId(null); }} className="p-1 hover:bg-slate-100 rounded">
               <X size={14} />
@@ -641,6 +691,18 @@ export default function Expenses() {
                   <option value="own_pocket">Own Pocket</option>
                 </select>
               </div>
+            )}
+
+            {activeTab === 'partners' && (
+              <select
+                value={form.partnerId}
+                onChange={(e) => setForm({ ...form, partnerId: e.target.value })}
+                className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              >
+                <option value="">Partner</option>
+                <option value="taher">Taher</option>
+                <option value="abdulqadir">Abdulqadir</option>
+              </select>
             )}
 
             {activeTab === 'loans' && (
@@ -796,8 +858,7 @@ export default function Expenses() {
                                 <span className={`text-xs px-2 py-0.5 rounded-full ${
                                   exp.type === 'partner_draw' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-700'
                                 }`}>
-                                  {(exp.category || 'misc').replace('_', ' ')}
-                                  {exp.type === 'partner_draw' && ' (Partner)'}
+                                  {exp.type === 'partner_draw' ? `${exp.partner_id || 'partner'} draw` : (exp.category || 'misc').replace('_', ' ')}
                                 </span>
                               </td>
                               <td className="px-4 py-2 text-slate-700">

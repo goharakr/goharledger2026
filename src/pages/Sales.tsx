@@ -12,6 +12,7 @@ import {
   UserPlus,
   BookOpen,
   RotateCcw,
+  Wallet,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr, saleProfit, isSaleIncomplete } from '../utils/format';
@@ -49,7 +50,7 @@ interface SaleForm {
 }
 
 const emptyForm: SaleForm = {
-  date: new Date().toISOString().split('T')[0],
+  date: todayStr(),
   mode: 'cash',
   sellingPrice: '',
   costPrice: '',
@@ -98,6 +99,8 @@ export default function Sales() {
   const [quickCostSupplier, setQuickCostSupplier] = useState({ name: '', phone: '' });
   const [refundingSale, setRefundingSale] = useState<Transaction | null>(null);
   const [refundForm, setRefundForm] = useState({ amount: '', costPrice: '', mode: 'cash', date: todayStr() });
+  const [showDepositAdvance, setShowDepositAdvance] = useState(false);
+  const [advanceDepositForm, setAdvanceDepositForm] = useState({ customerId: '', amount: '', date: todayStr(), mode: 'cash', notes: '' });
 
   useEffect(() => {
     fetchData();
@@ -173,6 +176,34 @@ export default function Sales() {
       setShowQuickAddSupplier(false);
       setQuickSupplier({ name: '', phone: '', balance: '' });
     }
+  }
+
+  async function handleDepositAdvance() {
+    if (!advanceDepositForm.customerId || !advanceDepositForm.amount || parseFloat(advanceDepositForm.amount) <= 0) return;
+
+    const amt = parseFloat(advanceDepositForm.amount);
+    const customer = customers.find((c) => c.id === advanceDepositForm.customerId);
+    if (!customer) return;
+
+    const { data: newTxn, error } = await insertTransactionWithId('ADV-' + advanceDepositForm.date.replace(/-/g, ''), (txnId) => ({
+      transaction_id: txnId,
+      date: advanceDepositForm.date,
+      type: 'customer_payment',
+      primary_mode: advanceDepositForm.mode,
+      amount: amt,
+      customer_id: advanceDepositForm.customerId,
+      description: `Advance from ${customer.name}`,
+      notes: advanceDepositForm.notes || null,
+      created_by: user?.username || null,
+    }));
+    if (error || !newTxn) { console.error(error); alert('Failed to save advance: ' + (error?.message || 'unknown error')); return; }
+
+    await adjustCustomerAdvance(advanceDepositForm.customerId, amt);
+
+    setAdvanceDepositForm({ customerId: '', amount: '', date: todayStr(), mode: 'cash', notes: '' });
+    setShowDepositAdvance(false);
+    fetchData();
+    triggerRefresh();
   }
 
   async function handleQuickAddCostSupplier() {
@@ -725,6 +756,12 @@ export default function Sales() {
         >
           <BookOpen size={16} /> View Ledger
         </button>
+        <button
+          onClick={() => { setShowDepositAdvance(true); setAdvanceDepositForm({ customerId: '', amount: '', date: todayStr(), mode: 'cash', notes: '' }); }}
+          className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
+        >
+          <Wallet size={16} /> Deposit Advance
+        </button>
       </div>
 
       {/* Filters */}
@@ -1031,6 +1068,80 @@ export default function Sales() {
         title="Sales Ledger"
         filterTypes={['sale']}
       />
+
+      {/* Deposit Advance modal */}
+      {showDepositAdvance && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-sm space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-slate-800">Deposit Customer Advance</h3>
+              <button onClick={() => setShowDepositAdvance(false)} className="p-1 hover:bg-slate-100 rounded">
+                <X size={16} />
+              </button>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Customer</label>
+              <select
+                value={advanceDepositForm.customerId}
+                onChange={(e) => setAdvanceDepositForm({ ...advanceDepositForm, customerId: e.target.value })}
+                className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              >
+                <option value="">Select customer</option>
+                {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Amount</label>
+                <input
+                  type="number"
+                  value={advanceDepositForm.amount}
+                  onChange={(e) => setAdvanceDepositForm({ ...advanceDepositForm, amount: e.target.value })}
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={advanceDepositForm.date}
+                  onChange={(e) => setAdvanceDepositForm({ ...advanceDepositForm, date: e.target.value })}
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Mode</label>
+              <select
+                value={advanceDepositForm.mode}
+                onChange={(e) => setAdvanceDepositForm({ ...advanceDepositForm, mode: e.target.value })}
+                className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              >
+                <option value="cash">Cash</option>
+                <option value="mpesa">Mpesa</option>
+                <option value="paybill">Paybill</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Notes (optional)</label>
+              <input
+                type="text"
+                value={advanceDepositForm.notes}
+                onChange={(e) => setAdvanceDepositForm({ ...advanceDepositForm, notes: e.target.value })}
+                className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={handleDepositAdvance} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded text-sm font-medium">
+                Save
+              </button>
+              <button onClick={() => setShowDepositAdvance(false)} className="px-3 py-2 text-slate-500 hover:text-slate-700 text-sm">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Refund modal */}
       {refundingSale && (

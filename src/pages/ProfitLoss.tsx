@@ -7,7 +7,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, getMonthLabel, saleProfit } from '../utils/format';
+import { formatKES, getMonthLabel, saleProfit, todayStr } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
 import LedgerModal from '../components/LedgerModal';
 import { fetchAllRows } from '../utils/fetchAll';
@@ -59,7 +59,7 @@ export default function ProfitLoss() {
   }
 
   async function saveRules() {
-    const now = new Date().toISOString().split('T')[0];
+    const now = todayStr();
 
     // Deactivate old rules
     await supabase.from('share_rules').update({ is_active: false, effective_to: now }).eq('is_active', true);

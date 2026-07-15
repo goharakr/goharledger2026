@@ -30,7 +30,7 @@ interface TransferForm {
 }
 
 const emptyTransfer: TransferForm = {
-  date: new Date().toISOString().split('T')[0],
+  date: todayStr(),
   fromMode: 'cash',
   toMode: 'mpesa',
   amount: '',

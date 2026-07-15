@@ -1,5 +1,20 @@
+// Formats a Date using its LOCAL calendar date, not toISOString() (which
+// converts to UTC and lands on the wrong day for part of the day in Kenya,
+// UTC+3 - e.g. local 00:00-02:59 is still "yesterday" in UTC).
+export function localDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export function todayStr(): string {
-  return new Date().toISOString().split('T')[0];
+  return localDateStr(new Date());
+}
+
+export function thisMonthStr(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
 export function formatKES(amount: number | null | undefined): string {

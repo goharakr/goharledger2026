@@ -24,7 +24,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, saleProfit } from '../utils/format';
+import { formatKES, formatDate, saleProfit, todayStr, thisMonthStr } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
@@ -62,7 +62,7 @@ export default function Dashboard() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [loading, setLoading] = useState(true);
-  const [monthFilter, setMonthFilter] = useState(new Date().toISOString().slice(0, 7));
+  const [monthFilter, setMonthFilter] = useState(thisMonthStr());
   const [monthlyBalances, setMonthlyBalances] = useState<{ id: string; month: string; mpesa: number; cash: number; paybill: number }[]>([]);
   const [computedForwardedBalance, setComputedForwardedBalance] = useState({ mpesa: 0, cash: 0, bank: 0 });
   const [showForwardedBalance, setShowForwardedBalance] = useState(false);
@@ -103,11 +103,11 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!stats) return;
-    const thisMonth = new Date().toISOString().slice(0, 7);
+    const thisMonth = thisMonthStr();
     const alreadyCounted = physicalCounts.some((c) => c.month === thisMonth);
     if (alreadyCounted) return;
     const skipDate = localStorage.getItem('physicalCountSkipDate');
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayStr();
     if (skipDate === today) return;
     setPhysicalCountForm({ mpesa: '', cash: '', paybill: '' });
     setShowPhysicalCount(true);
@@ -184,9 +184,9 @@ export default function Dashboard() {
     });
 
     // Calculate expenses by mode (NOT including supplier invoices/payments)
-    const todayStr = new Date().toISOString().split('T')[0];
+    const cutoffDate = todayStr();
     allTxns?.forEach((t) => {
-      const isPendingClear = t.clears_on && t.clears_on > todayStr;
+      const isPendingClear = t.clears_on && t.clears_on > cutoffDate;
       // Supplier invoices/payments aren't shop expenses, and a home expense
       // paid "From Own Pocket" isn't real shop cash moving - only its later
       // "From Shop" repayment is, so counting both would double it.
@@ -226,7 +226,7 @@ export default function Dashboard() {
     setLoading(true);
     try {
       const monthStart = monthFilter + '-01';
-      const today = new Date().toISOString().split('T')[0];
+      const today = todayStr();
       const [monthFilterYear, monthFilterMonth] = monthFilter.split('-').map(Number);
       const isLeapYear = (monthFilterYear % 4 === 0 && monthFilterYear % 100 !== 0) || monthFilterYear % 400 === 0;
       const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][monthFilterMonth - 1];
@@ -521,7 +521,7 @@ export default function Dashboard() {
   }
 
   function todayMonthStr() {
-    return new Date().toISOString().slice(0, 7);
+    return thisMonthStr();
   }
 
   async function handleSavePhysicalCount() {
@@ -543,7 +543,7 @@ export default function Dashboard() {
   }
 
   function skipPhysicalCountToday() {
-    localStorage.setItem('physicalCountSkipDate', new Date().toISOString().split('T')[0]);
+    localStorage.setItem('physicalCountSkipDate', todayStr());
     setShowPhysicalCount(false);
   }
 
@@ -596,7 +596,7 @@ export default function Dashboard() {
       </div>
 
       {/* Physical Cash Count reminder - shows until this month's count is filled in */}
-      {!physicalCounts.some((c) => c.month === new Date().toISOString().slice(0, 7)) && (
+      {!physicalCounts.some((c) => c.month === thisMonthStr()) && (
         <button
           onClick={() => { setPhysicalCountForm({ mpesa: '', cash: '', paybill: '' }); setShowPhysicalCount(true); }}
           className="w-full flex items-center justify-between bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-xl px-4 py-3 text-sm transition-colors"

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { X, Filter, Download, Trash2, Edit2, Save } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, isSaleIncomplete } from '../utils/format';
+import { formatKES, formatDate, isSaleIncomplete, todayStr, localDateStr } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
 import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance, adjustLoanBalance } from '../utils/balances';
 import type { Transaction, Customer, Supplier } from '../types';
@@ -55,31 +55,31 @@ export default function LedgerModal({
 
   function updateDateRange(filter: DateFilterType) {
     const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
+    const todayDateStr = todayStr();
 
     if (filter === 'today') {
-      setFromDate(todayStr);
-      setToDate(todayStr);
+      setFromDate(todayDateStr);
+      setToDate(todayDateStr);
     } else if (filter === 'yesterday') {
       const yesterday = new Date(today);
       yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0];
+      const yesterdayStr = localDateStr(yesterday);
       setFromDate(yesterdayStr);
       setToDate(yesterdayStr);
     } else if (filter === 'last7days') {
       const weekAgo = new Date(today);
       weekAgo.setDate(weekAgo.getDate() - 6);
-      setFromDate(weekAgo.toISOString().split('T')[0]);
-      setToDate(todayStr);
+      setFromDate(localDateStr(weekAgo));
+      setToDate(todayDateStr);
     } else if (filter === 'thismonth') {
       const monthStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
       setFromDate(monthStart);
-      setToDate(todayStr);
+      setToDate(todayDateStr);
     } else if (filter === 'lastmonth') {
       const firstDayLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
       const lastDayLastMonth = new Date(today.getFullYear(), today.getMonth(), 0);
-      setFromDate(firstDayLastMonth.toISOString().split('T')[0]);
-      setToDate(lastDayLastMonth.toISOString().split('T')[0]);
+      setFromDate(localDateStr(firstDayLastMonth));
+      setToDate(localDateStr(lastDayLastMonth));
     }
   }
 
@@ -288,7 +288,7 @@ export default function LedgerModal({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ledger-${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = `ledger-${todayStr()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }

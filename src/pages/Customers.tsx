@@ -71,7 +71,7 @@ const emptySaleEdit: SaleEditForm = {
 
 const emptyPayment: PaymentForm = {
   amount: '',
-  date: new Date().toISOString().split('T')[0],
+  date: todayStr(),
   mode: 'cash',
   notes: '',
   paymentType: 'credit',

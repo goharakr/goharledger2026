@@ -11,7 +11,7 @@ import {
   Edit2,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, getMonthLabel, todayStr } from '../utils/format';
+import { formatKES, formatDate, getMonthLabel, todayStr, thisMonthStr } from '../utils/format';
 import { adjustLoanBalance } from '../utils/balances';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
@@ -42,7 +42,7 @@ const emptyCapital: CapitalForm = {
   partnerId: 'taher',
   entryType: 'initial_capital',
   amount: '',
-  date: new Date().toISOString().split('T')[0],
+  date: todayStr(),
   description: '',
   mode: '',
 };
@@ -68,13 +68,13 @@ export default function Capital() {
   const [editingCapitalId, setEditingCapitalId] = useState<string | null>(null);
   const [editingHistoricalId, setEditingHistoricalId] = useState<string | null>(null);
   const [capitalForm, setCapitalForm] = useState<CapitalForm>(emptyCapital);
-  const [loanPaymentForm, setLoanPaymentForm] = useState<LoanPaymentForm>({ amount: '', date: new Date().toISOString().split('T')[0], mode: 'cash', notes: '' });
+  const [loanPaymentForm, setLoanPaymentForm] = useState<LoanPaymentForm>({ amount: '', date: todayStr(), mode: 'cash', notes: '' });
   const [newLoanForm, setNewLoanForm] = useState({
     loanName: '',
     totalAmount: '',
     amountPaid: '0',
     monthlyInstallment: '',
-    startDate: new Date().toISOString().split('T')[0],
+    startDate: todayStr(),
     notes: '',
   });
   const [editLoanForm, setEditLoanForm] = useState({
@@ -86,7 +86,7 @@ export default function Capital() {
     notes: '',
   });
   const [historicalForm, setHistoricalForm] = useState({
-    month: new Date().toISOString().slice(0, 7),
+    month: thisMonthStr(),
     totalProfit: '',
     taherShare: '',
     abdulqadirShare: '',
@@ -264,7 +264,7 @@ export default function Capital() {
       totalAmount: '',
       amountPaid: '0',
       monthlyInstallment: '',
-      startDate: new Date().toISOString().split('T')[0],
+      startDate: todayStr(),
       notes: '',
     });
     setShowAddLoan(false);
@@ -330,7 +330,7 @@ export default function Capital() {
     });
 
     setHistoricalForm({
-      month: new Date().toISOString().slice(0, 7),
+      month: thisMonthStr(),
       totalProfit: '',
       taherShare: '',
       abdulqadirShare: '',

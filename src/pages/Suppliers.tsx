@@ -57,7 +57,7 @@ const emptySupplier: SupplierForm = {
 };
 
 const emptyInvoice: InvoiceForm = {
-  date: new Date().toISOString().split('T')[0],
+  date: todayStr(),
   dueDate: '',
   amount: '',
   notes: '',
@@ -67,7 +67,7 @@ const emptyInvoice: InvoiceForm = {
 
 const emptyPayment: PaymentForm = {
   amount: '',
-  date: new Date().toISOString().split('T')[0],
+  date: todayStr(),
   mode: 'cash',
   notes: '',
   isPostDated: false,

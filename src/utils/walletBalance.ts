@@ -1,4 +1,5 @@
 import type { Transaction } from '../types';
+import { localDateStr } from './format';
 
 export interface WalletBalance {
   mpesa: number;
@@ -125,5 +126,5 @@ export function computeWalletBalance(
 export function tomorrowStr(): string {
   const d = new Date();
   d.setDate(d.getDate() + 1);
-  return d.toISOString().split('T')[0];
+  return localDateStr(d);
 }
