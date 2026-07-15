@@ -88,7 +88,7 @@ export default function Expenses() {
       fetchAllRows<Transaction>((from, to) =>
         supabase.from('transactions').select('*').eq('type', 'expense').order('date', { ascending: false }).range(from, to)
       ),
-      supabase.from('suppliers').select('*').eq('is_active', true),
+      supabase.from('suppliers').select('*').eq('is_active', true).order('name'),
       supabase.from('loan_trackers').select('*'),
       supabase.from('expense_categories').select('*').eq('is_active', true).order('name'),
       fetchAllRows<Transaction>((from, to) =>
@@ -227,7 +227,7 @@ export default function Expenses() {
       transaction_id: txnId,
       date: form.date,
       type: isPartnerExpense ? 'partner_draw' : 'expense',
-      primary_mode: form.mode,
+      primary_mode: isHomeExpense && form.source === 'own_pocket' ? null : form.mode,
       amount: amt,
       category,
       description: form.description || null,
@@ -379,7 +379,7 @@ export default function Expenses() {
     // Update transaction
     const { error } = await supabase.from('transactions').update({
       date: form.date,
-      primary_mode: form.mode,
+      primary_mode: isHomeExpense && form.source === 'own_pocket' ? null : form.mode,
       amount: amt,
       category,
       description: form.description || null,
@@ -544,7 +544,8 @@ export default function Expenses() {
           </div>
 
           <div className="space-y-2">
-            {/* Row 1: Date, Amount, Mode */}
+            {/* Row 1: Date, Amount, Mode - no mode for "Own Pocket" home expenses,
+                since it's the partner's own money and no shop wallet is involved */}
             <div className="grid grid-cols-3 gap-2">
               <input
                 type="date"
@@ -559,15 +560,19 @@ export default function Expenses() {
                 placeholder="Amount"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
-              <select
-                value={form.mode}
-                onChange={(e) => setForm({ ...form, mode: e.target.value })}
-                className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-              >
-                <option value="cash">Cash</option>
-                <option value="mpesa">Mpesa</option>
-                <option value="paybill">Paybill</option>
-              </select>
+              {activeTab === 'home' && form.source === 'own_pocket' ? (
+                <div className="border border-slate-200 bg-slate-50 rounded px-2 py-1.5 text-xs text-slate-500 flex items-center">No mode - own money</div>
+              ) : (
+                <select
+                  value={form.mode}
+                  onChange={(e) => setForm({ ...form, mode: e.target.value })}
+                  className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                >
+                  <option value="cash">Cash</option>
+                  <option value="mpesa">Mpesa</option>
+                  <option value="paybill">Paybill</option>
+                </select>
+              )}
             </div>
 
             {/* Transaction fee (Mpesa/Paybill only lose money to network fees; only offered on new entries) */}

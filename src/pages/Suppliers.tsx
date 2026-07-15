@@ -134,7 +134,12 @@ export default function Suppliers() {
   }
 
   async function handleSaveSupplier() {
-    if (!form.name.trim()) return;
+    const name = form.name.trim();
+    if (!name) return;
+    if (!editingId && suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+      alert('A supplier with this name already exists.');
+      return;
+    }
 
     const newOpening = parseFloat(form.openingBalance || '0');
 

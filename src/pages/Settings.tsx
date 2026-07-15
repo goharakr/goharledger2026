@@ -148,6 +148,7 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
   const [supplierId, setSupplierId] = useState('');
   const [supplierAmount, setSupplierAmount] = useState('');
   const [saved, setSaved] = useState('');
+  const [savingKey, setSavingKey] = useState('');
 
   useEffect(() => {
     load();
@@ -169,6 +170,7 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
   }
 
   async function saveCashBalance(mode: 'cash' | 'mpesa' | 'paybill') {
+    setSavingKey(mode);
     const amt = parseFloat(cashAmounts[mode] || '0');
     const txnId = `OPN-${mode.toUpperCase()}`;
     const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
@@ -191,6 +193,7 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
         created_by: user?.username || null,
       }));
     }
+    setSavingKey('');
     if (error) { alert('Failed to save: ' + error.message); return; }
     setSaved(`${mode} balance saved`);
     setTimeout(() => setSaved(''), 2000);
@@ -199,16 +202,17 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
 
   async function saveCustomerOpeningBalance() {
     if (!customerId || !customerAmount) return;
+    setSavingKey('customer');
     const amt = parseFloat(customerAmount);
     const customer = customers.find((c) => c.id === customerId);
-    if (!customer) return;
+    if (!customer) { setSavingKey(''); return; }
 
     const txnId = `OPN-CR-${customerId}`;
     const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
     const oldAmount = existing && !existing.is_void ? existing.amount || 0 : 0;
 
     const ok = await adjustCustomerCredit(customerId, amt - oldAmount);
-    if (!ok) { alert('Failed to update the customer balance'); return; }
+    if (!ok) { setSavingKey(''); alert('Failed to update the customer balance'); return; }
 
     let error;
     if (existing) {
@@ -225,6 +229,7 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
         created_by: user?.username || null,
       }));
     }
+    setSavingKey('');
     if (error) { alert('Failed to save: ' + error.message); return; }
     setCustomerAmount('');
     setSaved(`${customer.name}'s opening balance saved`);
@@ -234,16 +239,17 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
 
   async function saveSupplierOpeningBalance() {
     if (!supplierId || !supplierAmount) return;
+    setSavingKey('supplier');
     const amt = parseFloat(supplierAmount);
     const supplier = suppliers.find((s) => s.id === supplierId);
-    if (!supplier) return;
+    if (!supplier) { setSavingKey(''); return; }
 
     const txnId = `OPN-BAL-${supplierId}`;
     const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
     const oldAmount = existing && !existing.is_void ? existing.amount || 0 : 0;
 
     const ok = await adjustSupplierBalance(supplierId, amt - oldAmount);
-    if (!ok) { alert('Failed to update the supplier balance'); return; }
+    if (!ok) { setSavingKey(''); alert('Failed to update the supplier balance'); return; }
 
     let error;
     if (existing) {
@@ -260,6 +266,7 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
         created_by: user?.username || null,
       }));
     }
+    setSavingKey('');
     if (error) { alert('Failed to save: ' + error.message); return; }
     setSupplierAmount('');
     setSaved(`${supplier.name}'s opening balance saved`);
@@ -290,7 +297,7 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
                 placeholder={mode.charAt(0).toUpperCase() + mode.slice(1)}
                 className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
-              <button onClick={() => saveCashBalance(mode)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-medium">Save</button>
+              <button onClick={() => saveCashBalance(mode)} disabled={savingKey === mode} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-3 py-2 rounded-lg text-xs font-medium">{savingKey === mode ? 'Saving...' : 'Save'}</button>
             </div>
           ))}
         </div>
@@ -305,7 +312,7 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
             {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
           <input type="number" value={customerAmount} onChange={(e) => setCustomerAmount(e.target.value)} placeholder="Amount owed" className="w-40 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
-          <button onClick={saveCustomerOpeningBalance} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-medium">Save</button>
+          <button onClick={saveCustomerOpeningBalance} disabled={savingKey === 'customer'} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-3 py-2 rounded-lg text-xs font-medium">{savingKey === 'customer' ? 'Saving...' : 'Save'}</button>
         </div>
         <p className="text-xs text-slate-500 mt-2">Can also be set per-customer from the Customers page.</p>
       </div>
@@ -319,7 +326,7 @@ function OpeningBalances({ navigate, triggerRefresh }: { navigate: (path: string
             {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
           <input type="number" value={supplierAmount} onChange={(e) => setSupplierAmount(e.target.value)} placeholder="Amount owed" className="w-40 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
-          <button onClick={saveSupplierOpeningBalance} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-medium">Save</button>
+          <button onClick={saveSupplierOpeningBalance} disabled={savingKey === 'supplier'} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-3 py-2 rounded-lg text-xs font-medium">{savingKey === 'supplier' ? 'Saving...' : 'Save'}</button>
         </div>
         <p className="text-xs text-slate-500 mt-2">Can also be set per-supplier from the Suppliers page.</p>
       </div>

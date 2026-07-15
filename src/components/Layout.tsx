@@ -64,13 +64,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
   const { refreshKey, triggerRefresh } = useDataRefresh();
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [showNavProgress, setShowNavProgress] = useState(false);
+
+  // A visible sign that a page switch (from the sidebar or anywhere else) is
+  // actually happening - each page fetches its own data after mounting, so
+  // without this the screen can look unresponsive for a moment after a click.
+  useEffect(() => {
+    setShowNavProgress(true);
+    const t = setTimeout(() => setShowNavProgress(false), 500);
+    return () => clearTimeout(t);
+  }, [location.pathname]);
 
   // Kept loaded on every page (not just while the reminder popup is open) so
   // reminder notifications can fire and show entity names no matter which
   // page the user is currently on.
   useEffect(() => {
-    supabase.from('suppliers').select('*').eq('is_active', true).then(({ data }) => setSuppliers(data || []));
-    supabase.from('customers').select('*').eq('is_active', true).then(({ data }) => setCustomers(data || []));
+    supabase.from('suppliers').select('*').eq('is_active', true).order('name').then(({ data }) => setSuppliers(data || []));
+    supabase.from('customers').select('*').eq('is_active', true).order('name').then(({ data }) => setCustomers(data || []));
     supabase.from('reminders').select('*').eq('status', 'pending').then(({ data }) => setReminders(data || []));
   }, [refreshKey]);
 
@@ -147,6 +157,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-slate-50 flex">
+      {/* Page-switch progress bar - visible feedback that a nav click registered */}
+      {showNavProgress && (
+        <div className="fixed top-0 left-0 right-0 z-[60] h-1 bg-emerald-100">
+          <div className="h-full bg-emerald-600 animate-[nav-progress_0.5s_ease-out] [animation-fill-mode:forwards]" />
+        </div>
+      )}
+
       {/* Mobile overlay */}
       {sidebarOpen && (
         <div
