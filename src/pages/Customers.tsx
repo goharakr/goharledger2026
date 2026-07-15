@@ -93,6 +93,8 @@ export default function Customers() {
   const [showLedger, setShowLedger] = useState(false);
   const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
   const [saleEditForm, setSaleEditForm] = useState<SaleEditForm>(emptySaleEdit);
+  const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
+  const [paymentEditForm, setPaymentEditForm] = useState({ amount: '', notes: '' });
   const [txnDatePreset, setTxnDatePreset] = useState<DatePreset>('month');
   const [txnCustomFrom, setTxnCustomFrom] = useState('');
   const [txnCustomTo, setTxnCustomTo] = useState('');
@@ -429,6 +431,60 @@ export default function Customers() {
     refreshCustomerData();
   }
 
+  // A customer_payment row is either money deposited as an advance (adds to
+  // advance_balance) or a payment against credit owed (subtracts from
+  // credit_balance) - same check LedgerModal uses, kept in sync with it.
+  function isAdvanceDeposit(t: Transaction): boolean {
+    return !!(t.description?.startsWith('Advance from') || t.transaction_id.startsWith('OPN-ADV-'));
+  }
+
+  function startEditPayment(t: Transaction) {
+    setEditingPaymentId(t.id);
+    setPaymentEditForm({ amount: String(t.amount || ''), notes: t.notes || '' });
+  }
+
+  async function handleUpdatePayment() {
+    if (!editingPaymentId) return;
+    const txn = transactions.find((t) => t.id === editingPaymentId);
+    if (!txn || !txn.customer_id) return;
+
+    const newAmount = parseFloat(paymentEditForm.amount);
+    if (!paymentEditForm.amount || isNaN(newAmount) || newAmount <= 0) {
+      alert('Enter a valid amount greater than 0');
+      return;
+    }
+    const delta = newAmount - (txn.amount || 0);
+
+    const { error } = await supabase.from('transactions').update({
+      amount: newAmount,
+      notes: paymentEditForm.notes || null,
+      edited_at: new Date().toISOString(),
+    }).eq('id', editingPaymentId);
+    if (error) { alert('Failed to save: ' + error.message); return; }
+
+    if (delta !== 0) {
+      if (isAdvanceDeposit(txn)) await adjustCustomerAdvance(txn.customer_id, delta);
+      else await adjustCustomerCredit(txn.customer_id, -delta);
+    }
+
+    setEditingPaymentId(null);
+    setPaymentEditForm({ amount: '', notes: '' });
+    refreshCustomerData();
+  }
+
+  async function handleVoidPayment(t: Transaction) {
+    if (!t.customer_id) return;
+    const reason = prompt('Enter void reason:');
+    if (!reason) return;
+
+    if (isAdvanceDeposit(t)) await adjustCustomerAdvance(t.customer_id, -(t.amount || 0));
+    else await adjustCustomerCredit(t.customer_id, t.amount || 0);
+
+    const { error } = await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', t.id);
+    if (error) { alert('Failed to void: ' + error.message); return; }
+    refreshCustomerData();
+  }
+
   const filteredCustomers = customers.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
     (c.phone || '').includes(search)
@@ -627,6 +683,9 @@ export default function Customers() {
                     {(c.advance_balance || 0) > 0 && (
                       <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full" title="Advance Paid">Adv: {formatKES(c.advance_balance)}</span>
                     )}
+                    {(c.advance_balance || 0) < 0 && (
+                      <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full" title="Customer owes for advance spent">Owes: {formatKES(Math.abs(c.advance_balance))}</span>
+                    )}
                   </div>
                 </button>
               ))
@@ -781,18 +840,60 @@ export default function Customers() {
                             )}
                           </td>
                           <td className={`px-3 py-2 text-right font-medium ${
-                            t.type === 'sale' ? 'text-emerald-600' : t.type === 'opening_balance' ? 'text-red-600' : 'text-blue-600'
+                            t.type === 'sale' ? 'text-emerald-600' :
+                            t.type === 'opening_balance' ? 'text-red-600' :
+                            t.type === 'customer_payment' && isAdvanceDeposit(t) ? 'text-purple-600' :
+                            'text-blue-600'
                           }`}>
-                            {t.type === 'sale' || t.type === 'opening_balance' ? '+' : '-'}{formatKES(t.type === 'sale' ? (t.selling_price || t.amount) : t.amount)}
+                            {t.type === 'sale' || t.type === 'opening_balance' || (t.type === 'customer_payment' && isAdvanceDeposit(t)) ? '+' : '-'}{formatKES(t.type === 'sale' ? (t.selling_price || t.amount) : t.amount)}
                           </td>
                           <td className="px-3 py-2 text-center">
-                            {t.type === 'sale' && (t.primary_mode === 'credit' || t.primary_mode === 'advance') && (
-                              <button onClick={() => startEditSale(t)} className="p-1 hover:bg-slate-200 rounded">
-                                <Edit2 size={14} className="text-slate-500" />
-                              </button>
-                            )}
+                            <div className="flex items-center justify-center gap-1">
+                              {t.type === 'sale' && (t.primary_mode === 'credit' || t.primary_mode === 'advance') && (
+                                <button onClick={() => startEditSale(t)} className="p-1 hover:bg-slate-200 rounded">
+                                  <Edit2 size={14} className="text-slate-500" />
+                                </button>
+                              )}
+                              {t.type === 'customer_payment' && (
+                                <>
+                                  <button onClick={() => startEditPayment(t)} className="p-1 hover:bg-slate-200 rounded">
+                                    <Edit2 size={14} className="text-slate-500" />
+                                  </button>
+                                  <button onClick={() => handleVoidPayment(t)} className="p-1 hover:bg-red-100 rounded">
+                                    <Trash2 size={14} className="text-red-500" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           </td>
                         </tr>
+                        {editingPaymentId === t.id && (
+                          <tr>
+                            <td colSpan={6} className="px-3 py-3 bg-slate-50">
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={paymentEditForm.amount}
+                                  onChange={(e) => setPaymentEditForm({ ...paymentEditForm, amount: e.target.value })}
+                                  placeholder="Amount"
+                                  className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                                <input
+                                  type="text"
+                                  value={paymentEditForm.notes}
+                                  onChange={(e) => setPaymentEditForm({ ...paymentEditForm, notes: e.target.value })}
+                                  placeholder="Notes"
+                                  className="col-span-2 md:col-span-2 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                              </div>
+                              <div className="flex gap-2 mt-2">
+                                <button onClick={handleUpdatePayment} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">Save</button>
+                                <button onClick={() => { setEditingPaymentId(null); setPaymentEditForm({ amount: '', notes: '' }); }} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
                         {editingSaleId === t.id && (
                           <tr>
                             <td colSpan={6} className="px-3 py-3 bg-slate-50">
