@@ -118,8 +118,8 @@ export default function ProfitLoss() {
     // Get active rules for this month
     const activeRule = shareRules.find((r) => r.partner_id === 'taher' && r.is_active);
     const ruleType = activeRule?.rule_type || 'fixed';
-    const taherVal = activeRule?.value || 100000;
-    const abdulVal = shareRules.find((r) => r.partner_id === 'abdulqadir' && r.is_active)?.value || 100000;
+    const taherVal = activeRule?.value || 0;
+    const abdulVal = shareRules.find((r) => r.partner_id === 'abdulqadir' && r.is_active)?.value || 0;
 
     let taherShare = 0, abdulqadirShare = 0, retained = 0;
 
