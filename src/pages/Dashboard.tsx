@@ -979,7 +979,7 @@ export default function Dashboard() {
       {/* Physical Cash Count Modal - pops up automatically until filled in for the month */}
       {showPhysicalCount && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+          <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-slate-800">Physical Cash Count - {todayMonthStr()}</h3>
               <button onClick={skipPhysicalCountToday} className="p-1 hover:bg-slate-100 rounded"><X size={18} /></button>
@@ -1068,7 +1068,7 @@ export default function Dashboard() {
       {/* Reminder Modal */}
       {showReminderModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+          <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-slate-800">Set Payment Reminder</h3>
               <button onClick={() => setShowReminderModal(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18} /></button>
