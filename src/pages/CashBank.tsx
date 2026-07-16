@@ -237,15 +237,10 @@ export default function CashBank() {
         // new cash), so it must not be counted in the "All" total either.
         if (mode === 'all' || t.primary_mode === mode) credit += t.amount;
       } else if (t.type === 'fund_transfer') {
-        const desc = (t.description || '').toLowerCase();
-        if (mode === 'all') {
-          if (desc.includes('mpesa to cash')) { debit += t.amount; }
-          else if (desc.includes('cash to mpesa')) { debit += t.amount; }
-          else if (desc.includes('mpesa to paybill')) { debit += t.amount; }
-          else if (desc.includes('paybill to mpesa')) { debit += t.amount; }
-          else if (desc.includes('cash to paybill')) { debit += t.amount; }
-          else if (desc.includes('paybill to cash')) { debit += t.amount; }
-        } else {
+        // A transfer between your own wallets doesn't change your total money -
+        // it only matters to the single wallet's own ledger (below), not "All".
+        if (mode !== 'all') {
+          const desc = (t.description || '').toLowerCase();
           if (desc.includes(`${mode} to`)) debit += t.amount;
           else if (desc.includes(`to ${mode}`)) credit += t.amount;
         }
