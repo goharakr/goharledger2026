@@ -258,10 +258,11 @@ export default function CashBank() {
       }
     });
 
-    // Running balance is computed over full history above (so it stays
-    // correct); only the displayed rows are narrowed to the selected range.
+    // Running balance is computed over full history above in chronological
+    // order (so each row's balance is correct); reversed at the end so the
+    // displayed list matches every other ledger in the app - newest first.
     const { from, to } = getDatePresetRange(ledgerDatePreset, ledgerCustomFrom, ledgerCustomTo);
-    return entries.filter((e) => e.date >= from && e.date <= to);
+    return entries.filter((e) => e.date >= from && e.date <= to).reverse();
   }
 
   const balances = calculateBalances();
