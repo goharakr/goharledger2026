@@ -19,6 +19,7 @@ import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
+import { sortSuppliersByBalance } from '../utils/sortEntities';
 import type { Supplier, Transaction } from '../types';
 
 interface SupplierForm {
@@ -345,10 +346,10 @@ export default function Suppliers() {
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }
 
-  const filteredSuppliers = suppliers.filter((s) =>
+  const filteredSuppliers = sortSuppliersByBalance(suppliers.filter((s) =>
     s.name.toLowerCase().includes(search.toLowerCase()) ||
     (s.phone || '').includes(search)
-  );
+  ));
 
   return (
     <div className="space-y-4">

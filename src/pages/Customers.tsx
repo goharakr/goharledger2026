@@ -21,6 +21,7 @@ import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
+import { sortCustomersByBalance } from '../utils/sortEntities';
 import type { Customer, Transaction } from '../types';
 
 interface CustomerForm {
@@ -485,10 +486,10 @@ export default function Customers() {
     refreshCustomerData();
   }
 
-  const filteredCustomers = customers.filter((c) =>
+  const filteredCustomers = sortCustomersByBalance(customers.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
     (c.phone || '').includes(search)
-  );
+  ));
 
   return (
     <div className="space-y-4">
