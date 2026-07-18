@@ -409,7 +409,10 @@ export default function Dashboard() {
       const taherShareDue = taherShareEarned + histTaherRemaining - taherDrawsAllTime;
       const abdulShareDue = abdulShareEarned + histAbdulRemaining - abdulDrawsAllTime;
 
-      const totalSuppliersOwed = (suppData || []).reduce((sum, s) => sum + (s.balance || 0), 0);
+      // Shown as two separate figures (not netted into one) - a supplier who
+      // owes you and one you owe are different situations, not a wash.
+      const suppliersOweShop = (suppData || []).reduce((sum, s) => sum + Math.max(0, -(s.balance || 0)), 0);
+      const shopOwesSuppliers = (suppData || []).reduce((sum, s) => sum + Math.max(0, s.balance || 0), 0);
       const totalCustomersPending = (custData || []).reduce((sum, c) => sum + (c.credit_balance || 0), 0);
       const totalNetProfit = totalGrossProfit - totalShopExpenses - totalHomeExpenses - totalLoanPayments;
       const monthNetProfit = monthGrossProfit - monthShopExpenses - monthHomeExpenses - monthLoanPayments;
@@ -434,7 +437,8 @@ export default function Dashboard() {
         monthLoanPayments,
         monthSupplierPayments,
         monthCustomerCollections,
-        totalSuppliersOwed,
+        suppliersOweShop,
+        shopOwesSuppliers,
         totalCustomersPending,
         taherBalance: taherBal,
         abdulqadirBalance: abdulBal,
@@ -609,22 +613,21 @@ export default function Dashboard() {
 
       {/* Supplier Total Owed - MOVED UP */}
       <button onClick={() => navigate('/suppliers')} className="w-full text-left">
-        <div className={`rounded-xl border shadow-sm p-5 transition-colors ${
-          (stats?.totalSuppliersOwed || 0) < 0 ? 'bg-emerald-50 border-emerald-200 hover:bg-emerald-100' : 'bg-red-50 border-red-200 hover:bg-red-100'
-        }`}>
+        <div className="rounded-xl border shadow-sm p-5 transition-colors bg-emerald-50 border-emerald-200 hover:bg-emerald-100">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <AlertCircle size={24} className={(stats?.totalSuppliersOwed || 0) < 0 ? 'text-emerald-500' : 'text-red-500'} />
+              <AlertCircle size={24} className="text-emerald-500" />
               <div>
-                <p className={`text-sm ${(stats?.totalSuppliersOwed || 0) < 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                  {(stats?.totalSuppliersOwed || 0) < 0 ? 'Suppliers Owe You (Credit)' : 'Total Owed to Suppliers'}
+                <p className="text-sm text-emerald-600">Suppliers Owe You</p>
+                <p className="text-2xl font-bold text-emerald-700">
+                  KES {formatKES(stats?.suppliersOweShop || 0)}
                 </p>
-                <p className={`text-2xl font-bold ${(stats?.totalSuppliersOwed || 0) < 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                  KES {formatKES(Math.abs(stats?.totalSuppliersOwed || 0))}
-                </p>
+                {(stats?.shopOwesSuppliers || 0) > 0 && (
+                  <p className="text-xs text-red-600 mt-1">You owe suppliers: KES {formatKES(stats?.shopOwesSuppliers || 0)}</p>
+                )}
               </div>
             </div>
-            <span className={`text-sm ${(stats?.totalSuppliersOwed || 0) < 0 ? 'text-emerald-600' : 'text-red-600'}`}>Click to view suppliers</span>
+            <span className="text-sm text-emerald-600">Click to view suppliers</span>
           </div>
         </div>
       </button>
