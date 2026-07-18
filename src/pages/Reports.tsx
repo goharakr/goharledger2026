@@ -340,7 +340,9 @@ export default function Reports() {
       return { debit: 0, credit: 0 };
     }
     if (txn.type === 'sale' || txn.type === 'customer_payment' || txn.type === 'partner_loan' || txn.type === 'capital_entry' || txn.type === 'opening_balance') {
-      return { debit: 0, credit: txn.amount };
+      // A refund is a sale with a negative amount - real money going back
+      // out, so it belongs in Debit, not a negative (and invisible) Credit.
+      return txn.amount < 0 ? { debit: -txn.amount, credit: 0 } : { debit: 0, credit: txn.amount };
     }
     if (txn.type === 'expense' || txn.type === 'supplier_payment' || txn.type === 'partner_draw' || txn.type === 'loan_payment' || txn.type === 'supplier_invoice') {
       return { debit: txn.amount, credit: 0 };
