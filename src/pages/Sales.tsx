@@ -87,7 +87,7 @@ export default function Sales() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<SaleForm>(emptyForm);
-  const [bulkForms, setBulkForms] = useState<SaleForm[]>([emptyForm, emptyForm, emptyForm]);
+  const [bulkForms, setBulkForms] = useState<SaleForm[]>(Array.from({ length: 10 }, () => ({ ...emptyForm })));
   const [search, setSearch] = useState('');
   const [filterMode, setFilterMode] = useState<string>('');
   const [datePreset, setDatePreset] = useState<DatePreset>('month');
@@ -436,7 +436,7 @@ export default function Sales() {
       }
     }
 
-    setBulkForms([emptyForm, emptyForm, emptyForm]);
+    setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyForm })));
     setShowBulk(false);
     fetchData();
     triggerRefresh();
@@ -761,7 +761,7 @@ export default function Sales() {
           <Plus size={16} /> Add Sale
         </button>
         <button
-          onClick={() => { setShowBulk(true); setShowAdd(false); setEditingId(null); setBulkForms([{ ...emptyForm, date: todayStr() }, { ...emptyForm, date: todayStr() }, { ...emptyForm, date: todayStr() }]); }}
+          onClick={() => { setShowBulk(true); setShowAdd(false); setEditingId(null); setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyForm, date: todayStr() }))); }}
           className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
         >
           <Plus size={16} /> Bulk Entry
