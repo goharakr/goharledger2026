@@ -853,8 +853,11 @@ export default function Sales() {
 
       {/* Add/Edit Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showAdd && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') { setShowAdd(false); setEditingId(null); } }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-sale-form>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-slate-800">{editingId ? 'Edit Sale' : 'Add Sale'}</h3>
             <button onClick={() => { setShowAdd(false); setEditingId(null); }} className="p-1 hover:bg-slate-100 rounded">
@@ -899,9 +902,14 @@ export default function Sales() {
         </div>
       )}
 
-      {/* Bulk entry */}
+      {/* Bulk entry - one shared data-sale-form scope across all rows, so arrow keys/Enter
+          flow straight from one row's last box into the next row's first box */}
       {showBulk && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4">
+        <div
+          className="bg-white rounded-xl border border-slate-200 shadow-lg p-4"
+          data-sale-form
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowBulk(false); }}
+        >
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-slate-800">Bulk Entry</h3>
             <button onClick={() => setShowBulk(false)} className="p-1 hover:bg-slate-100 rounded">
@@ -1416,7 +1424,7 @@ function SaleFormFields({
   };
 
   return (
-    <div className="space-y-2" data-sale-form>
+    <div className="space-y-2">
       {/* Row 1: Date, Mode, Customer/Supplier */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <input
@@ -1429,6 +1437,7 @@ function SaleFormFields({
         <select
           value={form.mode}
           onChange={(e) => update('mode', e.target.value)}
+          onKeyDown={(e) => handleKeyDown(e, 'mode')}
           className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
         >
           <option value="cash">Cash</option>
@@ -1572,6 +1581,7 @@ function SaleFormFields({
                 payCostToSupplier: e.target.checked,
                 costSupplierAmount: e.target.checked && !prev.costSupplierAmount ? prev.costPrice : prev.costSupplierAmount,
               }))}
+              onKeyDown={(e) => handleKeyDown(e, 'payCostToSupplier')}
             />
             Pay cost price to a supplier now
           </label>
@@ -1581,6 +1591,7 @@ function SaleFormFields({
                 <select
                   value={form.costSupplierId}
                   onChange={(e) => update('costSupplierId', e.target.value)}
+                  onKeyDown={(e) => handleKeyDown(e, 'costSupplierId')}
                   className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 >
                   <option value="">Supplier</option>
@@ -1599,12 +1610,14 @@ function SaleFormFields({
                 type="number"
                 value={form.costSupplierAmount}
                 onChange={(e) => update('costSupplierAmount', e.target.value)}
+                onKeyDown={(e) => handleKeyDown(e, 'costSupplierAmount')}
                 placeholder="Amount"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
               <select
                 value={form.costSupplierMode}
                 onChange={(e) => update('costSupplierMode', e.target.value)}
+                onKeyDown={(e) => handleKeyDown(e, 'costSupplierMode')}
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               >
                 <option value="cash">Cash</option>
@@ -1680,6 +1693,7 @@ function SaleFormFields({
         <select
           value={form.commissionMode}
           onChange={(e) => update('commissionMode', e.target.value)}
+          onKeyDown={(e) => handleKeyDown(e, 'commissionMode')}
           className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
         >
           <option value="cash">From Cash</option>
@@ -1696,6 +1710,7 @@ function SaleFormFields({
             type="number"
             value={form.splitMpesa}
             onChange={(e) => handleSplitChange('splitMpesa', e.target.value)}
+            onKeyDown={(e) => handleKeyDown(e, 'splitMpesa')}
             placeholder="Mpesa"
             className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
           />
@@ -1703,6 +1718,7 @@ function SaleFormFields({
             type="number"
             value={form.splitCash}
             onChange={(e) => handleSplitChange('splitCash', e.target.value)}
+            onKeyDown={(e) => handleKeyDown(e, 'splitCash')}
             placeholder="Cash"
             className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
           />
@@ -1710,6 +1726,7 @@ function SaleFormFields({
             type="number"
             value={form.splitPaybill}
             onChange={(e) => handleSplitChange('splitPaybill', e.target.value)}
+            onKeyDown={(e) => handleKeyDown(e, 'splitPaybill')}
             placeholder="Paybill"
             className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
           />
