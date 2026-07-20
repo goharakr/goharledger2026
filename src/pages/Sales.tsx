@@ -19,6 +19,7 @@ import { formatKES, formatDate, todayStr, saleProfit, isSaleIncomplete } from '.
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance } from '../utils/balances';
+import { syncCommissionExpense, voidCommissionExpense } from '../utils/commissionExpense';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
@@ -34,6 +35,7 @@ interface SaleForm {
   mode: SaleMode;
   sellingPrice: string;
   costPrice: string;
+  profit: string;
   commission: string;
   commissionMode: string;
   notes: string;
@@ -55,6 +57,7 @@ const emptyForm: SaleForm = {
   mode: 'cash',
   sellingPrice: '',
   costPrice: '',
+  profit: '',
   commission: '',
   commissionMode: 'cash',
   notes: '',
@@ -343,6 +346,10 @@ export default function Sales() {
       }
     }
 
+    if (comm > 0) {
+      await syncCommissionExpense(txnId, form.date, comm, form.commissionMode, user?.username || null);
+    }
+
     setForm(emptyForm);
     setShowAdd(false);
     fetchData();
@@ -423,6 +430,10 @@ export default function Sales() {
       if (f.mode === 'supplier' && f.supplierId) {
         await adjustSupplierBalance(f.supplierId, -sp);
       }
+
+      if (comm > 0) {
+        await syncCommissionExpense(txnId, f.date, comm, f.commissionMode, user?.username || null);
+      }
     }
 
     setBulkForms([emptyForm, emptyForm, emptyForm]);
@@ -478,6 +489,7 @@ export default function Sales() {
 
     const { error } = await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', id);
     if (error) { alert('Failed to void: ' + error.message); return; }
+    await voidCommissionExpense(txn.transaction_id, reason);
     fetchData();
     triggerRefresh();
   }
@@ -682,6 +694,8 @@ export default function Sales() {
       await adjustSupplierBalance(form.supplierId, -sp);
     }
 
+    await syncCommissionExpense(oldTxn.transaction_id, form.date, comm, form.commissionMode, user?.username || null);
+
     setEditingId(null);
     setForm(emptyForm);
     setShowAdd(false);
@@ -700,6 +714,7 @@ export default function Sales() {
       mode: (sale.primary_mode as SaleMode) || 'cash',
       sellingPrice: String(sale.selling_price || ''),
       costPrice: String(sale.cost_price || ''),
+      profit: sale.cost_price !== null && sale.cost_price !== undefined ? String((sale.selling_price || 0) - sale.cost_price) : '',
       commission: String(sale.commission || ''),
       commissionMode: sale.commission_mode || 'cash',
       notes: sale.primary_mode === 'advance' ? (sale.description || '') : (sale.description || sale.notes || ''),
@@ -898,7 +913,16 @@ export default function Sales() {
                   form={f}
                   setForm={(updater) => {
                     const newForms = [...bulkForms];
-                    newForms[i] = typeof updater === 'function' ? updater(newForms[i]) : updater;
+                    const prevRow = newForms[i];
+                    const updatedRow = typeof updater === 'function' ? updater(prevRow) : updater;
+                    newForms[i] = updatedRow;
+                    // Row 1's date drives every other row's date too - each
+                    // row can still be changed individually after that.
+                    if (i === 0 && updatedRow.date !== prevRow.date) {
+                      for (let j = 1; j < newForms.length; j++) {
+                        newForms[j] = { ...newForms[j], date: updatedRow.date };
+                      }
+                    }
                     setBulkForms(newForms);
                   }}
                   customers={customers}
@@ -914,7 +938,7 @@ export default function Sales() {
                       if (idx === fields.length - 1) {
                         // Last field - add new row or save
                         if (i === bulkForms.length - 1) {
-                          setBulkForms([...bulkForms, { ...emptyForm, date: todayStr() }]);
+                          setBulkForms([...bulkForms, { ...emptyForm, date: bulkForms[0]?.date || todayStr() }]);
                         }
                       }
                     }
@@ -925,7 +949,7 @@ export default function Sales() {
           </div>
           <div className="flex gap-3 mt-3 pt-3 border-t border-slate-200">
             <button
-              onClick={() => setBulkForms([...bulkForms, { ...emptyForm, date: todayStr() }])}
+              onClick={() => setBulkForms([...bulkForms, { ...emptyForm, date: bulkForms[0]?.date || todayStr() }])}
               className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-1.5 rounded text-sm font-medium flex items-center gap-1"
             >
               <Plus size={14} /> Add Row
@@ -1280,13 +1304,67 @@ function SaleFormFields({
   isEditing?: boolean;
   onKeyDown?: (e: React.KeyboardEvent, field: keyof SaleForm) => void;
 }) {
-  const sp = parseFloat(form.sellingPrice || '0');
-  const cp = parseFloat(form.costPrice || '0');
-  const comm = parseFloat(form.commission || '0');
-  const profit = sp - cp - comm;
+  const profit = parseFloat(form.profit || '0');
 
   const update = (field: keyof SaleForm, value: string | boolean) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const filled = (v: string) => v !== undefined && v !== null && v.trim() !== '';
+
+  // Any 2 of {Selling Price, Cost Price, Profit} filled in auto-fills the 3rd.
+  // Whichever box you type into yourself always wins - this only ever
+  // recomputes one of the OTHER two boxes, never the one just typed into.
+  const handleSPChange = (value: string) => {
+    const spNum = parseFloat(value || '0');
+    setForm((prev) => {
+      if (filled(prev.costPrice)) {
+        return { ...prev, sellingPrice: value, profit: String(spNum - parseFloat(prev.costPrice)) };
+      } else if (filled(prev.profit)) {
+        return { ...prev, sellingPrice: value, costPrice: String(spNum - parseFloat(prev.profit)) };
+      }
+      return { ...prev, sellingPrice: value };
+    });
+  };
+
+  const handleCPChange = (value: string) => {
+    const cpNum = parseFloat(value || '0');
+    setForm((prev) => {
+      if (filled(prev.sellingPrice)) {
+        return { ...prev, costPrice: value, profit: String(parseFloat(prev.sellingPrice) - cpNum) };
+      } else if (filled(prev.profit)) {
+        return { ...prev, costPrice: value, sellingPrice: String(cpNum + parseFloat(prev.profit)) };
+      }
+      return { ...prev, costPrice: value };
+    });
+  };
+
+  const handleProfitChange = (value: string) => {
+    const profitNum = parseFloat(value || '0');
+    setForm((prev) => {
+      if (filled(prev.sellingPrice)) {
+        return { ...prev, profit: value, costPrice: String(parseFloat(prev.sellingPrice) - profitNum) };
+      } else if (filled(prev.costPrice)) {
+        return { ...prev, profit: value, sellingPrice: String(parseFloat(prev.costPrice) + profitNum) };
+      }
+      return { ...prev, profit: value };
+    });
+  };
+
+  // Split mode's Selling Price is derived from the 3 mode amounts, same
+  // override rule as SP/CP/Profit above - it stays in sync with whichever
+  // split box you're typing into.
+  const handleSplitChange = (field: 'splitMpesa' | 'splitCash' | 'splitPaybill', value: string) => {
+    setForm((prev) => {
+      const updated = { ...prev, [field]: value };
+      const total = parseFloat(updated.splitMpesa || '0') + parseFloat(updated.splitCash || '0') + parseFloat(updated.splitPaybill || '0');
+      if (filled(prev.costPrice)) {
+        return { ...updated, sellingPrice: String(total), profit: String(total - parseFloat(prev.costPrice)) };
+      } else if (filled(prev.profit)) {
+        return { ...updated, sellingPrice: String(total), costPrice: String(total - parseFloat(prev.profit)) };
+      }
+      return { ...updated, sellingPrice: String(total) };
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent, field: keyof SaleForm) => {
@@ -1524,12 +1602,12 @@ function SaleFormFields({
         </div>
       )}
 
-      {/* Row 2: SP, CP, Commission */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      {/* Row 2: SP, CP, Profit, Commission - any 2 of SP/CP/Profit auto-fill the 3rd */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
         <input
           type="number"
           value={form.sellingPrice}
-          onChange={(e) => update('sellingPrice', e.target.value)}
+          onChange={(e) => handleSPChange(e.target.value)}
           onKeyDown={(e) => handleKeyDown(e, 'sellingPrice')}
           placeholder="SP (Selling Price)"
           className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
@@ -1537,9 +1615,17 @@ function SaleFormFields({
         <input
           type="number"
           value={form.costPrice}
-          onChange={(e) => update('costPrice', e.target.value)}
+          onChange={(e) => handleCPChange(e.target.value)}
           onKeyDown={(e) => handleKeyDown(e, 'costPrice')}
           placeholder="CP (Cost Price)"
+          className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+        />
+        <input
+          type="number"
+          value={form.profit}
+          onChange={(e) => handleProfitChange(e.target.value)}
+          onKeyDown={(e) => handleKeyDown(e, 'profit')}
+          placeholder="Profit (auto)"
           className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
         />
         <input
@@ -1560,6 +1646,7 @@ function SaleFormFields({
           <option value="paybill">From Paybill</option>
         </select>
       </div>
+      <p className="text-xs text-slate-500">Commission is recorded as its own Expense - it does not change this sale's profit.</p>
 
       {/* Split amounts if split mode */}
       {form.mode === 'split' && (
@@ -1567,21 +1654,21 @@ function SaleFormFields({
           <input
             type="number"
             value={form.splitMpesa}
-            onChange={(e) => update('splitMpesa', e.target.value)}
+            onChange={(e) => handleSplitChange('splitMpesa', e.target.value)}
             placeholder="Mpesa"
             className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
           />
           <input
             type="number"
             value={form.splitCash}
-            onChange={(e) => update('splitCash', e.target.value)}
+            onChange={(e) => handleSplitChange('splitCash', e.target.value)}
             placeholder="Cash"
             className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
           />
           <input
             type="number"
             value={form.splitPaybill}
-            onChange={(e) => update('splitPaybill', e.target.value)}
+            onChange={(e) => handleSplitChange('splitPaybill', e.target.value)}
             placeholder="Paybill"
             className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
           />

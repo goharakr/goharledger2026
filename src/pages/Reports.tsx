@@ -233,7 +233,6 @@ export default function Reports() {
     let totalOut = 0;
     let salesTotal = 0;
     let grossProfitTotal = 0;
-    let commissionTotal = 0;
     let expenseTotal = 0;
     let shopExpenseTotal = 0;
     let homeExpenseTotal = 0;
@@ -250,7 +249,6 @@ export default function Reports() {
         if (t.primary_mode !== 'advance') totalIn += t.amount;
         salesTotal += t.selling_price || t.amount;
         grossProfitTotal += saleProfit(t);
-        commissionTotal += t.commission || 0;
       } else if (t.type === 'customer_payment') {
         totalIn += t.amount;
         customerCollectionTotal += t.amount;
@@ -289,7 +287,7 @@ export default function Reports() {
     // profit (see saleProfit()) instead of the full selling price. Cost of
     // Goods is derived backward so it stays consistent with that.
     const grossProfit = grossProfitTotal;
-    const costTotal = salesTotal - commissionTotal - grossProfit;
+    const costTotal = salesTotal - grossProfit;
     // Partner draws are money partners take out of already-earned profit,
     // not a business expense - excluded here to match Dashboard/Profit & Loss.
     const netProfit = grossProfit - shopExpenseTotal - homeExpenseTotal - loanPaymentTotal;

@@ -55,12 +55,9 @@ export function computeWalletBalance(
         });
       }
       // Sales to supplier - does NOT add to cash (it reduces supplier balance)
-      // Commission deduction from respective mode, regardless of primary_mode
-      if (t.commission && t.commission > 0 && t.commission_mode) {
-        if (t.commission_mode === 'mpesa') mpesa -= t.commission;
-        else if (t.commission_mode === 'cash') cash -= t.commission;
-        else if (t.commission_mode === 'paybill') bank -= t.commission;
-      }
+      // Commission is no longer deducted here - it's recorded as its own
+      // Expense transaction (category "commission"), which is deducted
+      // below under the 'expense' branch instead.
     } else if (t.type === 'expense') {
       const isHomeExpenseFromOwnPocket = t.category === 'home_expense' && t.notes?.includes('From Own Pocket');
       // A post-dated cheque hasn't left the bank yet - don't deduct it until

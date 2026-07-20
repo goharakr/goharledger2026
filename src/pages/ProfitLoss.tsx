@@ -93,16 +93,19 @@ export default function ProfitLoss() {
 
     const sales = monthTxns.filter((t) => t.type === 'sale');
     const totalSP = sales.reduce((s, t) => s + (t.selling_price || 0), 0);
-    const totalCommission = sales.reduce((s, t) => s + (t.commission || 0), 0);
-    // A sale with no cost price yet contributes 0 profit (not full selling
-    // price) until the real cost is filled in - see saleProfit(). Cost of
-    // Goods is then derived backward so the waterfall (SP - CP - Commission
-    // = Gross Profit) stays internally consistent.
+    // Commission is its own Expense (category "commission"), not a field on
+    // the sale - see saleProfit(). Cost of Goods is derived backward from the
+    // sale-only gross profit, so the waterfall (SP - CP = Gross Profit) stays
+    // internally consistent.
     const grossProfit = sales.reduce((s, t) => s + saleProfit(t), 0);
-    const totalCP = totalSP - totalCommission - grossProfit;
+    const totalCP = totalSP - grossProfit;
+
+    const totalCommission = monthTxns
+      .filter((t) => t.type === 'expense' && t.category === 'commission')
+      .reduce((s, t) => s + (t.amount || 0), 0);
 
     const shopExpenses = monthTxns
-      .filter((t) => t.type === 'expense' && t.category !== 'home_expense' && t.category !== 'stock' && t.category !== 'supplier_payment')
+      .filter((t) => t.type === 'expense' && t.category !== 'home_expense' && t.category !== 'stock' && t.category !== 'supplier_payment' && t.category !== 'commission')
       .reduce((s, t) => s + t.amount, 0);
 
     const homeExpensesFromShop = monthTxns
@@ -113,7 +116,7 @@ export default function ProfitLoss() {
       .filter((t) => t.type === 'loan_payment')
       .reduce((s, t) => s + t.amount, 0);
 
-    const netProfit = grossProfit - shopExpenses - homeExpensesFromShop - loanPayments;
+    const netProfit = grossProfit - totalCommission - shopExpenses - homeExpensesFromShop - loanPayments;
 
     // Get active rules for this month
     const activeRule = shareRules.find((r) => r.partner_id === 'taher' && r.is_active);

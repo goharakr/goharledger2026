@@ -54,9 +54,13 @@ export function getMonthLabel(dateStr: string): string {
 // to the full selling price. Until the real cost is filled in (via Edit),
 // this sale contributes 0 to every profit total, matching how it's tracked
 // on paper: profit deferred, not assumed to be 100%.
-export function saleProfit(t: { selling_price?: number | null; cost_price?: number | null; commission?: number | null }): number {
+//
+// Commission is NOT subtracted here - it's recorded as its own Expense
+// (category "commission") instead, so it reduces overall profit at the
+// expense stage rather than inside the sale itself.
+export function saleProfit(t: { selling_price?: number | null; cost_price?: number | null }): number {
   if (t.cost_price === null || t.cost_price === undefined) return 0;
-  return (t.selling_price || 0) - t.cost_price - (t.commission || 0);
+  return (t.selling_price || 0) - t.cost_price;
 }
 
 // Flags a sale row that's missing its payment mode, cost price, or selling

@@ -550,14 +550,13 @@ async function fetchReportData() {
     return '-';
   };
 
-  let salesTotal = 0, costTotal = 0, commissionTotal = 0, shopExpenseTotal = 0, homeExpenseTotal = 0;
+  let salesTotal = 0, costTotal = 0, shopExpenseTotal = 0, homeExpenseTotal = 0;
   let partnerDrawTotal = 0, loanPaymentTotal = 0, supplierPaymentTotal = 0, customerCollectionTotal = 0;
 
   (txns || []).forEach((t) => {
     if (t.type === 'sale') {
       salesTotal += t.selling_price || t.amount;
       costTotal += t.cost_price || 0;
-      commissionTotal += t.commission || 0;
     } else if (t.type === 'customer_payment') {
       customerCollectionTotal += t.amount;
     } else if (t.type === 'expense') {
@@ -573,7 +572,7 @@ async function fetchReportData() {
     }
   });
 
-  const grossProfit = salesTotal - costTotal - commissionTotal;
+  const grossProfit = salesTotal - costTotal;
   const netProfit = grossProfit - shopExpenseTotal - homeExpenseTotal - partnerDrawTotal - loanPaymentTotal;
 
   const summaryRows: [string, string][] = [

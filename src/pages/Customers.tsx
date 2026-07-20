@@ -14,6 +14,7 @@ import {
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr } from '../utils/format';
 import { adjustCustomerCredit, adjustCustomerAdvance } from '../utils/balances';
+import { syncCommissionExpense } from '../utils/commissionExpense';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
@@ -426,6 +427,8 @@ export default function Customers() {
     } else {
       await adjustCustomerCredit(selectedCustomer.id, sp);
     }
+
+    await syncCommissionExpense(oldTxn.transaction_id, saleEditForm.date, comm, saleEditForm.commissionMode, user?.username || null);
 
     setEditingSaleId(null);
     setSaleEditForm(emptySaleEdit);

@@ -156,7 +156,6 @@ export default function Dashboard() {
     txns?.forEach((t) => {
       totalSales += t.selling_price || 0;
       profit += saleProfit(t);
-      commission += t.commission || 0;
 
       if (t.primary_mode === 'advance') {
         advanceAmount += t.selling_price || 0;
@@ -173,15 +172,6 @@ export default function Dashboard() {
           else if (sp.mode === 'paybill') paybillAmount += sp.amount;
         });
       }
-
-      // Commission is a separate cash outflow from whichever mode it's paid from,
-      // independent of how the sale itself was settled - deduct it from that
-      // mode's bucket so this breakdown matches the main Cash-in-Hand balance.
-      if (t.commission && t.commission > 0 && t.commission_mode) {
-        if (t.commission_mode === 'cash') cashAmount -= t.commission;
-        else if (t.commission_mode === 'mpesa') mpesaAmount -= t.commission;
-        else if (t.commission_mode === 'paybill') paybillAmount -= t.commission;
-      }
     });
 
     // Calculate expenses by mode (NOT including supplier invoices/payments)
@@ -194,6 +184,7 @@ export default function Dashboard() {
       const isHomeExpenseFromOwnPocket = t.category === 'home_expense' && t.notes?.includes('From Own Pocket');
       if (t.type === 'expense' && t.category !== 'stock' && t.category !== 'supplier_payment' && !isHomeExpenseFromOwnPocket) {
         totalExpenses += t.amount || 0;
+        if (t.category === 'commission') commission += t.amount || 0;
         if (!isPendingClear) {
           if (t.primary_mode === 'cash') cashExpenses += t.amount || 0;
           else if (t.primary_mode === 'mpesa') mpesaExpenses += t.amount || 0;

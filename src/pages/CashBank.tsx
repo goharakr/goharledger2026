@@ -180,32 +180,15 @@ export default function CashBank() {
             const s = splitMap.get(t.transaction_id) || [];
             s.forEach((sp) => credit += sp.amount);
           }
-          // Deduct commission from the respective mode
-          if (t.commission && t.commission > 0) {
-            if (t.commission_mode === 'mpesa') credit -= t.commission;
-            else if (t.commission_mode === 'cash') credit -= t.commission;
-            else if (t.commission_mode === 'paybill') credit -= t.commission;
-          }
+          // Commission is no longer deducted here - it's its own Expense
+          // transaction (category "commission"), handled by the 'expense'
+          // branch below.
         } else if (t.primary_mode === mode) {
           credit += t.amount;
-          // Deduct commission if this is the commission mode
-          if (t.commission && t.commission > 0 && t.commission_mode === mode) {
-            debit += t.commission;
-          }
         } else if (t.primary_mode === 'split') {
           const s = splitMap.get(t.transaction_id) || [];
           const sp = s.find((x) => x.mode === mode);
           if (sp) credit += sp.amount;
-          // A split sale's commission can still be paid from a mode that
-          // wasn't part of the split itself - this was previously missed here.
-          if (t.commission && t.commission > 0 && t.commission_mode === mode) {
-            debit += t.commission;
-          }
-        } else {
-          // Sale was in different mode but commission might be in this mode
-          if (t.commission && t.commission > 0 && t.commission_mode === mode) {
-            debit += t.commission;
-          }
         }
       } else if (t.type === 'expense') {
         const isHomeExpenseFromOwnPocket = t.category === 'home_expense' && t.notes?.includes('From Own Pocket');
