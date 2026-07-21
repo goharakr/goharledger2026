@@ -84,6 +84,28 @@ const emptyBulkRow: BulkExpenseRow = {
   transactionFee: '',
 };
 
+interface BulkSupplierPaymentRow {
+  supplierId: string;
+  amount: string;
+  date: string;
+  mode: string;
+  notes: string;
+  isPostDated: boolean;
+  clearsOn: string;
+  transactionFee: string;
+}
+
+const emptyBulkSupplierRow: BulkSupplierPaymentRow = {
+  supplierId: '',
+  amount: '',
+  date: todayStr(),
+  mode: 'cash',
+  notes: '',
+  isPostDated: false,
+  clearsOn: '',
+  transactionFee: '',
+};
+
 export default function Expenses() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
   const { user } = useAuth();
@@ -109,6 +131,9 @@ export default function Expenses() {
   const [showBulk, setShowBulk] = usePersistentState('expenses.showBulk', false);
   const [bulkForms, setBulkForms] = usePersistentState<BulkExpenseRow[]>('expenses.bulkForms', () => Array.from({ length: 10 }, () => ({ ...emptyBulkRow })));
   const [bulkSaving, setBulkSaving] = useState(false);
+  const [showBulkSupplier, setShowBulkSupplier] = usePersistentState('expenses.showBulkSupplier', false);
+  const [bulkSupplierForms, setBulkSupplierForms] = usePersistentState<BulkSupplierPaymentRow[]>('expenses.bulkSupplierForms', () => Array.from({ length: 10 }, () => ({ ...emptyBulkSupplierRow })));
+  const [bulkSupplierSaving, setBulkSupplierSaving] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -371,6 +396,54 @@ export default function Expenses() {
     }
   }
 
+  // Unlike the single "Add Supplier Payment" form (one payment, one supplier
+  // picked at a time), each row here picks its own supplier - for logging
+  // payments to many different suppliers in one sitting.
+  async function handleBulkSupplierSave() {
+    if (bulkSupplierSaving) return;
+    const validForms = bulkSupplierForms
+      .map((f, originalIndex) => ({ f, originalIndex }))
+      .filter(({ f }) => f.supplierId && f.amount && parseFloat(f.amount) > 0);
+    if (validForms.length === 0) return;
+    setBulkSupplierSaving(true);
+    try {
+      const failedRows: number[] = [];
+
+      for (let i = 0; i < validForms.length; i++) {
+        const { f, originalIndex } = validForms[i];
+        const amt = parseFloat(f.amount);
+        const supplier = suppliers.find((s) => s.id === f.supplierId);
+        if (!supplier) { failedRows.push(originalIndex + 1); continue; }
+
+        const { data: newTxn, error } = await insertTransactionWithId('SUP-' + f.date.replace(/-/g, ''), (txnId) => ({
+          transaction_id: txnId,
+          date: f.date,
+          type: 'supplier_payment',
+          primary_mode: f.mode,
+          amount: amt,
+          supplier_id: f.supplierId,
+          description: `Payment to ${supplier.name}`,
+          notes: f.notes || null,
+          clears_on: f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
+          created_by: user?.username || null,
+        }));
+        if (error || !newTxn) { console.error(error); failedRows.push(originalIndex + 1); continue; }
+        await adjustSupplierBalance(f.supplierId, -amt);
+        await insertTransactionFee(f.date, f.mode, f.transactionFee, supplier.name);
+      }
+
+      setBulkSupplierForms(Array.from({ length: 10 }, () => ({ ...emptyBulkSupplierRow, date: todayStr() })));
+      setShowBulkSupplier(false);
+      fetchData();
+      triggerRefresh();
+      if (failedRows.length > 0) {
+        alert(`Row(s) ${failedRows.join(', ')} failed to save and were skipped. The rest were saved successfully.`);
+      }
+    } finally {
+      setBulkSupplierSaving(false);
+    }
+  }
+
   async function handleVoid(id: string, reason: string) {
     const txn = expenses.find((e) => e.id === id);
     if (!txn) return;
@@ -566,6 +639,10 @@ export default function Expenses() {
     setBulkForms([...bulkForms, { ...emptyBulkRow, date: bulkForms[0]?.date || todayStr() }]);
   }
 
+  function addBulkSupplierRow() {
+    setBulkSupplierForms([...bulkSupplierForms, { ...emptyBulkSupplierRow, date: bulkSupplierForms[0]?.date || todayStr() }]);
+  }
+
   return (
     <div className="space-y-4">
       {/* Tabs */}
@@ -597,6 +674,14 @@ export default function Expenses() {
             className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
           >
             <Plus size={16} /> Bulk Entry
+          </button>
+        )}
+        {activeTab === 'suppliers' && (
+          <button
+            onClick={() => { setShowBulkSupplier(true); setBulkSupplierForms(Array.from({ length: 10 }, () => ({ ...emptyBulkSupplierRow, date: todayStr() }))); }}
+            className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Plus size={16} /> Bulk Payments
           </button>
         )}
         {activeTab === 'shop' && (
@@ -1073,6 +1158,170 @@ export default function Expenses() {
               {bulkSaving ? 'Saving...' : 'Save All'}
             </button>
             <button onClick={() => setShowBulk(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
+          </div>
+        </div>
+        </div>
+      )}
+
+      {/* Bulk Payments - Suppliers tab only; each row picks its own supplier, for
+          logging payments to many different suppliers at once */}
+      {showBulkSupplier && activeTab === 'suppliers' && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowBulkSupplier(false); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-3xl max-h-[90vh] overflow-y-auto" data-form-nav>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-slate-800 text-sm">Bulk Payments to Suppliers</h3>
+            <button onClick={() => setShowBulkSupplier(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
+          </div>
+          <div className="space-y-2">
+            {bulkSupplierForms.map((f, i) => (
+              <div key={i} className="border border-slate-200 rounded p-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-slate-500">#{i + 1}</span>
+                  {bulkSupplierForms.length > 1 && (
+                    <button
+                      onClick={() => setBulkSupplierForms(bulkSupplierForms.filter((_, idx) => idx !== i))}
+                      className="text-red-500 hover:text-red-700 text-xs"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                  <select
+                    value={f.supplierId}
+                    onChange={(e) => {
+                      const newForms = [...bulkSupplierForms];
+                      newForms[i] = { ...newForms[i], supplierId: e.target.value };
+                      setBulkSupplierForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  >
+                    <option value="">Supplier</option>
+                    {sortSuppliersByBalance(suppliers).map((s) => <option key={s.id} value={s.id}>{s.name} ({formatKES(s.balance)})</option>)}
+                  </select>
+                  <input
+                    type="number"
+                    value={f.amount}
+                    onChange={(e) => {
+                      const newForms = [...bulkSupplierForms];
+                      newForms[i] = { ...newForms[i], amount: e.target.value };
+                      setBulkSupplierForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                    placeholder="Amount"
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                  <input
+                    type="date"
+                    value={f.date}
+                    onChange={(e) => {
+                      const newForms = [...bulkSupplierForms];
+                      newForms[i] = { ...newForms[i], date: e.target.value };
+                      // Row 1's date drives every other row's date too - each
+                      // row can still be changed individually after that.
+                      if (i === 0) {
+                        for (let j = 1; j < newForms.length; j++) newForms[j] = { ...newForms[j], date: e.target.value };
+                      }
+                      setBulkSupplierForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                  <select
+                    value={f.mode}
+                    onChange={(e) => {
+                      const newForms = [...bulkSupplierForms];
+                      newForms[i] = { ...newForms[i], mode: e.target.value };
+                      setBulkSupplierForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  >
+                    <option value="cash">Cash</option>
+                    <option value="mpesa">Mpesa</option>
+                    <option value="paybill">Paybill</option>
+                  </select>
+                </div>
+                <input
+                  type="text"
+                  value={f.notes}
+                  onChange={(e) => {
+                    const newForms = [...bulkSupplierForms];
+                    newForms[i] = { ...newForms[i], notes: e.target.value };
+                    setBulkSupplierForms(newForms);
+                  }}
+                  onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                  placeholder="Notes (optional)"
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none mb-2"
+                />
+
+                {/* Transaction fee (Mpesa/Paybill only lose money to network fees) */}
+                {(f.mode === 'mpesa' || f.mode === 'paybill') && (
+                  <input
+                    type="number"
+                    value={f.transactionFee}
+                    onChange={(e) => {
+                      const newForms = [...bulkSupplierForms];
+                      newForms[i] = { ...newForms[i], transactionFee: e.target.value };
+                      setBulkSupplierForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                    placeholder="Transaction fee (optional)"
+                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none mb-2"
+                  />
+                )}
+
+                {/* Post-dated cheque (only makes sense for Paybill/Bank) */}
+                {f.mode === 'paybill' && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={f.isPostDated}
+                      onChange={(e) => {
+                        const newForms = [...bulkSupplierForms];
+                        newForms[i] = { ...newForms[i], isPostDated: e.target.checked };
+                        setBulkSupplierForms(newForms);
+                      }}
+                      onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <label className="text-xs text-slate-600">Post-dated cheque</label>
+                    {f.isPostDated && (
+                      <input
+                        type="date"
+                        value={f.clearsOn}
+                        onChange={(e) => {
+                          const newForms = [...bulkSupplierForms];
+                          newForms[i] = { ...newForms[i], clearsOn: e.target.value };
+                          setBulkSupplierForms(newForms);
+                        }}
+                        onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                        className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
+                        placeholder="Clears on"
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-3 mt-3 pt-3 border-t border-slate-200">
+            <button
+              onClick={addBulkSupplierRow}
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-1.5 rounded text-sm font-medium flex items-center gap-1"
+            >
+              <Plus size={14} /> Add Row
+            </button>
+            <button onClick={handleBulkSupplierSave} disabled={bulkSupplierSaving} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm font-medium">
+              {bulkSupplierSaving ? 'Saving...' : 'Save All'}
+            </button>
+            <button onClick={() => setShowBulkSupplier(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
           </div>
         </div>
         </div>
