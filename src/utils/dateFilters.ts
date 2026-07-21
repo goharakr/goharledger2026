@@ -2,9 +2,10 @@
 // mutation, which shifts by the browser's local timezone offset (a bug this
 // codebase has hit before).
 
-export type DatePreset = 'today' | 'yesterday' | 'week' | 'month' | 'last_month' | 'pick_month' | 'custom';
+export type DatePreset = 'all' | 'today' | 'yesterday' | 'week' | 'month' | 'last_month' | 'pick_month' | 'custom';
 
 export const DATE_PRESET_OPTIONS: { value: DatePreset; label: string }[] = [
+  { value: 'all', label: 'All Time' },
   { value: 'today', label: 'Today' },
   { value: 'yesterday', label: 'Yesterday' },
   { value: 'week', label: '1 Week' },
@@ -39,6 +40,10 @@ export function getDatePresetRange(preset: DatePreset, customFrom?: string, cust
   const todayStr = `${y}-${pad(m)}-${pad(d)}`;
 
   switch (preset) {
+    case 'all':
+      // Wide enough to cover every real transaction date without special-casing
+      // "no filter" everywhere a from/to range is expected.
+      return { from: '2000-01-01', to: '2099-12-31' };
     case 'today':
       return { from: todayStr, to: todayStr };
     case 'yesterday': {
