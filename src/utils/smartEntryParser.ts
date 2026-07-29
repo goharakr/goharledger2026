@@ -118,3 +118,58 @@ export function detectCommission(comments: string): CommissionDetection | null {
   if (weak) return { amount: parseKsh(weak[1]), confident: false };
   return null;
 }
+
+// A second paste format seen in practice: a spreadsheet-style table with
+// columns Date ("21/07 - Tue", no year) / ETR Check / Mode / Selling Price /
+// Cost Price / Commission / Profit / KRA Profit / Comments (tab-separated).
+// Distinct from the POS export above - both formats can appear in the same
+// paste, and are parsed independently then merged by the caller.
+const EXCEL_DATE_RE = /(\d{1,2})\/(\d{1,2})\s*-\s*[A-Za-z]{3}/;
+
+export interface ParsedExcelRow {
+  date: string; // ISO yyyy-mm-dd
+  modeStr: string;
+  sellingPrice: number;
+  costPrice: number | null;
+  commission: number;
+  profit: number | null;
+  comments: string;
+}
+
+function looksNumeric(s: string | undefined): boolean {
+  return !!s && /^[\d,]+(\.\d+)?$/.test(s.trim());
+}
+
+// The day's header row repeats the same "DD/MM - Day" text in its own date
+// column, so it matches EXCEL_DATE_RE too - it's told apart from a real data
+// row by its Selling Price cell being the literal header text, not a number.
+export function parseExcelSmartEntryText(raw: string, year: number): ParsedExcelRow[] {
+  const rows: ParsedExcelRow[] = [];
+  for (const line of raw.split('\n')) {
+    const m = line.match(EXCEL_DATE_RE);
+    if (!m) continue;
+    const cols = line.split('\t');
+    if (!looksNumeric(cols[3])) continue;
+
+    const day = m[1].padStart(2, '0');
+    const month = m[2].padStart(2, '0');
+    rows.push({
+      date: `${year}-${month}-${day}`,
+      modeStr: (cols[2] || '').trim(),
+      sellingPrice: parseKsh(cols[3]),
+      costPrice: looksNumeric(cols[4]) ? parseKsh(cols[4]) : null,
+      commission: looksNumeric(cols[5]) ? parseKsh(cols[5]) : 0,
+      profit: looksNumeric(cols[6]) ? parseKsh(cols[6]) : null,
+      comments: (cols[8] || '').trim(),
+    });
+  }
+  return rows;
+}
+
+// A percentage deduction ("LESS 2%") isn't enough information to safely back
+// out the real Commission/Selling Price on its own - this only flags the row
+// for a human to check, it never drives an automatic adjustment.
+export function detectPercentCommission(comments: string): number | null {
+  const m = comments.match(/less\s+([\d.]+)\s*%/i);
+  return m ? parseFloat(m[1]) : null;
+}

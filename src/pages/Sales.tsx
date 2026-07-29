@@ -20,7 +20,7 @@ import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance } from '../utils/balances';
 import { syncCommissionExpense, voidCommissionExpense } from '../utils/commissionExpense';
-import { parseSmartEntryText, parsePayments, detectCommission } from '../utils/smartEntryParser';
+import { parseSmartEntryText, parsePayments, detectCommission, parseExcelSmartEntryText, detectPercentCommission } from '../utils/smartEntryParser';
 import { findBestMatch } from '../utils/fuzzyMatch';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
@@ -652,15 +652,21 @@ export default function Sales() {
     }
   }
 
-  // Turns a paste from an external sales export into preview rows: reverses
-  // any "LESS ### CMSN" commission netted out of the source's own Total,
-  // works out Cash/Mpesa/Paybill/Credit/Split from the Payment Type text,
-  // fuzzy-matches a "Sold To" name against existing customers, and checks
-  // the source's own Sale ID against already-saved sales so a re-paste of
-  // the same rows gets skipped instead of silently duplicated.
+  // Turns a paste from an external sales export into preview rows. Understands
+  // two formats in the same paste, parsed independently then merged:
+  // 1) the POS export (Sale Id/Date-time/Sold To/...) - reverses any
+  //    "LESS ### CMSN" commission netted out of the source's own Total, works
+  //    out Cash/Mpesa/Paybill/Credit/Split from the Payment Type text,
+  //    fuzzy-matches a "Sold To" name against existing customers, and checks
+  //    the source's own Sale ID against already-saved sales so a re-paste of
+  //    the same rows gets skipped instead of silently duplicated.
+  // 2) a spreadsheet-style table (Date "DD/MM - Day"/Mode/Selling
+  //    Price/Cost Price/Commission/Profit/Comments) - assumes the current
+  //    year (the date has none), and is always flagged for a closer look
+  //    since it's newer and less battle-tested than the POS format.
   function handleSmartEntryParse() {
     const parsed = parseSmartEntryText(smartEntryPaste);
-    const preview: SmartPreviewRow[] = parsed.map((r) => {
+    const posPreview: SmartPreviewRow[] = parsed.map((r) => {
       const flags: string[] = [];
       let sellingPrice = r.total;
       let commission = 0;
@@ -741,7 +747,77 @@ export default function Sales() {
         duplicate,
       };
     });
-    setSmartEntryPreview(preview);
+
+    const parsedExcel = parseExcelSmartEntryText(smartEntryPaste, new Date().getFullYear());
+    const excelPreview: SmartPreviewRow[] = parsedExcel.map((r) => {
+      const flags: string[] = ['From the Excel-style paste - please double check.'];
+
+      let mode: SaleMode = 'cash';
+      const modeLower = r.modeStr.toLowerCase();
+      if (modeLower === 'cash' || modeLower === 'mpesa' || modeLower === 'paybill') {
+        mode = modeLower as SaleMode;
+      } else if (!r.modeStr) {
+        mode = 'credit';
+        flags.push('No mode given - defaulted to Credit. Please check and set the correct mode.');
+      } else {
+        flags.push(`Could not recognise mode "${r.modeStr}" - defaulted to Cash.`);
+      }
+
+      // Cost Price and Profit fill each other in when only one is missing -
+      // same 3-way relationship as the regular Sale form.
+      let costPrice = r.costPrice;
+      let profit = r.profit;
+      if (costPrice === null && profit !== null) {
+        costPrice = r.sellingPrice - profit;
+      } else if (profit === null && costPrice !== null) {
+        profit = r.sellingPrice - costPrice;
+      } else if (costPrice === null && profit === null) {
+        costPrice = 0;
+        profit = r.sellingPrice;
+        flags.push('Cost Price not given - profit will show as the full Selling Price until you fill it in.');
+      }
+
+      const pct = detectPercentCommission(r.comments);
+      if (pct !== null) {
+        flags.push(`Comment mentions a ${pct}% deduction - please check Commission and Selling Price are correct.`);
+      }
+      if (r.commission > 0) {
+        flags.push("Doesn't say which wallet paid the commission - Commission Mode needs picking.");
+      }
+
+      // Credit mode still needs a customer to attach to - fuzzy-match off any
+      // name mentioned in the comment, same courtesy as the POS format's Sold To.
+      let customerId = '';
+      let customerMatchName = '';
+      if (mode === 'credit' && r.comments) {
+        const match = findBestMatch(r.comments, customers, (c) => c.name);
+        if (match) {
+          customerId = match.item.id;
+          customerMatchName = match.item.name;
+          flags.push(`Matched a name in the comment to customer "${match.item.name}" - please confirm.`);
+        } else {
+          flags.push('Credit mode but no matching customer found in the comment - pick one or quick-add it.');
+        }
+      }
+
+      return {
+        posId: null,
+        date: r.date,
+        sellingPrice: r.sellingPrice,
+        costPrice: costPrice || 0,
+        profit: profit || 0,
+        commission: r.commission,
+        mode,
+        customerId,
+        customerMatchName,
+        splitMpesa: 0, splitCash: 0, splitPaybill: 0,
+        notes: r.comments,
+        flags,
+        duplicate: false,
+      };
+    });
+
+    setSmartEntryPreview([...posPreview, ...excelPreview]);
   }
 
   function handleAddSmartEntryToBulk() {
