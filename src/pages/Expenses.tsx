@@ -25,6 +25,8 @@ import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
 import { sortSuppliersByBalance } from '../utils/sortEntities';
+import { findBestMatch } from '../utils/fuzzyMatch';
+import { parseExpenseSheetText } from '../utils/expenseSmartEntryParser';
 import type { Transaction, Supplier, LoanTracker, ExpenseCategory } from '../types';
 
 interface ExpenseForm {
@@ -70,6 +72,9 @@ interface BulkExpenseRow {
   isPostDated: boolean;
   clearsOn: string;
   transactionFee: string;
+  // Only set on rows that came from Smart Entry and still have something
+  // worth a second look before saving - never set on a manually-typed row.
+  smartFlags?: string[];
 }
 
 const emptyBulkRow: BulkExpenseRow = {
@@ -94,6 +99,7 @@ interface BulkSupplierPaymentRow {
   isPostDated: boolean;
   clearsOn: string;
   transactionFee: string;
+  smartFlags?: string[];
 }
 
 const emptyBulkSupplierRow: BulkSupplierPaymentRow = {
@@ -106,6 +112,23 @@ const emptyBulkSupplierRow: BulkSupplierPaymentRow = {
   clearsOn: '',
   transactionFee: '',
 };
+
+// A row parsed from a Smart Entry paste, before it's handed off to whichever
+// tab's Bulk Entry actually saves it - Shop/Home/Supplier Bulk Entry each
+// live on their own tab, so one paste's rows get split into these 3 groups.
+interface ExpenseSmartPreviewRow {
+  destination: 'shop' | 'home' | 'supplier';
+  date: string;
+  amount: string;
+  mode: string;
+  category: string;
+  partnerId: string;
+  source: 'shop' | 'own_pocket';
+  supplierId: string;
+  matchName: string;
+  description: string;
+  flags: string[];
+}
 
 export default function Expenses() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
@@ -139,6 +162,9 @@ export default function Expenses() {
   const [quickSupplier, setQuickSupplier] = useState({ name: '', phone: '', balance: '' });
   // Which Bulk Payments row has its quick-add mini-form open (null = none)
   const [bulkQuickAddSupplierRow, setBulkQuickAddSupplierRow] = useState<number | null>(null);
+  const [showSmartEntry, setShowSmartEntry] = usePersistentState('expenses.showSmartEntry', false);
+  const [smartEntryPaste, setSmartEntryPaste] = usePersistentState('expenses.smartEntryPaste', '');
+  const [smartEntryPreview, setSmartEntryPreview] = usePersistentState<ExpenseSmartPreviewRow[]>('expenses.smartEntryPreview', () => []);
 
   useEffect(() => {
     fetchData();
@@ -278,6 +304,103 @@ export default function Expenses() {
       setBulkQuickAddSupplierRow(null);
       setQuickSupplier({ name: '', phone: '', balance: '' });
     }
+  }
+
+  // Turns a paste of a monthly expenses sheet (Date "1ST"/"2ND".../Mode/Type/
+  // Amount/Comment, no month or year) into preview rows split by destination -
+  // Shop Expenses, Home Expenses, or Supplier Payments each live on their own
+  // tab, so a single paste's rows get grouped for handing off to whichever
+  // tab's Bulk Entry the user is on. Category and Supplier are guessed via a
+  // fuzzy match against what already exists and always flagged for a check -
+  // nothing here is saved until the user reviews it in that tab's Bulk Entry.
+  function handleExpenseSmartEntryParse() {
+    const parsed = parseExpenseSheetText(smartEntryPaste);
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+    const shopCats = expenseCategories.filter((c) => c.name !== 'home_expense' && c.name !== 'stock' && c.name !== 'supplier_payment');
+
+    const preview: ExpenseSmartPreviewRow[] = parsed.map((r) => {
+      const flags: string[] = [];
+      const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(r.day).padStart(2, '0')}`;
+
+      const modeLower = r.mode.toLowerCase();
+      let mode = 'cash';
+      if (modeLower === 'cash' || modeLower === 'mpesa' || modeLower === 'paybill') {
+        mode = modeLower;
+      } else if (r.mode) {
+        flags.push(`Could not recognise mode "${r.mode}" - defaulted to Cash.`);
+      } else {
+        flags.push('No mode given - defaulted to Cash.');
+      }
+
+      if (r.type === 'SUPPLIERS') {
+        let supplierId = '', matchName = '';
+        const match = findBestMatch(r.comment, suppliers, (s) => s.name);
+        if (match) {
+          supplierId = match.item.id;
+          matchName = match.item.name;
+          flags.push(`Matched "${r.comment}" to supplier "${match.item.name}" - please confirm.`);
+        } else {
+          flags.push(`No matching supplier found for "${r.comment}" - please pick one.`);
+        }
+        return { destination: 'supplier', date: dateStr, amount: String(r.amount), mode, category: '', partnerId: '', source: 'shop', supplierId, matchName, description: r.comment, flags };
+      }
+
+      if (r.type === 'HOME EXPENSES') {
+        flags.push('Home expense - defaulted to Taher, From Shop. Please confirm.');
+        return { destination: 'home', date: dateStr, amount: String(r.amount), mode, category: '', partnerId: 'taher', source: 'shop', supplierId: '', matchName: '', description: r.comment, flags };
+      }
+
+      const isTaher = r.type.includes('TAHER');
+      const isAbdulqadir = r.type.includes('ABDUL');
+      if (isTaher || isAbdulqadir) {
+        const partner = isTaher ? 'taher' : 'abdulqadir';
+        flags.push(`Partner draw for ${partner} - please confirm.`);
+        return { destination: 'shop', date: dateStr, amount: String(r.amount), mode, category: partner, partnerId: '', source: 'shop', supplierId: '', matchName: '', description: r.comment, flags };
+      }
+
+      // OUT or an unrecognised Type - treated as a Shop Expense either way.
+      let category = '', matchName = '';
+      const match = findBestMatch(r.comment, shopCats, (c) => c.name.replace(/_/g, ' '));
+      if (match) {
+        category = match.item.name;
+        matchName = match.item.name.replace(/_/g, ' ');
+        flags.push(`Matched "${r.comment}" to category "${matchName}" - please confirm.`);
+      } else {
+        flags.push(`No matching category found for "${r.comment}" - please pick or create one.`);
+      }
+      if (r.type !== 'OUT') flags.push(`Type "${r.type}" not recognised - treated as a Shop Expense.`);
+      return { destination: 'shop', date: dateStr, amount: String(r.amount), mode, category, partnerId: '', source: 'shop', supplierId: '', matchName, description: r.comment, flags };
+    });
+
+    setSmartEntryPreview(preview);
+  }
+
+  // Loads whichever group of parsed rows matches the tab currently open -
+  // Shop/Home/Supplier Bulk Entry each live on their own tab, so this gets
+  // clicked once per tab to load that tab's share of the same paste.
+  function handleAddExpenseSmartEntryToBulk() {
+    if (activeTab === 'shop') {
+      const rows = smartEntryPreview.filter((r) => r.destination === 'shop');
+      if (rows.length === 0) { alert('No Shop Expense rows found in this paste.'); return; }
+      setBulkForms(rows.map((r) => ({ ...emptyBulkRow, date: r.date, amount: r.amount, mode: r.mode, category: r.category, description: r.description, smartFlags: r.flags })));
+      setShowBulk(true);
+    } else if (activeTab === 'home') {
+      const rows = smartEntryPreview.filter((r) => r.destination === 'home');
+      if (rows.length === 0) { alert('No Home Expense rows found in this paste.'); return; }
+      setBulkForms(rows.map((r) => ({ ...emptyBulkRow, date: r.date, amount: r.amount, mode: r.mode, partnerId: r.partnerId, source: r.source, description: r.description, smartFlags: r.flags })));
+      setShowBulk(true);
+    } else if (activeTab === 'suppliers') {
+      const rows = smartEntryPreview.filter((r) => r.destination === 'supplier');
+      if (rows.length === 0) { alert('No Supplier Payment rows found in this paste.'); return; }
+      setBulkSupplierForms(rows.map((r) => ({ ...emptyBulkSupplierRow, date: r.date, amount: r.amount, mode: r.mode, supplierId: r.supplierId, notes: r.description, smartFlags: r.flags })));
+      setShowBulkSupplier(true);
+    } else {
+      alert('Switch to the Shop Expenses, Home Expenses, or Supplier Payments tab first, then click this again to load that group.');
+      return;
+    }
+    setShowSmartEntry(false);
   }
 
   async function handleSaveCategory() {
@@ -762,6 +885,14 @@ export default function Expenses() {
             <Plus size={16} /> Bulk Payments
           </button>
         )}
+        {(activeTab === 'shop' || activeTab === 'home' || activeTab === 'suppliers') && (
+          <button
+            onClick={() => setShowSmartEntry(!showSmartEntry)}
+            className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Plus size={16} /> Smart Entry
+          </button>
+        )}
         {activeTab === 'shop' && (
           <button
             onClick={() => setShowCategoryManager(!showCategoryManager)}
@@ -836,6 +967,85 @@ export default function Expenses() {
           onChange={(p, from, to) => { setDatePreset(p); setCustomFrom(from); setCustomTo(to); }}
         />
       </div>
+
+      {/* Smart Entry - paste a monthly expenses sheet, review the parsed rows
+          here, then hand each group off to its own tab's Bulk Entry (already
+          filled in) for the real editing and Save All. */}
+      {showSmartEntry && (
+        <div
+          className="bg-white rounded-xl border border-slate-200 shadow-lg p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowSmartEntry(false); }}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-slate-800">Smart Entry</h3>
+            <button onClick={() => setShowSmartEntry(false)} className="p-1 hover:bg-slate-100 rounded">
+              <X size={16} />
+            </button>
+          </div>
+          <p className="text-xs text-slate-500 mb-2">
+            Paste rows copied from a monthly expenses sheet (Date/Mode/Type/Amount/Comment). Dates like "1ST"/"2ND" are assumed to be this month ({todayStr().slice(0, 7)}). Nothing is saved until you send each group to its tab's Bulk Entry and press Save All there.
+          </p>
+          <textarea
+            value={smartEntryPaste}
+            onChange={(e) => setSmartEntryPaste(e.target.value)}
+            placeholder="Paste your expenses sheet here..."
+            rows={8}
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+          <div className="flex items-center gap-3 mt-2">
+            <button
+              onClick={handleExpenseSmartEntryParse}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium"
+            >
+              Parse pasted rows
+            </button>
+            <button
+              onClick={() => { setSmartEntryPaste(''); setSmartEntryPreview([]); }}
+              className="text-slate-500 hover:text-slate-700 text-sm"
+            >
+              Clear
+            </button>
+            {smartEntryPreview.length > 0 && (
+              <span className="text-xs text-slate-500 ml-auto">
+                {smartEntryPreview.length} parsed: {smartEntryPreview.filter((r) => r.destination === 'shop').length} Shop, {smartEntryPreview.filter((r) => r.destination === 'home').length} Home, {smartEntryPreview.filter((r) => r.destination === 'supplier').length} Supplier
+              </span>
+            )}
+          </div>
+
+          {smartEntryPreview.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-slate-200 space-y-2 max-h-96 overflow-y-auto">
+              {smartEntryPreview.map((r, i) => (
+                <div key={i} className="border border-amber-300 bg-amber-50 rounded p-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <span className="px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-700 capitalize">{r.destination}</span>
+                    <span className="font-medium text-slate-700">{r.date}</span>
+                    <span className="text-slate-500">KES {formatKES(parseFloat(r.amount))}</span>
+                    <span className="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 capitalize">{r.mode}</span>
+                    {r.matchName && <span className="text-slate-500">→ {r.matchName}</span>}
+                    {r.category && !r.matchName && <span className="text-slate-500">→ {r.category}</span>}
+                  </div>
+                  {r.flags.length > 0 && (
+                    <ul className="text-amber-700 list-disc list-inside space-y-0.5">
+                      {r.flags.map((f, fi) => <li key={fi}>{f}</li>)}
+                    </ul>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {smartEntryPreview.length > 0 && (
+            <div className="flex gap-3 mt-3 pt-3 border-t border-slate-200">
+              <button
+                onClick={handleAddExpenseSmartEntryToBulk}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium"
+              >
+                Add to Bulk Entry ({activeTab === 'shop' ? smartEntryPreview.filter((r) => r.destination === 'shop').length : activeTab === 'home' ? smartEntryPreview.filter((r) => r.destination === 'home').length : activeTab === 'suppliers' ? smartEntryPreview.filter((r) => r.destination === 'supplier').length : 0} on this tab) →
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Add/Edit Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showAdd && (
@@ -1098,7 +1308,7 @@ export default function Expenses() {
           </div>
           <div className="space-y-2">
             {bulkForms.map((f, i) => (
-              <div key={i} className="border border-slate-200 rounded p-2">
+              <div key={i} className={`border rounded p-2 ${f.smartFlags?.length ? 'border-2 border-amber-300 bg-amber-50' : 'border-slate-200'}`}>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs text-slate-500">#{i + 1}</span>
                   {bulkForms.length > 1 && (
@@ -1110,6 +1320,11 @@ export default function Expenses() {
                     </button>
                   )}
                 </div>
+                {f.smartFlags?.length ? (
+                  <ul className="text-amber-700 text-xs list-disc list-inside space-y-0.5 mb-2">
+                    {f.smartFlags.map((flag, fi) => <li key={fi}>{flag}</li>)}
+                  </ul>
+                ) : null}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
                   <input
                     type="date"
@@ -1300,7 +1515,7 @@ export default function Expenses() {
           </div>
           <div className="space-y-2">
             {bulkSupplierForms.map((f, i) => (
-              <div key={i} className="border border-slate-200 rounded p-2">
+              <div key={i} className={`border rounded p-2 ${f.smartFlags?.length ? 'border-2 border-amber-300 bg-amber-50' : 'border-slate-200'}`}>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs text-slate-500">#{i + 1}</span>
                   {bulkSupplierForms.length > 1 && (
@@ -1312,6 +1527,11 @@ export default function Expenses() {
                     </button>
                   )}
                 </div>
+                {f.smartFlags?.length ? (
+                  <ul className="text-amber-700 text-xs list-disc list-inside space-y-0.5 mb-2">
+                    {f.smartFlags.map((flag, fi) => <li key={fi}>{flag}</li>)}
+                  </ul>
+                ) : null}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
                   <div className="flex gap-1">
                     <select
