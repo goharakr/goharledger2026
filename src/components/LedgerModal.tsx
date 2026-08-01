@@ -39,7 +39,7 @@ export default function LedgerModal({
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [editingEntry, setEditingEntry] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ amount: '', notes: '' });
+  const [editForm, setEditForm] = useState({ date: '', amount: '', notes: '' });
 
   useEffect(() => {
     if (open) {
@@ -198,6 +198,7 @@ export default function LedgerModal({
   function startEdit(txn: Transaction) {
     setEditingEntry(txn.id);
     setEditForm({
+      date: txn.date,
       amount: String(txn.amount || ''),
       notes: txn.notes || '',
     });
@@ -213,6 +214,10 @@ export default function LedgerModal({
       alert('Enter a valid amount greater than 0');
       return;
     }
+    if (!editForm.date) {
+      alert('Pick a date');
+      return;
+    }
     if (txn.type === 'sale' && txn.primary_mode === 'split') {
       alert('Split-mode sales can\'t have their amount edited here - void and re-enter it instead.');
       return;
@@ -220,6 +225,7 @@ export default function LedgerModal({
     const delta = newAmount - (txn.amount || 0);
 
     const updatePayload: Record<string, unknown> = {
+      date: editForm.date,
       amount: newAmount,
       notes: editForm.notes || null,
       edited_at: new Date().toISOString(),
@@ -380,7 +386,18 @@ export default function LedgerModal({
               <tbody className="divide-y divide-slate-100">
                 {entries.map((e) => (
                   <tr key={e.id} className={`hover:bg-slate-50 transition-colors ${isSaleIncomplete(e) ? 'bg-green-50' : ''}`} title={isSaleIncomplete(e) ? 'Missing payment mode, cost price, or selling price' : undefined}>
-                    <td className="px-3 py-2 text-slate-600">{formatDate(e.date)}</td>
+                    {editingEntry === e.id ? (
+                      <td className="px-3 py-2">
+                        <input
+                          type="date"
+                          value={editForm.date}
+                          onChange={(ev) => setEditForm({ ...editForm, date: ev.target.value })}
+                          className="border border-slate-300 rounded px-2 py-1 text-sm"
+                        />
+                      </td>
+                    ) : (
+                      <td className="px-3 py-2 text-slate-600">{formatDate(e.date)}</td>
+                    )}
                     <td className="px-3 py-2 text-slate-500 text-xs">{e.transaction_id}</td>
                     <td className="px-3 py-2">
                       <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 capitalize">
