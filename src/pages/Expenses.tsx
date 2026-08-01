@@ -165,9 +165,15 @@ export default function Expenses() {
   const [showSmartEntry, setShowSmartEntry] = usePersistentState('expenses.showSmartEntry', false);
   const [smartEntryPaste, setSmartEntryPaste] = usePersistentState('expenses.smartEntryPaste', '');
   const [smartEntryPreview, setSmartEntryPreview] = usePersistentState<ExpenseSmartPreviewRow[]>('expenses.smartEntryPreview', () => []);
+  // Which month/year to assume for Smart Entry dates that have no month in
+  // them ("1ST"/"2ND"...) - defaults to the current month, but is editable so
+  // pasting an older sheet after the month has moved on doesn't misdate everything.
+  const [smartEntryMonth, setSmartEntryMonth] = usePersistentState('expenses.smartEntryMonth', () => todayStr().slice(0, 7));
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchData();
+    setSelectedIds(new Set());
   }, [activeTab, refreshKey]);
 
   async function fetchData() {
@@ -315,9 +321,9 @@ export default function Expenses() {
   // nothing here is saved until the user reviews it in that tab's Bulk Entry.
   function handleExpenseSmartEntryParse() {
     const parsed = parseExpenseSheetText(smartEntryPaste);
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth() + 1;
+    const [yearStr, monthStr] = smartEntryMonth.split('-');
+    const year = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10);
     const shopCats = expenseCategories.filter((c) => c.name !== 'home_expense' && c.name !== 'stock' && c.name !== 'supplier_payment');
 
     const preview: ExpenseSmartPreviewRow[] = parsed.map((r) => {
@@ -658,9 +664,12 @@ export default function Expenses() {
     }
   }
 
-  async function handleVoid(id: string, reason: string) {
+  // Reverses whatever balance this entry affected and marks it void - shared
+  // by the single Void button and Bulk Delete, which just calls this once per
+  // selected row and does the fetch/refresh a single time at the end.
+  async function voidOne(id: string, reason: string) {
     const txn = expenses.find((e) => e.id === id);
-    if (!txn) return;
+    if (!txn) return true;
 
     // Reverse supplier balance - covers a supplier-payment TYPE transaction (paid via
     // the Suppliers tab) as well as a stock/supplier_payment CATEGORY expense
@@ -674,9 +683,31 @@ export default function Expenses() {
     }
 
     const { error } = await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', id);
-    if (error) { alert('Failed to void: ' + error.message); return; }
+    if (error) { console.error(error); return false; }
+    return true;
+  }
+
+  async function handleVoid(id: string, reason: string) {
+    const ok = await voidOne(id, reason);
+    if (!ok) { alert('Failed to void'); return; }
     fetchData();
     triggerRefresh();
+  }
+
+  async function handleBulkVoid() {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Delete ${selectedIds.size} selected entrie(s)? This will reverse any balance changes.`)) return;
+    let failedCount = 0;
+    for (const id of selectedIds) {
+      const ok = await voidOne(id, 'Bulk delete');
+      if (!ok) failedCount++;
+    }
+    setSelectedIds(new Set());
+    fetchData();
+    triggerRefresh();
+    if (failedCount > 0) {
+      alert(`${failedCount} entrie(s) failed to delete. The rest were deleted successfully.`);
+    }
   }
 
   function startEdit(expense: Transaction) {
@@ -996,8 +1027,17 @@ export default function Expenses() {
             </button>
           </div>
           <p className="text-xs text-slate-500 mb-2">
-            Paste rows copied from a monthly expenses sheet (Date/Mode/Type/Amount/Comment). Dates like "1ST"/"2ND" are assumed to be this month ({todayStr().slice(0, 7)}). Nothing is saved until you send each group to its tab's Bulk Entry and press Save All there.
+            Paste rows copied from a monthly expenses sheet (Date/Mode/Type/Amount/Comment). Dates like "1ST"/"2ND" have no month in them - pick which month this paste is for below. Nothing is saved until you send each group to its tab's Bulk Entry and press Save All there.
           </p>
+          <div className="mb-2">
+            <label className="block text-xs font-medium text-slate-600 mb-1">Which month is this for?</label>
+            <input
+              type="month"
+              value={smartEntryMonth}
+              onChange={(e) => setSmartEntryMonth(e.target.value)}
+              className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+            />
+          </div>
           <textarea
             value={smartEntryPaste}
             onChange={(e) => setSmartEntryPaste(e.target.value)}
@@ -1767,6 +1807,22 @@ export default function Expenses() {
         </div>
       )}
 
+      {/* Bulk Delete bar - appears once anything is selected below */}
+      {selectedIds.size > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-center gap-3">
+          <span className="text-sm text-red-700 font-medium">{selectedIds.size} selected</span>
+          <button
+            onClick={handleBulkVoid}
+            className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Trash2 size={14} /> Delete Selected ({selectedIds.size})
+          </button>
+          <button onClick={() => setSelectedIds(new Set())} className="text-slate-500 hover:text-slate-700 text-sm">
+            Clear selection
+          </button>
+        </div>
+      )}
+
       {/* Expenses List */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
         {loading ? (
@@ -1779,27 +1835,46 @@ export default function Expenses() {
               const dayExpenses = grouped.get(date) || [];
               const isExpanded = expandedDates.has(date);
               const dayTotal = dayExpenses.reduce((s, e) => s + e.amount, 0);
+              const dayIds = dayExpenses.map((e) => e.id);
+              const allDaySelected = dayIds.length > 0 && dayIds.every((id) => selectedIds.has(id));
 
               return (
                 <div key={date}>
-                  <button
-                    onClick={() => {
-                      const next = new Set(expandedDates);
-                      if (next.has(date)) next.delete(date); else next.add(date);
-                      setExpandedDates(next);
-                    }}
-                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-slate-50 transition-colors"
-                  >
-                    {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                    <span className="font-medium text-slate-800">{formatDate(date)}</span>
-                    <span className="text-sm text-slate-500 ml-2">{dayExpenses.length} entries</span>
-                    <span className="ml-auto text-sm font-medium text-red-600">KES {formatKES(dayTotal)}</span>
-                  </button>
+                  <div className="w-full px-4 py-3 flex items-center gap-3 hover:bg-slate-50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={allDaySelected}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        const next = new Set(selectedIds);
+                        if (allDaySelected) dayIds.forEach((id) => next.delete(id));
+                        else dayIds.forEach((id) => next.add(id));
+                        setSelectedIds(next);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="rounded border-slate-300 text-red-600 focus:ring-red-500"
+                      title="Select all entries on this date"
+                    />
+                    <button
+                      onClick={() => {
+                        const next = new Set(expandedDates);
+                        if (next.has(date)) next.delete(date); else next.add(date);
+                        setExpandedDates(next);
+                      }}
+                      className="flex-1 flex items-center gap-3 text-left"
+                    >
+                      {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      <span className="font-medium text-slate-800">{formatDate(date)}</span>
+                      <span className="text-sm text-slate-500 ml-2">{dayExpenses.length} entries</span>
+                      <span className="ml-auto text-sm font-medium text-red-600">KES {formatKES(dayTotal)}</span>
+                    </button>
+                  </div>
                   {isExpanded && (
                     <div className="bg-slate-50 overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="text-left text-xs text-slate-500 border-b border-slate-200">
+                            <th className="px-4 py-2"></th>
                             <th className="px-4 py-2">ID</th>
                             <th className="px-4 py-2">Category</th>
                             <th className="px-4 py-2">Description</th>
@@ -1811,6 +1886,18 @@ export default function Expenses() {
                         <tbody className="divide-y divide-slate-100">
                           {dayExpenses.map((exp) => (
                             <tr key={exp.id} className="hover:bg-white transition-colors">
+                              <td className="px-4 py-2">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIds.has(exp.id)}
+                                  onChange={(e) => {
+                                    const next = new Set(selectedIds);
+                                    if (e.target.checked) next.add(exp.id); else next.delete(exp.id);
+                                    setSelectedIds(next);
+                                  }}
+                                  className="rounded border-slate-300 text-red-600 focus:ring-red-500"
+                                />
+                              </td>
                               <td className="px-4 py-2 font-mono text-xs text-slate-500">{exp.transaction_id}</td>
                               <td className="px-4 py-2">
                                 <span className={`text-xs px-2 py-0.5 rounded-full ${
