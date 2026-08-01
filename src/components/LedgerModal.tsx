@@ -38,12 +38,16 @@ export default function LedgerModal({
   const [dateFilter, setDateFilter] = useState<DateFilterType>('today');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [categoryFilter, setCategoryFilter] = useState('all');
   const [editingEntry, setEditingEntry] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ date: '', amount: '', notes: '' });
 
   useEffect(() => {
     if (open) {
       updateDateRange('today');
+      setTypeFilter('all');
+      setCategoryFilter('all');
     }
   }, [open]);
 
@@ -117,6 +121,16 @@ export default function LedgerModal({
     setSuppliers(suppData || []);
     setLoading(false);
   }
+
+  const availableTypes = Array.from(new Set(entries.map((e) => e.type))).sort();
+  const availableCategories = Array.from(
+    new Set(entries.filter((e) => e.category).map((e) => e.category as string))
+  ).sort();
+  const filteredEntries = entries.filter(
+    (e) =>
+      (typeFilter === 'all' || e.type === typeFilter) &&
+      (categoryFilter === 'all' || e.category === categoryFilter)
+  );
 
   function getEntityName(txn: Transaction): string {
     if (txn.customer_id) {
@@ -280,7 +294,7 @@ export default function LedgerModal({
 
   function exportCSV() {
     const headers = ['Date', 'ID', 'Type', 'Description', 'Mode', 'Amount', 'Created By'];
-    const rows = entries.map((e) => [
+    const rows = filteredEntries.map((e) => [
       e.date,
       e.transaction_id,
       e.type,
@@ -361,12 +375,38 @@ export default function LedgerModal({
           >
             Apply
           </button>
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none capitalize"
+          >
+            <option value="all">All Types</option>
+            {availableTypes.map((t) => (
+              <option key={t} value={t} className="capitalize">
+                {t.replace(/_/g, ' ')}
+              </option>
+            ))}
+          </select>
+          {availableCategories.length > 0 && (
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none capitalize"
+            >
+              <option value="all">All Categories</option>
+              {availableCategories.map((c) => (
+                <option key={c} value={c} className="capitalize">
+                  {c.replace(/_/g, ' ')}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         <div className="flex-1 overflow-auto p-4">
           {loading ? (
             <div className="text-center text-slate-400 py-8">Loading...</div>
-          ) : entries.length === 0 ? (
+          ) : filteredEntries.length === 0 ? (
             <div className="text-center text-slate-400 py-8">No entries found</div>
           ) : (
             <table className="w-full text-sm">
@@ -384,7 +424,7 @@ export default function LedgerModal({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {entries.map((e) => (
+                {filteredEntries.map((e) => (
                   <tr key={e.id} className={`hover:bg-slate-50 transition-colors ${isSaleIncomplete(e) ? 'bg-green-50' : ''}`} title={isSaleIncomplete(e) ? 'Missing payment mode, cost price, or selling price' : undefined}>
                     {editingEntry === e.id ? (
                       <td className="px-3 py-2">
@@ -475,9 +515,9 @@ export default function LedgerModal({
 
         <div className="p-4 border-t border-slate-200 bg-slate-50">
           <div className="flex items-center justify-between text-sm">
-            <span className="text-slate-500">Total: {entries.length} entries</span>
+            <span className="text-slate-500">Total: {filteredEntries.length} entries</span>
             <span className="font-medium text-slate-800">
-              Sum: KES {formatKES(entries.reduce((sum, e) => sum + (e.amount || 0), 0))}
+              Sum: KES {formatKES(filteredEntries.reduce((sum, e) => sum + (e.amount || 0), 0))}
             </span>
           </div>
         </div>
