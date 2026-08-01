@@ -1862,8 +1862,18 @@ export default function Expenses() {
       <LedgerModal
         open={showLedger}
         onClose={() => setShowLedger(false)}
-        title="Expenses Ledger"
-        filterTypes={['expense', 'partner_draw']}
+        title={
+          activeTab === 'suppliers' ? 'Supplier Payments Ledger' :
+          activeTab === 'partners' ? 'Partner Draws Ledger' :
+          activeTab === 'loans' ? 'Loan Payments Ledger' :
+          'Expenses Ledger'
+        }
+        filterTypes={
+          activeTab === 'suppliers' ? ['supplier_invoice', 'supplier_payment'] :
+          activeTab === 'partners' ? ['partner_draw'] :
+          activeTab === 'loans' ? ['loan_payment'] :
+          ['expense', 'partner_draw']
+        }
       />
     </div>
   );
