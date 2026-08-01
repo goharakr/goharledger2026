@@ -114,6 +114,7 @@ export default function Suppliers() {
   const [invoiceForm, setInvoiceForm] = usePersistentState<InvoiceForm>('suppliers.invoiceForm', emptyInvoice);
   const [paymentForm, setPaymentForm] = usePersistentState<PaymentForm>('suppliers.paymentForm', emptyPayment);
   const [search, setSearch] = usePersistentState('suppliers.search', '');
+  const [listSort, setListSort] = usePersistentState<'balance' | 'name'>('suppliers.listSort', 'balance');
   const [editingId, setEditingId] = usePersistentState<string | null>('suppliers.editingId', null);
   const [showLedger, setShowLedger] = useState(false);
   const [showBulkPayment, setShowBulkPayment] = usePersistentState('suppliers.showBulkPayment', false);
@@ -460,10 +461,16 @@ export default function Suppliers() {
     return { invoiced, paid };
   }
 
-  const filteredSuppliers = sortSuppliersByBalance(suppliers.filter((s) =>
-    s.name.toLowerCase().includes(search.toLowerCase()) ||
-    (s.phone || '').includes(search)
-  ));
+  const filteredSuppliers = suppliers
+    .filter((s) => s.name.toLowerCase().includes(search.toLowerCase()) || (s.phone || '').includes(search))
+    .slice()
+    .sort((a, b) =>
+      listSort === 'balance'
+        ? Math.abs(b.balance || 0) - Math.abs(a.balance || 0)
+        : a.name.localeCompare(b.name)
+    );
+
+  const totalOwedToSuppliers = suppliers.reduce((sum, s) => sum + Math.max(s.balance || 0, 0), 0);
 
   function addBulkPaymentRow() {
     setBulkPaymentForms([...bulkPaymentForms, { ...emptyBulkPaymentRow, date: bulkPaymentForms[0]?.date || todayStr() }]);
@@ -473,37 +480,53 @@ export default function Suppliers() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          onClick={() => { setShowAdd(true); setEditingId(null); setForm(emptySupplier); }}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
-        >
-          <Plus size={16} /> Add Supplier
-        </button>
-        <button
-          onClick={() => { setShowBulkPayment(true); setBulkPaymentForms(Array.from({ length: 10 }, () => ({ ...emptyBulkPaymentRow, date: todayStr() }))); }}
-          className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
-        >
-          <Plus size={16} /> Bulk Payments
-        </button>
-        <button
-          onClick={() => setShowLedger(true)}
-          className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
-        >
-          <BookOpen size={16} /> View Ledger
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => { setShowAdd(true); setEditingId(null); setForm(emptySupplier); }}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Plus size={16} /> Add Supplier
+          </button>
+          <button
+            onClick={() => { setShowBulkPayment(true); setBulkPaymentForms(Array.from({ length: 10 }, () => ({ ...emptyBulkPaymentRow, date: todayStr() }))); }}
+            className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Plus size={16} /> Bulk Payments
+          </button>
+          <button
+            onClick={() => setShowLedger(true)}
+            className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <BookOpen size={16} /> View Ledger
+          </button>
+        </div>
+        <div className="bg-red-50 border border-red-100 rounded-lg px-3 py-2 text-sm">
+          <span className="text-red-600">Total Owed to Suppliers: </span>
+          <span className="font-semibold text-red-700">KES {formatKES(totalOwedToSuppliers)}</span>
+        </div>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input
-          type="text"
-          placeholder="Search suppliers..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-        />
+      {/* Search + Sort */}
+      <div className="flex flex-wrap gap-2">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Search suppliers..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+        </div>
+        <select
+          value={listSort}
+          onChange={(e) => setListSort(e.target.value as 'balance' | 'name')}
+          className="border border-slate-300 rounded-lg text-sm px-2 py-2 focus:ring-2 focus:ring-emerald-500 outline-none"
+        >
+          <option value="balance">Highest Balance First</option>
+          <option value="name">Name (A-Z)</option>
+        </select>
       </div>
 
       {/* Add/Edit Supplier Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}

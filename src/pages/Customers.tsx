@@ -24,7 +24,6 @@ import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
-import { sortCustomersByBalance } from '../utils/sortEntities';
 import type { Customer, Transaction } from '../types';
 
 interface CustomerForm {
@@ -94,6 +93,7 @@ export default function Customers() {
   const [form, setForm] = usePersistentState<CustomerForm>('customers.form', emptyCustomer);
   const [paymentForm, setPaymentForm] = usePersistentState<PaymentForm>('customers.paymentForm', emptyPayment);
   const [search, setSearch] = usePersistentState('customers.search', '');
+  const [listSort, setListSort] = usePersistentState<'balance' | 'name'>('customers.listSort', 'balance');
   const [showLedger, setShowLedger] = useState(false);
   const [editingSaleId, setEditingSaleId] = usePersistentState<string | null>('customers.editingSaleId', null);
   const [saleEditForm, setSaleEditForm] = usePersistentState<SaleEditForm>('customers.saleEditForm', emptySaleEdit);
@@ -491,38 +491,68 @@ export default function Customers() {
     refreshCustomerData();
   }
 
-  const filteredCustomers = sortCustomersByBalance(customers.filter((c) =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    (c.phone || '').includes(search)
-  ));
+  const filteredCustomers = customers
+    .filter((c) => c.name.toLowerCase().includes(search.toLowerCase()) || (c.phone || '').includes(search))
+    .slice()
+    .sort((a, b) =>
+      listSort === 'balance'
+        ? (Math.abs(b.credit_balance || 0) + Math.abs(b.advance_balance || 0)) -
+          (Math.abs(a.credit_balance || 0) + Math.abs(a.advance_balance || 0))
+        : a.name.localeCompare(b.name)
+    );
+
+  const totalCustomersOweMe = customers.reduce((sum, c) => sum + Math.max(c.credit_balance || 0, 0), 0);
+  const totalIOweCustomers = customers.reduce((sum, c) => sum + Math.max(c.advance_balance || 0, 0), 0);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          onClick={() => { setShowAdd(true); setForm(emptyCustomer); }}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
-        >
-          <Plus size={16} /> Add Customer
-        </button>
-        <button
-          onClick={() => setShowLedger(true)}
-          className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
-        >
-          <BookOpen size={16} /> View Ledger
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => { setShowAdd(true); setForm(emptyCustomer); }}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Plus size={16} /> Add Customer
+          </button>
+          <button
+            onClick={() => setShowLedger(true)}
+            className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <BookOpen size={16} /> View Ledger
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <div className="bg-red-50 border border-red-100 rounded-lg px-3 py-2 text-sm">
+            <span className="text-red-600">Customers Owe Me: </span>
+            <span className="font-semibold text-red-700">KES {formatKES(totalCustomersOweMe)}</span>
+          </div>
+          <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 text-sm">
+            <span className="text-emerald-600">I Owe Customers: </span>
+            <span className="font-semibold text-emerald-700">KES {formatKES(totalIOweCustomers)}</span>
+          </div>
+        </div>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input
-          type="text"
-          placeholder="Search customers..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-        />
+      {/* Search + Sort */}
+      <div className="flex flex-wrap gap-2">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Search customers..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+        </div>
+        <select
+          value={listSort}
+          onChange={(e) => setListSort(e.target.value as 'balance' | 'name')}
+          className="border border-slate-300 rounded-lg text-sm px-2 py-2 focus:ring-2 focus:ring-emerald-500 outline-none"
+        >
+          <option value="balance">Highest Balance First</option>
+          <option value="name">Name (A-Z)</option>
+        </select>
       </div>
 
       {/* Add Customer Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
