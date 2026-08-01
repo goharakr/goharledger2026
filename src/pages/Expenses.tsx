@@ -609,6 +609,7 @@ export default function Expenses() {
     setBulkSupplierSaving(true);
     try {
       const failedRows: number[] = [];
+      const savedDates = new Set<string>();
 
       for (let i = 0; i < validForms.length; i++) {
         const { f, originalIndex } = validForms[i];
@@ -629,12 +630,24 @@ export default function Expenses() {
           created_by: user?.username || null,
         }));
         if (error || !newTxn) { console.error(error); failedRows.push(originalIndex + 1); continue; }
+        savedDates.add(f.date);
         await adjustSupplierBalance(f.supplierId, -amt);
         await insertTransactionFee(f.date, f.mode, f.transactionFee, supplier.name);
       }
 
       setBulkSupplierForms(Array.from({ length: 10 }, () => ({ ...emptyBulkSupplierRow, date: todayStr() })));
       setShowBulkSupplier(false);
+      // Make what was just saved immediately visible - not buried under a
+      // collapsed date row, or invisible because the date filter doesn't
+      // happen to cover it.
+      if (savedDates.size > 0) {
+        const nextExpanded = new Set(expandedDates);
+        savedDates.forEach((d) => nextExpanded.add(d));
+        setExpandedDates(nextExpanded);
+        setDatePreset('all');
+        setCustomFrom('');
+        setCustomTo('');
+      }
       fetchData();
       triggerRefresh();
       if (failedRows.length > 0) {
