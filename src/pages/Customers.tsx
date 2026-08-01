@@ -12,7 +12,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, todayStr } from '../utils/format';
+import { formatKES, formatDate, formatTime, todayStr } from '../utils/format';
 import { adjustCustomerCredit, adjustCustomerAdvance } from '../utils/balances';
 import { syncCommissionExpense } from '../utils/commissionExpense';
 import { insertTransactionWithId } from '../utils/transactionId';
@@ -837,7 +837,10 @@ export default function Customers() {
                       getCustomerTransactions(selectedCustomer.id).map((t) => (
                         <Fragment key={t.id}>
                         <tr className="hover:bg-slate-50 transition-colors">
-                          <td className="px-3 py-2 text-slate-600">{formatDate(t.date)}</td>
+                          <td className="px-3 py-2 text-slate-600">
+                            {formatDate(t.date)}
+                            <span className="block text-xs text-slate-400">{formatTime(t.created_at)}</span>
+                          </td>
                           <td className="px-3 py-2">
                             <span className={`text-xs px-2 py-0.5 rounded-full ${
                               t.type === 'sale' && t.primary_mode === 'credit' ? 'bg-red-100 text-red-700' :

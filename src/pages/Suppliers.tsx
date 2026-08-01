@@ -10,7 +10,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, todayStr, isSaleIncomplete } from '../utils/format';
+import { formatKES, formatDate, formatTime, todayStr, isSaleIncomplete } from '../utils/format';
 import { adjustSupplierBalance } from '../utils/balances';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
@@ -420,6 +420,46 @@ export default function Suppliers() {
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }
 
+  // A payment or a sale (cost price paid straight to the supplier) reduces
+  // what's owed - everything else (invoices, opening balance) increases it.
+  // Mirrors the sign the amount column already uses below.
+  function supplierTxnAmount(t: Transaction): number {
+    return t.type === 'sale' ? (t.selling_price ?? t.amount ?? 0) : (t.amount ?? 0);
+  }
+  function supplierTxnSign(t: Transaction): 1 | -1 {
+    return t.type === 'supplier_payment' || t.type === 'sale' ? -1 : 1;
+  }
+
+  // Running balance after each transaction, computed over the supplier's full
+  // history (not just what the date filter currently shows) so it always
+  // reflects the true balance at that point in time.
+  function getSupplierRunningBalances(supplierId: string): Map<string, number> {
+    const all = transactions
+      .filter((t) => t.supplier_id === supplierId)
+      .slice()
+      .sort((a, b) => {
+        const d = new Date(a.date).getTime() - new Date(b.date).getTime();
+        if (d !== 0) return d;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+    const map = new Map<string, number>();
+    let running = 0;
+    for (const t of all) {
+      running += supplierTxnSign(t) * supplierTxnAmount(t);
+      map.set(t.id, running);
+    }
+    return map;
+  }
+
+  function getSupplierTotals(supplierId: string) {
+    const all = transactions.filter((t) => t.supplier_id === supplierId);
+    const invoiced = all.filter((t) => t.type === 'supplier_invoice').reduce((s, t) => s + (t.amount || 0), 0);
+    const paid = all
+      .filter((t) => t.type === 'supplier_payment' || t.type === 'sale')
+      .reduce((s, t) => s + supplierTxnAmount(t), 0);
+    return { invoiced, paid };
+  }
+
   const filteredSuppliers = sortSuppliersByBalance(suppliers.filter((s) =>
     s.name.toLowerCase().includes(search.toLowerCase()) ||
     (s.phone || '').includes(search)
@@ -428,6 +468,8 @@ export default function Suppliers() {
   function addBulkPaymentRow() {
     setBulkPaymentForms([...bulkPaymentForms, { ...emptyBulkPaymentRow, date: bulkPaymentForms[0]?.date || todayStr() }]);
   }
+
+  const supplierRunningBalances = selectedSupplier ? getSupplierRunningBalances(selectedSupplier.id) : new Map<string, number>();
 
   return (
     <div className="space-y-4">
@@ -753,14 +795,28 @@ export default function Suppliers() {
                 </div>
               </div>
 
-              {/* Balance */}
-              <div className={`rounded-lg p-4 border mb-4 ${(selectedSupplier.balance || 0) < 0 ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
-                <p className={`text-sm ${(selectedSupplier.balance || 0) < 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                  {(selectedSupplier.balance || 0) < 0 ? 'Supplier Owes You (Credit)' : 'Balance Owed'}
-                </p>
-                <p className={`text-2xl font-bold ${(selectedSupplier.balance || 0) < 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                  KES {formatKES(Math.abs(selectedSupplier.balance || 0))}
-                </p>
+              {/* Balance + Totals */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                <div className={`rounded-lg p-4 border ${(selectedSupplier.balance || 0) < 0 ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
+                  <p className={`text-sm ${(selectedSupplier.balance || 0) < 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {(selectedSupplier.balance || 0) < 0 ? 'Supplier Owes You (Credit)' : 'Balance Owed'}
+                  </p>
+                  <p className={`text-2xl font-bold ${(selectedSupplier.balance || 0) < 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                    KES {formatKES(Math.abs(selectedSupplier.balance || 0))}
+                  </p>
+                </div>
+                <div className="rounded-lg p-4 border bg-amber-50 border-amber-100">
+                  <p className="text-sm text-amber-600">Total Invoiced</p>
+                  <p className="text-2xl font-bold text-amber-700">
+                    KES {formatKES(getSupplierTotals(selectedSupplier.id).invoiced)}
+                  </p>
+                </div>
+                <div className="rounded-lg p-4 border bg-slate-50 border-slate-200">
+                  <p className="text-sm text-slate-600">Total Paid</p>
+                  <p className="text-2xl font-bold text-slate-700">
+                    KES {formatKES(getSupplierTotals(selectedSupplier.id).paid)}
+                  </p>
+                </div>
               </div>
 
               {/* Transaction History */}
@@ -781,16 +837,22 @@ export default function Suppliers() {
                       <th className="px-3 py-2">Type</th>
                       <th className="px-3 py-2">Description</th>
                       <th className="px-3 py-2 text-right">Amount</th>
+                      <th className="px-3 py-2 text-right">Balance</th>
                       <th className="px-3 py-2 text-center">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {getSupplierTransactions(selectedSupplier.id).length === 0 ? (
-                      <tr><td colSpan={5} className="px-3 py-4 text-center text-slate-400 text-xs">No transactions</td></tr>
+                      <tr><td colSpan={6} className="px-3 py-4 text-center text-slate-400 text-xs">No transactions</td></tr>
                     ) : (
-                      getSupplierTransactions(selectedSupplier.id).map((t) => (
+                      getSupplierTransactions(selectedSupplier.id).map((t) => {
+                        const runningBalance = supplierRunningBalances.get(t.id) ?? 0;
+                        return (
                         <tr key={t.id} className={`hover:bg-slate-50 transition-colors ${isSaleIncomplete(t) ? 'bg-green-50' : ''}`} title={isSaleIncomplete(t) ? 'Missing payment mode, cost price, or selling price' : undefined}>
-                          <td className="px-3 py-2 text-slate-600">{formatDate(t.date)}</td>
+                          <td className="px-3 py-2 text-slate-600">
+                            {formatDate(t.date)}
+                            <span className="block text-xs text-slate-400">{formatTime(t.created_at)}</span>
+                          </td>
                           <td className="px-3 py-2">
                             <span className={`text-xs px-2 py-0.5 rounded-full ${
                               t.type === 'expense' ? 'bg-red-100 text-red-700' :
@@ -826,6 +888,9 @@ export default function Suppliers() {
                           }`}>
                             {t.type === 'supplier_payment' || t.type === 'sale' ? '-' : '+'}{formatKES(t.type === 'sale' ? (t.selling_price ?? t.amount) : t.amount)}
                           </td>
+                          <td className="px-3 py-2 text-right text-slate-600">
+                            {formatKES(Math.abs(runningBalance))}
+                          </td>
                           <td className="px-3 py-2 text-center">
                             <button
                               onClick={() => {
@@ -837,7 +902,8 @@ export default function Suppliers() {
                             </button>
                           </td>
                         </tr>
-                      ))
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
