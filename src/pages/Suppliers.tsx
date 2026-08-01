@@ -1005,7 +1005,7 @@ export default function Suppliers() {
         open={showLedger}
         onClose={() => setShowLedger(false)}
         title="Supplier Ledger"
-        filterTypes={['supplier_invoice', 'supplier_payment', 'expense']}
+        filterTypes={['supplier_invoice', 'supplier_payment']}
       />
     </div>
   );
