@@ -192,6 +192,20 @@ export default function Suppliers() {
       return;
     }
 
+    // Linking a supplier to a partner is easy to do by accident (the dropdown
+    // is on every supplier's form) and has real consequences - it lets their
+    // balance be settled using that partner's personal Home Expenses/Profit
+    // Share, so confirm it explicitly, and flag if that partner is already
+    // linked elsewhere (normally each partner should only have one).
+    const currentLinkedPartnerId = editingId ? (suppliers.find((s) => s.id === editingId)?.linked_partner_id || '') : '';
+    if (form.linkedPartnerId && form.linkedPartnerId !== currentLinkedPartnerId) {
+      const partnerLabel = form.linkedPartnerId === 'abdulqadir' ? 'Abdulqadir' : 'Taher';
+      if (!confirm(`Link "${name}" to ${partnerLabel}? This lets settling this supplier's balance use ${partnerLabel}'s personal Home Expenses Owed / Profit Share.`)) return;
+
+      const otherLinked = suppliers.find((s) => s.linked_partner_id === form.linkedPartnerId && s.id !== editingId);
+      if (otherLinked && !confirm(`${partnerLabel} is already linked to supplier "${otherLinked.name}". Linking "${name}" too means both share the same settlement pool - continue anyway?`)) return;
+    }
+
     const newOpening = parseFloat(form.openingBalance || '0');
 
     if (editingId) {

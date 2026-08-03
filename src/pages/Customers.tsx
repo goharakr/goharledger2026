@@ -175,6 +175,19 @@ export default function Customers() {
       return;
     }
 
+    // Linking a customer to a partner is easy to do by accident (the dropdown
+    // is on every customer's form) and has real consequences - it lets their
+    // balance be settled using that partner's personal Home Expenses/Profit
+    // Share, so confirm it explicitly, and flag if that partner is already
+    // linked elsewhere (normally each partner should only have one).
+    if (form.linkedPartnerId) {
+      const partnerLabel = form.linkedPartnerId === 'abdulqadir' ? 'Abdulqadir' : 'Taher';
+      if (!confirm(`Link "${name}" to ${partnerLabel}? This lets settling this customer's balance use ${partnerLabel}'s personal Home Expenses Owed / Profit Share.`)) return;
+
+      const otherLinked = customers.find((c) => c.linked_partner_id === form.linkedPartnerId);
+      if (otherLinked && !confirm(`${partnerLabel} is already linked to customer "${otherLinked.name}". Linking "${name}" too means both share the same settlement pool - continue anyway?`)) return;
+    }
+
     const openingAdvance = parseFloat(form.advanceBalance || '0');
     const openingCredit = parseFloat(form.openingCredit || '0');
 
@@ -224,6 +237,14 @@ export default function Customers() {
 
   async function handleUpdateCustomer() {
     if (!selectedCustomer || !form.name.trim()) return;
+
+    if (form.linkedPartnerId && form.linkedPartnerId !== (selectedCustomer.linked_partner_id || '')) {
+      const partnerLabel = form.linkedPartnerId === 'abdulqadir' ? 'Abdulqadir' : 'Taher';
+      if (!confirm(`Link "${form.name.trim()}" to ${partnerLabel}? This lets settling this customer's balance use ${partnerLabel}'s personal Home Expenses Owed / Profit Share.`)) return;
+
+      const otherLinked = customers.find((c) => c.linked_partner_id === form.linkedPartnerId && c.id !== selectedCustomer.id);
+      if (otherLinked && !confirm(`${partnerLabel} is already linked to customer "${otherLinked.name}". Linking "${form.name.trim()}" too means both share the same settlement pool - continue anyway?`)) return;
+    }
 
     await supabase.from('customers').update({
       name: form.name.trim(),
