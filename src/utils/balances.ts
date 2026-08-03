@@ -149,6 +149,65 @@ export async function applySettlementSource(mode: SettlementMode, amount: number
   return false;
 }
 
+const CASH_SPLIT_MODES = ['cash', 'mpesa', 'paybill'];
+
+// Edits a payment's amount while keeping any settlement-source splits (Home
+// Expense/Share/cross-balance) untouched - the whole delta is absorbed by the
+// cash/mpesa/paybill portion, since a correction is normally about the real
+// money side, not the settlement decision already made. Refuses (returns
+// ok: false) if the new amount would be less than what's already settled via
+// those non-cash sources - there's no sane automatic fix for that; the caller
+// should tell the user to void and re-enter instead.
+export async function adjustPaymentAmount(
+  txn: { id: string; transaction_id: string; primary_mode: string | null },
+  newAmount: number
+): Promise<{ ok: boolean; error?: string }> {
+  const { data: splits, error: splitsError } = await supabase
+    .from('transaction_splits')
+    .select('id, mode, amount')
+    .eq('transaction_id', txn.transaction_id);
+  if (splitsError) return { ok: false, error: splitsError.message };
+
+  const nonCashTotal = (splits || [])
+    .filter((s) => !CASH_SPLIT_MODES.includes(s.mode))
+    .reduce((sum, s) => sum + (s.amount || 0), 0);
+
+  if (nonCashTotal > 0) {
+    const newCashAmount = newAmount - nonCashTotal;
+    if (newCashAmount < 0) {
+      return {
+        ok: false,
+        error: `New amount is less than the KES ${nonCashTotal.toLocaleString()} already settled on this payment via Home Expense/Share/Mohamedi's balance. Void this payment and re-enter it instead.`,
+      };
+    }
+    const cashSplit = (splits || []).find((s) => CASH_SPLIT_MODES.includes(s.mode));
+    const newMode = cashSplit?.mode || txn.primary_mode || 'cash';
+    if (cashSplit) {
+      if (newCashAmount > 0) {
+        await supabase.from('transaction_splits').update({ amount: newCashAmount }).eq('id', cashSplit.id);
+      } else {
+        await supabase.from('transaction_splits').delete().eq('id', cashSplit.id);
+      }
+    } else if (newCashAmount > 0) {
+      await supabase.from('transaction_splits').insert({ transaction_id: txn.transaction_id, mode: newMode, amount: newCashAmount });
+    }
+    const { error } = await supabase.from('transactions').update({
+      amount: newAmount,
+      primary_mode: newCashAmount > 0 ? newMode : null,
+      edited_at: new Date().toISOString(),
+    }).eq('id', txn.id);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  }
+
+  const { error } = await supabase.from('transactions').update({
+    amount: newAmount,
+    edited_at: new Date().toISOString(),
+  }).eq('id', txn.id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
 // Undoes everything applySettlementSource(...) recorded for one primary
 // transaction (used when that transaction is edited or voided). Voids the
 // Home Expense/Share side-transactions it tagged with this ref, and reverses

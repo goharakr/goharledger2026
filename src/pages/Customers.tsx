@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, formatTime, todayStr } from '../utils/format';
-import { adjustCustomerCredit, adjustCustomerAdvance, applySettlementSource, undoSettlementForTransaction } from '../utils/balances';
+import { adjustCustomerCredit, adjustCustomerAdvance, applySettlementSource, undoSettlementForTransaction, adjustPaymentAmount } from '../utils/balances';
 import { syncCommissionExpense } from '../utils/commissionExpense';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
@@ -115,6 +115,7 @@ export default function Customers() {
   const [saleEditForm, setSaleEditForm] = usePersistentState<SaleEditForm>('customers.saleEditForm', emptySaleEdit);
   const [editingPaymentId, setEditingPaymentId] = usePersistentState<string | null>('customers.editingPaymentId', null);
   const [paymentEditForm, setPaymentEditForm] = usePersistentState('customers.paymentEditForm', { amount: '', notes: '' });
+  const [netChecked, setNetChecked] = useState(false);
   const [txnDatePreset, setTxnDatePreset] = usePersistentState<DatePreset>('customers.txnDatePreset', 'month');
   const [txnCustomFrom, setTxnCustomFrom] = usePersistentState('customers.txnCustomFrom', '');
   const [txnCustomTo, setTxnCustomTo] = usePersistentState('customers.txnCustomTo', '');
@@ -396,6 +397,46 @@ export default function Customers() {
     refreshCustomerData();
   }
 
+  // One-click version of "Collect Payment" for the netting banner - the whole
+  // amount is settled via cross_balance_offset, no cash involved, so it's
+  // just a customer_payment transaction that's 100% settlement.
+  async function handleNetCrossBalance(amount: number) {
+    if (!selectedCustomer || !selectedCustomer.linked_partner_id) return;
+    const linkedPartnerId = selectedCustomer.linked_partner_id;
+    const linkedSupplier = linkedSupplierFor(linkedPartnerId);
+    if (!linkedSupplier) return;
+
+    const date = todayStr();
+    const { data: newTxn, error } = await insertTransactionWithId('PAY-' + date.replace(/-/g, ''), (txnId) => ({
+      transaction_id: txnId,
+      date,
+      type: 'customer_payment',
+      primary_mode: null,
+      amount,
+      customer_id: selectedCustomer.id,
+      description: `Payment from ${selectedCustomer.name}`,
+      notes: `Netted against ${selectedCustomer.name}'s supplier balance`,
+      created_by: user?.username || null,
+    }));
+    if (error || !newTxn) { console.error(error); alert('Failed to net balances: ' + (error?.message || 'unknown error')); return; }
+
+    await adjustCustomerCredit(selectedCustomer.id, -amount);
+    await applySettlementSource('cross_balance_offset', amount, {
+      partnerId: linkedPartnerId,
+      date,
+      createdBy: user?.username || null,
+      refLabel: selectedCustomer.name,
+      primaryTransactionId: newTxn.transaction_id,
+      crossPartyId: linkedSupplier.id,
+      crossPartyRole: 'supplier',
+    });
+    await supabase.from('transaction_splits').insert({ transaction_id: newTxn.transaction_id, mode: 'cross_balance_offset', amount });
+
+    setNetChecked(false);
+    refreshCustomerData();
+    triggerRefresh();
+  }
+
   async function handleAddAdvance() {
     if (!selectedCustomer || !paymentForm.amount || parseFloat(paymentForm.amount) <= 0) return;
 
@@ -548,12 +589,9 @@ export default function Customers() {
     }
     const delta = newAmount - (txn.amount || 0);
 
-    const { error } = await supabase.from('transactions').update({
-      amount: newAmount,
-      notes: paymentEditForm.notes || null,
-      edited_at: new Date().toISOString(),
-    }).eq('id', editingPaymentId);
-    if (error) { alert('Failed to save: ' + error.message); return; }
+    const result = await adjustPaymentAmount(txn, newAmount);
+    if (!result.ok) { alert(result.error); return; }
+    await supabase.from('transactions').update({ notes: paymentEditForm.notes || null }).eq('id', editingPaymentId);
 
     if (delta !== 0) {
       if (isAdvanceDeposit(txn)) await adjustCustomerAdvance(txn.customer_id, delta);
@@ -952,6 +990,44 @@ export default function Customers() {
                   </div>
                 </div>
               </div>
+
+              {/* Netting banner - only when this customer is linked to a partner
+                  and BOTH sides owe something (they owe the shop as customer,
+                  AND the shop owes them as supplier) - lets it be netted in one
+                  click instead of going through the full Collect Payment form. */}
+              {(() => {
+                if (!selectedCustomer.linked_partner_id) return null;
+                const linkedSupplier = linkedSupplierFor(selectedCustomer.linked_partner_id);
+                if (!linkedSupplier) return null;
+                const customerOwed = selectedCustomer.credit_balance || 0;
+                const supplierOwed = linkedSupplier.balance || 0;
+                if (customerOwed <= 0 || supplierOwed <= 0) return null;
+                const netAmount = Math.min(customerOwed, supplierOwed);
+                return (
+                  <div className="mb-4 border border-amber-200 bg-amber-50 rounded-lg p-3">
+                    <p className="text-sm text-amber-800">
+                      You also owe {selectedCustomer.name} KES {formatKES(supplierOwed)} as a supplier. KES {formatKES(netAmount)} can be netted against this customer balance.
+                    </p>
+                    <label className="flex items-center gap-2 mt-2 text-sm text-amber-800">
+                      <input
+                        type="checkbox"
+                        checked={netChecked}
+                        onChange={(e) => setNetChecked(e.target.checked)}
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      Yes, deduct KES {formatKES(netAmount)} from both balances
+                    </label>
+                    {netChecked && (
+                      <button
+                        onClick={() => handleNetCrossBalance(netAmount)}
+                        className="mt-2 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium"
+                      >
+                        Apply Net
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Transaction History */}
               <div className="flex items-center justify-between mb-2 flex-wrap gap-2">

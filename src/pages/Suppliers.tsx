@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Fragment } from 'react';
 import {
   Plus,
   Search,
@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, formatTime, todayStr, isSaleIncomplete } from '../utils/format';
-import { adjustSupplierBalance, applySettlementSource, undoSettlementForTransaction } from '../utils/balances';
+import { adjustSupplierBalance, applySettlementSource, undoSettlementForTransaction, adjustPaymentAmount } from '../utils/balances';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
@@ -139,6 +139,9 @@ export default function Suppliers() {
   const [txnDatePreset, setTxnDatePreset] = usePersistentState<DatePreset>('suppliers.txnDatePreset', 'month');
   const [txnCustomFrom, setTxnCustomFrom] = usePersistentState('suppliers.txnCustomFrom', '');
   const [txnCustomTo, setTxnCustomTo] = usePersistentState('suppliers.txnCustomTo', '');
+  const [editingPaymentId, setEditingPaymentId] = usePersistentState<string | null>('suppliers.editingPaymentId', null);
+  const [paymentEditForm, setPaymentEditForm] = usePersistentState('suppliers.paymentEditForm', { amount: '', notes: '' });
+  const [netChecked, setNetChecked] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -411,6 +414,46 @@ export default function Suppliers() {
     refreshSupplierData();
   }
 
+  // One-click version of "Pay Supplier" for the netting banner - the whole
+  // amount is settled via cross_balance_offset, no cash involved, so it's
+  // just a supplier_payment transaction that's 100% settlement.
+  async function handleNetCrossBalance(amount: number) {
+    if (!selectedSupplier || !selectedSupplier.linked_partner_id) return;
+    const linkedPartnerId = selectedSupplier.linked_partner_id;
+    const linkedCustomer = linkedCustomerFor(linkedPartnerId);
+    if (!linkedCustomer) return;
+
+    const date = todayStr();
+    const { data: newTxn, error } = await insertTransactionWithId('SUP-' + date.replace(/-/g, ''), (txnId) => ({
+      transaction_id: txnId,
+      date,
+      type: 'supplier_payment',
+      primary_mode: null,
+      amount,
+      supplier_id: selectedSupplier.id,
+      description: `Payment to ${selectedSupplier.name}`,
+      notes: `Netted against ${selectedSupplier.name}'s customer balance`,
+      created_by: user?.username || null,
+    }));
+    if (error || !newTxn) { console.error(error); alert('Failed to net balances: ' + (error?.message || 'unknown error')); return; }
+
+    await adjustSupplierBalance(selectedSupplier.id, -amount);
+    await applySettlementSource('cross_balance_offset', amount, {
+      partnerId: linkedPartnerId,
+      date,
+      createdBy: user?.username || null,
+      refLabel: selectedSupplier.name,
+      primaryTransactionId: newTxn.transaction_id,
+      crossPartyId: linkedCustomer.id,
+      crossPartyRole: 'customer',
+    });
+    await supabase.from('transaction_splits').insert({ transaction_id: newTxn.transaction_id, mode: 'cross_balance_offset', amount });
+
+    setNetChecked(false);
+    refreshSupplierData();
+    triggerRefresh();
+  }
+
   // Unlike "Pay Supplier" above (one payment, to the currently-selected
   // supplier), each row here picks its own supplier - for logging payments
   // to many different suppliers in one sitting, e.g. catching up on real data.
@@ -479,6 +522,35 @@ export default function Suppliers() {
     const { error } = await supabase.from('transactions').update({ is_void: true }).eq('id', id);
     if (error) { alert('Failed to void: ' + error.message); return; }
     fetchData();
+    triggerRefresh();
+  }
+
+  function startEditPayment(t: Transaction) {
+    setEditingPaymentId(t.id);
+    setPaymentEditForm({ amount: String(t.amount || ''), notes: t.notes || '' });
+  }
+
+  async function handleUpdatePayment() {
+    if (!editingPaymentId) return;
+    const txn = transactions.find((t) => t.id === editingPaymentId);
+    if (!txn || !txn.supplier_id) return;
+
+    const newAmount = parseFloat(paymentEditForm.amount);
+    if (!paymentEditForm.amount || isNaN(newAmount) || newAmount <= 0) {
+      alert('Enter a valid amount greater than 0');
+      return;
+    }
+    const delta = newAmount - (txn.amount || 0);
+
+    const result = await adjustPaymentAmount(txn, newAmount);
+    if (!result.ok) { alert(result.error); return; }
+    await supabase.from('transactions').update({ notes: paymentEditForm.notes || null }).eq('id', editingPaymentId);
+
+    if (delta !== 0) await adjustSupplierBalance(txn.supplier_id, -delta);
+
+    setEditingPaymentId(null);
+    setPaymentEditForm({ amount: '', notes: '' });
+    refreshSupplierData();
     triggerRefresh();
   }
 
@@ -936,6 +1008,44 @@ export default function Suppliers() {
                 </div>
               </div>
 
+              {/* Netting banner - only when this supplier is linked to a partner
+                  and BOTH sides owe something (shop owes them as supplier, AND
+                  they owe the shop as customer) - lets it be netted in one click
+                  instead of going through the full Pay Supplier form. */}
+              {(() => {
+                if (!selectedSupplier.linked_partner_id) return null;
+                const linkedCustomer = linkedCustomerFor(selectedSupplier.linked_partner_id);
+                if (!linkedCustomer) return null;
+                const supplierOwed = selectedSupplier.balance || 0;
+                const customerOwed = linkedCustomer.credit_balance || 0;
+                if (supplierOwed <= 0 || customerOwed <= 0) return null;
+                const netAmount = Math.min(supplierOwed, customerOwed);
+                return (
+                  <div className="mb-4 border border-amber-200 bg-amber-50 rounded-lg p-3">
+                    <p className="text-sm text-amber-800">
+                      {selectedSupplier.name} also owes you KES {formatKES(customerOwed)} as a customer. KES {formatKES(netAmount)} can be netted against this supplier balance.
+                    </p>
+                    <label className="flex items-center gap-2 mt-2 text-sm text-amber-800">
+                      <input
+                        type="checkbox"
+                        checked={netChecked}
+                        onChange={(e) => setNetChecked(e.target.checked)}
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      />
+                      Yes, deduct KES {formatKES(netAmount)} from both balances
+                    </label>
+                    {netChecked && (
+                      <button
+                        onClick={() => handleNetCrossBalance(netAmount)}
+                        className="mt-2 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium"
+                      >
+                        Apply Net
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Transaction History */}
               <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                 <h4 className="text-sm font-semibold text-slate-700">Transaction History</h4>
@@ -965,7 +1075,8 @@ export default function Suppliers() {
                       getSupplierTransactions(selectedSupplier.id).map((t) => {
                         const runningBalance = supplierRunningBalances.get(t.id) ?? 0;
                         return (
-                        <tr key={t.id} className={`hover:bg-slate-50 transition-colors ${isSaleIncomplete(t) ? 'bg-green-50' : ''}`} title={isSaleIncomplete(t) ? 'Missing payment mode, cost price, or selling price' : undefined}>
+                        <Fragment key={t.id}>
+                        <tr className={`hover:bg-slate-50 transition-colors ${isSaleIncomplete(t) ? 'bg-green-50' : ''}`} title={isSaleIncomplete(t) ? 'Missing payment mode, cost price, or selling price' : undefined}>
                           <td className="px-3 py-2 text-slate-600">
                             {formatDate(t.date)}
                             <span className="block text-xs text-slate-400">{formatTime(t.created_at)}</span>
@@ -1009,16 +1120,51 @@ export default function Suppliers() {
                             {formatKES(Math.abs(runningBalance))}
                           </td>
                           <td className="px-3 py-2 text-center">
-                            <button
-                              onClick={() => {
-                                if (confirm('Void this transaction?')) handleVoidTransaction(t.id);
-                              }}
-                              className="text-xs bg-red-100 text-red-700 hover:bg-red-200 px-2 py-1 rounded transition-colors"
-                            >
-                              Void
-                            </button>
+                            <div className="flex items-center justify-center gap-1">
+                              {t.type === 'supplier_payment' && (
+                                <button onClick={() => startEditPayment(t)} className="p-1 hover:bg-slate-200 rounded">
+                                  <Edit2 size={14} className="text-slate-500" />
+                                </button>
+                              )}
+                              <button
+                                onClick={() => {
+                                  if (confirm('Void this transaction?')) handleVoidTransaction(t.id);
+                                }}
+                                className="text-xs bg-red-100 text-red-700 hover:bg-red-200 px-2 py-1 rounded transition-colors"
+                              >
+                                Void
+                              </button>
+                            </div>
                           </td>
                         </tr>
+                        {editingPaymentId === t.id && (
+                          <tr>
+                            <td colSpan={6} className="px-3 py-3 bg-slate-50">
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={paymentEditForm.amount}
+                                  onChange={(e) => setPaymentEditForm({ ...paymentEditForm, amount: e.target.value })}
+                                  placeholder="Amount"
+                                  className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                                <input
+                                  type="text"
+                                  value={paymentEditForm.notes}
+                                  onChange={(e) => setPaymentEditForm({ ...paymentEditForm, notes: e.target.value })}
+                                  placeholder="Notes"
+                                  className="col-span-2 md:col-span-2 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                              </div>
+                              <div className="flex gap-2 mt-2">
+                                <button onClick={handleUpdatePayment} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">Save</button>
+                                <button onClick={() => { setEditingPaymentId(null); setPaymentEditForm({ amount: '', notes: '' }); }} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </Fragment>
                         );
                       })
                     )}
