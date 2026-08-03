@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr } from '../utils/format';
-import { adjustSupplierBalance, adjustLoanBalance } from '../utils/balances';
+import { adjustSupplierBalance, adjustLoanBalance, applySettlementSource, undoSettlementForTransaction } from '../utils/balances';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
@@ -22,7 +22,16 @@ import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
 import { sortSuppliersByBalance } from '../utils/sortEntities';
-import type { Transaction, Supplier, LoanTracker, ExpenseCategory } from '../types';
+import SettlementModeFields, {
+  emptySettlementAmounts,
+  computeSettlementAvailable,
+  settlementAmountsTotal,
+  findSettlementOverflows,
+  SETTLEMENT_MODE_KEYS,
+  SettlementAmounts,
+} from '../components/SettlementModeFields';
+import type { ShareRule } from '../utils/shareDue';
+import type { Transaction, Supplier, LoanTracker, ExpenseCategory, Customer, HistoricalProfit } from '../types';
 
 interface ExpenseForm {
   date: string;
@@ -38,6 +47,7 @@ interface ExpenseForm {
   isPostDated: boolean;
   clearsOn: string;
   transactionFee: string;
+  settlement: SettlementAmounts;
 }
 
 const emptyForm: ExpenseForm = {
@@ -54,6 +64,7 @@ const emptyForm: ExpenseForm = {
   isPostDated: false,
   clearsOn: '',
   transactionFee: '',
+  settlement: emptySettlementAmounts,
 };
 
 export default function Expenses() {
@@ -64,6 +75,11 @@ export default function Expenses() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loans, setLoans] = useState<LoanTracker[]>([]);
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
+  const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
+  const [customersForLink, setCustomersForLink] = useState<Customer[]>([]);
+  const [shareRules, setShareRules] = useState<ShareRule[]>([]);
+  const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
+  const [splits, setSplits] = useState<{ transaction_id: string; mode: string; amount: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -85,7 +101,7 @@ export default function Expenses() {
 
   async function fetchData() {
     setLoading(true);
-    const [{ data: txns }, { data: suppData }, { data: loanData }, { data: catData }, { data: suppPayments }, { data: loanPayments }, { data: partnerDraws }] = await Promise.all([
+    const [{ data: txns }, { data: suppData }, { data: loanData }, { data: catData }, { data: suppPayments }, { data: loanPayments }, { data: partnerDraws }, { data: fullTxns }, { data: custData }, { data: rules }, { data: hist }, { data: splitData }] = await Promise.all([
       fetchAllRows<Transaction>((from, to) =>
         supabase.from('transactions').select('*').eq('type', 'expense').order('date', { ascending: false }).range(from, to)
       ),
@@ -101,7 +117,22 @@ export default function Expenses() {
       fetchAllRows<Transaction>((from, to) =>
         supabase.from('transactions').select('*').eq('type', 'partner_draw').order('date', { ascending: false }).range(from, to)
       ),
+      // Needed for the linked-partner settlement calc (Home Expenses Owed /
+      // Profit Share Not Taken) - those scan ALL transaction types, not just
+      // this tab's filtered slice.
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').eq('is_void', false).order('date', { ascending: false }).range(from, to)
+      ),
+      supabase.from('customers').select('*').eq('is_active', true),
+      supabase.from('share_rules').select('*').eq('is_active', true),
+      supabase.from('historical_profit').select('*'),
+      supabase.from('transaction_splits').select('*'),
     ]);
+    setAllTransactions(fullTxns || []);
+    setCustomersForLink(custData || []);
+    setShareRules(rules || []);
+    setHistoricalProfit(hist || []);
+    setSplits(splitData || []);
 
     let filtered = txns || [];
     if (activeTab === 'shop') {
@@ -173,11 +204,24 @@ export default function Expenses() {
       const supp = suppliers.find((s) => s.id === form.supplierId);
       if (!supp) return;
 
+      const linkedPartnerId = supp.linked_partner_id;
+      const linkedCustomer = linkedPartnerId ? customersForLink.find((c) => c.linked_partner_id === linkedPartnerId) : undefined;
+      const settlementTotal = linkedPartnerId ? settlementAmountsTotal(form.settlement) : 0;
+      const cashAmt = amt - settlementTotal;
+
+      if (settlementTotal > amt) { alert('The settlement amounts add up to more than the total payment amount.'); return; }
+
+      if (linkedPartnerId && settlementTotal > 0) {
+        const available = computeSettlementAvailable(allTransactions, shareRules, historicalProfit, linkedPartnerId, linkedCustomer?.credit_balance || 0);
+        const warnings = findSettlementOverflows(form.settlement, available, "Mohamedi's Customer Balance");
+        if (warnings.length > 0 && !confirm(warnings.join('\n\n') + '\n\nContinue?')) return;
+      }
+
       const { data: newTxn, error } = await insertTransactionWithId('SUP-' + form.date.replace(/-/g, ''), (txnId) => ({
         transaction_id: txnId,
         date: form.date,
         type: 'supplier_payment',
-        primary_mode: form.mode,
+        primary_mode: cashAmt > 0 ? form.mode : null,
         amount: amt,
         supplier_id: form.supplierId,
         description: form.description || `Payment to ${supp.name}`,
@@ -187,7 +231,30 @@ export default function Expenses() {
       }));
       if (error || !newTxn) { console.error(error); alert('Failed to save payment: ' + (error?.message || 'unknown error')); return; }
       await adjustSupplierBalance(form.supplierId, -amt);
-      await insertTransactionFee(form.date, form.mode, form.transactionFee, supp.name);
+
+      const splitRows: { transaction_id: string; mode: string; amount: number }[] = [];
+      if (cashAmt > 0) splitRows.push({ transaction_id: newTxn.transaction_id, mode: form.mode, amount: cashAmt });
+      if (linkedPartnerId && settlementTotal > 0) {
+        const ctx = {
+          partnerId: linkedPartnerId,
+          date: form.date,
+          createdBy: user?.username || null,
+          refLabel: supp.name,
+          primaryTransactionId: newTxn.transaction_id,
+          crossPartyId: linkedCustomer?.id || null,
+          crossPartyRole: 'customer' as const,
+        };
+        for (const { key, mode } of SETTLEMENT_MODE_KEYS) {
+          const srcAmount = parseFloat(form.settlement[key] || '0') || 0;
+          if (srcAmount > 0) {
+            splitRows.push({ transaction_id: newTxn.transaction_id, mode, amount: srcAmount });
+            await applySettlementSource(mode, srcAmount, ctx);
+          }
+        }
+      }
+      if (splitRows.length > 0) await supabase.from('transaction_splits').insert(splitRows);
+
+      if (cashAmt > 0) await insertTransactionFee(form.date, form.mode, form.transactionFee, supp.name);
       setForm(emptyForm);
       setShowAdd(false);
       fetchData();
@@ -299,6 +366,7 @@ export default function Expenses() {
     // the Suppliers tab) as well as a stock/supplier_payment CATEGORY expense
     if (txn.supplier_id && (txn.type === 'supplier_payment' || txn.category === 'supplier_payment' || txn.category === 'stock')) {
       await adjustSupplierBalance(txn.supplier_id, txn.amount || 0);
+      if (txn.type === 'supplier_payment') await undoSettlementForTransaction(txn.transaction_id, txn.supplier_id, null);
     }
 
     // Reverse loan balance
@@ -331,6 +399,7 @@ export default function Expenses() {
       isPostDated: !!expense.clears_on,
       clearsOn: expense.clears_on || '',
       transactionFee: '',
+      settlement: emptySettlementAmounts,
     });
     if (expense.type === 'supplier_payment') setActiveTab('suppliers');
     else if (expense.type === 'loan_payment') setActiveTab('loans');
@@ -351,6 +420,10 @@ export default function Expenses() {
     // in place instead of falling through to the generic expense path below, which
     // would otherwise overwrite `type` with 'expense' and corrupt the record.
     if (oldTxn.type === 'supplier_payment') {
+      if (splits.some((sp) => sp.transaction_id === oldTxn.transaction_id)) {
+        alert('This payment was settled using more than one source (cash and/or Home Expenses Owed / Profit Share / other balance) - it can\'t be edited here. Void and re-enter it instead.');
+        return;
+      }
       if (oldTxn.supplier_id) await adjustSupplierBalance(oldTxn.supplier_id, oldTxn.amount || 0);
       const { error } = await supabase.from('transactions').update({
         date: form.date,
@@ -726,6 +799,22 @@ export default function Expenses() {
                 <option value="">Supplier</option>
                 {sortSuppliersByBalance(suppliers).map((s) => <option key={s.id} value={s.id}>{s.name} ({formatKES(s.balance)})</option>)}
               </select>
+            )}
+
+            {activeTab === 'suppliers' && !editingId && form.supplierId && suppliers.find((s) => s.id === form.supplierId)?.linked_partner_id && (
+              <SettlementModeFields
+                partnerLabel={suppliers.find((s) => s.id === form.supplierId)?.linked_partner_id === 'abdulqadir' ? 'Abdulqadir' : 'Taher'}
+                crossLabel="Mohamedi's Customer Balance"
+                available={computeSettlementAvailable(
+                  allTransactions,
+                  shareRules,
+                  historicalProfit,
+                  suppliers.find((s) => s.id === form.supplierId)!.linked_partner_id!,
+                  customersForLink.find((c) => c.linked_partner_id === suppliers.find((s) => s.id === form.supplierId)?.linked_partner_id)?.credit_balance || 0
+                )}
+                amounts={form.settlement}
+                onChange={(next) => setForm({ ...form, settlement: next })}
+              />
             )}
 
             {/* Description */}
