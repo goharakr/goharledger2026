@@ -3,7 +3,7 @@ import { X, Filter, Download, Trash2, Edit2, Save } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, isSaleIncomplete, todayStr, localDateStr } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
-import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance, adjustLoanBalance } from '../utils/balances';
+import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance, adjustLoanBalance, undoSettlementForTransaction } from '../utils/balances';
 import type { Transaction, Customer, Supplier } from '../types';
 
 interface LedgerModalProps {
@@ -166,9 +166,11 @@ export default function LedgerModal({
         await adjustCustomerAdvance(txn.customer_id, -(txn.amount || 0));
       } else {
         await adjustCustomerCredit(txn.customer_id, txn.amount || 0);
+        await undoSettlementForTransaction(txn.transaction_id, null, txn.customer_id);
       }
     } else if (txn.type === 'supplier_payment' && txn.supplier_id) {
       await adjustSupplierBalance(txn.supplier_id, txn.amount || 0);
+      await undoSettlementForTransaction(txn.transaction_id, txn.supplier_id, null);
     } else if (txn.type === 'supplier_invoice' && txn.supplier_id) {
       await adjustSupplierBalance(txn.supplier_id, -(txn.amount || 0));
     } else if (txn.type === 'opening_balance' && txn.customer_id) {
@@ -215,6 +217,10 @@ export default function LedgerModal({
     }
     if (txn.type === 'sale' && txn.primary_mode === 'split') {
       alert('Split-mode sales can\'t have their amount edited here - void and re-enter it instead.');
+      return;
+    }
+    if ((txn.type === 'supplier_payment' || txn.type === 'customer_payment') && splits.some((sp) => sp.transaction_id === txn.transaction_id)) {
+      alert('This payment was settled using more than one source (cash and/or Home Expenses Owed / Profit Share / other balance) - it can\'t have its amount edited here. Void and re-enter it instead.');
       return;
     }
     const delta = newAmount - (txn.amount || 0);

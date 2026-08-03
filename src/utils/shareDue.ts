@@ -1,4 +1,4 @@
-import type { Transaction } from '../types';
+import type { Transaction, HistoricalProfit } from '../types';
 import { saleProfit } from './format';
 
 export interface MonthlyFigures {
@@ -70,6 +70,33 @@ export function calculateShareEarned(monthly: Map<string, MonthlyFigures>, rule:
 export function getDoubleCountedMonths(monthly: Map<string, MonthlyFigures>, historicalMonths: string[]): string[] {
   const histSet = new Set(historicalMonths);
   return Array.from(monthly.keys()).filter((m) => histSet.has(m)).sort();
+}
+
+// The single source of truth for "Share Due" (a.k.a. Profit Share Not Taken) -
+// mirrors the calc Partners.tsx used to keep as its own private copy.
+// Earned-to-date (live months + historical carry-over) minus everything
+// already drawn via a partner_draw transaction.
+export function calculateShareDue(
+  transactions: Transaction[] | null | undefined,
+  shareRules: ShareRule[] | null | undefined,
+  historicalProfit: HistoricalProfit[] | null | undefined,
+  partnerId: string
+): number {
+  const rule = shareRules?.find((r) => r.partner_id === partnerId);
+  if (!rule) return 0;
+
+  const monthly = buildMonthlyFigures(transactions);
+  const earned = calculateShareEarned(monthly, rule);
+
+  const histRemaining = (historicalProfit || []).reduce((s, h) => {
+    const share = partnerId === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);
+    const taken = partnerId === 'taher' ? (h.taher_taken || 0) : (h.abdulqadir_taken || 0);
+    return s + share - taken;
+  }, 0);
+
+  const drawsAllTime = transactions?.reduce((s, t) => (t.type === 'partner_draw' && t.partner_id === partnerId && !t.is_void ? s + t.amount : s), 0) || 0;
+
+  return earned + histRemaining - drawsAllTime;
 }
 
 // How much the shop currently owes a partner back for home expenses they

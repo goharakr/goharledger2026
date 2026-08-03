@@ -11,6 +11,11 @@ export interface AppUser {
 
 export type PaymentMode = 'mpesa' | 'cash' | 'paybill' | 'credit' | 'advance' | 'supplier' | 'split';
 
+// Extra "modes" only offered when the customer/supplier on the transaction is
+// linked to a partner (see Customer/Supplier.linked_partner_id) - settling
+// against what the shop owes that partner, instead of real cash.
+export type SettlementMode = 'home_expense_offset' | 'share_offset' | 'cross_balance_offset';
+
 export type TransactionType =
   | 'sale'
   | 'expense'
@@ -59,7 +64,7 @@ export interface Transaction {
 export interface TransactionSplit {
   id: string;
   transaction_id: string;
-  mode: 'mpesa' | 'cash' | 'paybill';
+  mode: 'mpesa' | 'cash' | 'paybill' | SettlementMode;
   amount: number;
 }
 
@@ -72,6 +77,7 @@ export interface Customer {
   advance_balance: number;
   notes: string | null;
   is_active: boolean;
+  linked_partner_id: string | null;
 }
 
 export interface Supplier {
@@ -82,6 +88,7 @@ export interface Supplier {
   notes: string | null;
   is_dual_party: boolean;
   is_active: boolean;
+  linked_partner_id: string | null;
 }
 
 export interface LoanTracker {

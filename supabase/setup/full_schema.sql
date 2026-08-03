@@ -136,7 +136,8 @@ CREATE TABLE IF NOT EXISTS customers (
   advance_balance decimal(12,2) DEFAULT 0,
   notes text,
   is_active boolean NOT NULL DEFAULT true,
-  created_at timestamptz DEFAULT now()
+  created_at timestamptz DEFAULT now(),
+  linked_partner_id text
 );
 
 CREATE TABLE IF NOT EXISTS suppliers (
@@ -147,7 +148,8 @@ CREATE TABLE IF NOT EXISTS suppliers (
   notes text,
   is_dual_party boolean NOT NULL DEFAULT false,
   is_active boolean NOT NULL DEFAULT true,
-  created_at timestamptz DEFAULT now()
+  created_at timestamptz DEFAULT now(),
+  linked_partner_id text
 );
 
 CREATE TABLE IF NOT EXISTS loan_trackers (

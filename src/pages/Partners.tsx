@@ -17,7 +17,7 @@ import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, getMonthLabel, todayStr } from '../utils/format';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
-import { buildMonthlyFigures, calculateShareEarned, getDoubleCountedMonths as getDoubleCountedMonthsShared, calculateHomeExpensesOwed } from '../utils/shareDue';
+import { buildMonthlyFigures, getDoubleCountedMonths as getDoubleCountedMonthsShared, calculateHomeExpensesOwed, calculateShareDue as calculateShareDueShared } from '../utils/shareDue';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
@@ -115,21 +115,7 @@ export default function Partners() {
   // Mirrors Dashboard's "Share due" calc: applies the active share rule across
   // every month with transactions, plus any historical carry-over, minus draws.
   function calculateShareDue(partner: string) {
-    const rule = shareRules.find((r) => r.partner_id === partner);
-    if (!rule) return 0;
-
-    const monthly = buildMonthlyFigures(transactions);
-    const earned = calculateShareEarned(monthly, rule);
-
-    const histRemaining = historicalProfit.reduce((s, h) => {
-      const share = partner === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);
-      const taken = partner === 'taher' ? (h.taher_taken || 0) : (h.abdulqadir_taken || 0);
-      return s + share - taken;
-    }, 0);
-
-    const drawsAllTime = transactions.reduce((s, t) => (t.type === 'partner_draw' && t.partner_id === partner && !t.is_void ? s + t.amount : s), 0);
-
-    return earned + histRemaining - drawsAllTime;
+    return calculateShareDueShared(transactions, shareRules, historicalProfit, partner);
   }
 
   function getDoubleCountedMonths() {

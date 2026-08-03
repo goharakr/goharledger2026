@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr } from '../utils/format';
-import { adjustCustomerCredit, adjustCustomerAdvance } from '../utils/balances';
+import { adjustCustomerCredit, adjustCustomerAdvance, applySettlementSource, undoSettlementForTransaction } from '../utils/balances';
 import { syncCommissionExpense } from '../utils/commissionExpense';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
@@ -23,7 +23,16 @@ import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
 import { sortCustomersByBalance } from '../utils/sortEntities';
-import type { Customer, Transaction } from '../types';
+import SettlementModeFields, {
+  emptySettlementAmounts,
+  computeSettlementAvailable,
+  settlementAmountsTotal,
+  findSettlementOverflows,
+  SETTLEMENT_MODE_KEYS,
+  SettlementAmounts,
+} from '../components/SettlementModeFields';
+import type { ShareRule } from '../utils/shareDue';
+import type { Customer, Transaction, Supplier, HistoricalProfit } from '../types';
 
 interface CustomerForm {
   name: string;
@@ -32,6 +41,7 @@ interface CustomerForm {
   advanceBalance: string;
   openingCredit: string;
   notes: string;
+  linkedPartnerId: string;
 }
 
 interface SaleEditForm {
@@ -50,6 +60,7 @@ interface PaymentForm {
   mode: string;
   notes: string;
   paymentType: 'credit' | 'advance';
+  settlement: SettlementAmounts;
 }
 
 const emptyCustomer: CustomerForm = {
@@ -59,6 +70,7 @@ const emptyCustomer: CustomerForm = {
   advanceBalance: '',
   openingCredit: '',
   notes: '',
+  linkedPartnerId: '',
 };
 
 const emptySaleEdit: SaleEditForm = {
@@ -77,6 +89,7 @@ const emptyPayment: PaymentForm = {
   mode: 'cash',
   notes: '',
   paymentType: 'credit',
+  settlement: emptySettlementAmounts,
 };
 
 export default function Customers() {
@@ -84,6 +97,9 @@ export default function Customers() {
   const { user } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [shareRules, setShareRules] = useState<ShareRule[]>([]);
+  const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -114,14 +130,20 @@ export default function Customers() {
 
   async function fetchData() {
     setLoading(true);
-    const [{ data: cust }, { data: txns }] = await Promise.all([
+    const [{ data: cust }, { data: txns }, { data: supp }, { data: rules }, { data: hist }] = await Promise.all([
       supabase.from('customers').select('*').eq('is_active', true).order('name'),
       fetchAllRows<Transaction>((from, to) =>
         supabase.from('transactions').select('*').eq('is_void', false).order('date', { ascending: false }).range(from, to)
       ),
+      supabase.from('suppliers').select('*').eq('is_active', true),
+      supabase.from('share_rules').select('*').eq('is_active', true),
+      supabase.from('historical_profit').select('*'),
     ]);
     setCustomers(cust || []);
     setTransactions(txns || []);
+    setSuppliers(supp || []);
+    setShareRules(rules || []);
+    setHistoricalProfit(hist || []);
     setLoading(false);
     return { cust, txns };
   }
@@ -161,6 +183,7 @@ export default function Customers() {
       advance_balance: openingAdvance,
       credit_balance: openingCredit,
       notes: form.notes || null,
+      linked_partner_id: form.linkedPartnerId || null,
     }).select().single();
     if (error || !newCustomer) { alert('Failed to save customer: ' + (error?.message || 'unknown error')); return; }
 
@@ -205,6 +228,7 @@ export default function Customers() {
       phone: form.phone || null,
       credit_limit: parseFloat(form.creditLimit || '0'),
       notes: form.notes || null,
+      linked_partner_id: form.linkedPartnerId || null,
     }).eq('id', selectedCustomer.id);
 
     // Keep the opening advance in sync by delta, not by overwriting the whole
@@ -283,16 +307,32 @@ export default function Customers() {
     triggerRefresh();
   }
 
+  function linkedSupplierFor(partnerId: string) {
+    return suppliers.find((s) => s.linked_partner_id === partnerId);
+  }
+
   async function handlePayment() {
     if (!selectedCustomer || !paymentForm.amount || parseFloat(paymentForm.amount) <= 0) return;
 
     const amt = parseFloat(paymentForm.amount);
+    const linkedPartnerId = selectedCustomer.linked_partner_id;
+    const linkedSupplier = linkedPartnerId ? linkedSupplierFor(linkedPartnerId) : undefined;
+    const settlementTotal = linkedPartnerId ? settlementAmountsTotal(paymentForm.settlement) : 0;
+    const cashAmt = amt - settlementTotal;
+
+    if (settlementTotal > amt) { alert('The settlement amounts add up to more than the total payment amount.'); return; }
+
+    if (linkedPartnerId && settlementTotal > 0) {
+      const available = computeSettlementAvailable(transactions, shareRules, historicalProfit, linkedPartnerId, linkedSupplier?.balance || 0);
+      const warnings = findSettlementOverflows(paymentForm.settlement, available, "Mohamedi's Supplier Balance");
+      if (warnings.length > 0 && !confirm(warnings.join('\n\n') + '\n\nContinue?')) return;
+    }
 
     const { data: newTxn, error } = await insertTransactionWithId('PAY-' + paymentForm.date.replace(/-/g, ''), (txnId) => ({
       transaction_id: txnId,
       date: paymentForm.date,
       type: 'customer_payment',
-      primary_mode: paymentForm.mode as any,
+      primary_mode: cashAmt > 0 ? (paymentForm.mode as any) : null,
       amount: amt,
       customer_id: selectedCustomer.id,
       description: `Payment from ${selectedCustomer.name}`,
@@ -302,6 +342,31 @@ export default function Customers() {
     if (error || !newTxn) { console.error(error); alert('Failed to save payment: ' + (error?.message || 'unknown error')); return; }
 
     await adjustCustomerCredit(selectedCustomer.id, -amt);
+
+    const splitRows: { transaction_id: string; mode: string; amount: number }[] = [];
+    if (cashAmt > 0) splitRows.push({ transaction_id: newTxn.transaction_id, mode: paymentForm.mode, amount: cashAmt });
+
+    if (linkedPartnerId && settlementTotal > 0) {
+      const ctx = {
+        partnerId: linkedPartnerId,
+        date: paymentForm.date,
+        createdBy: user?.username || null,
+        refLabel: selectedCustomer.name,
+        primaryTransactionId: newTxn.transaction_id,
+        crossPartyId: linkedSupplier?.id || null,
+        crossPartyRole: 'supplier' as const,
+      };
+      for (const { key, mode } of SETTLEMENT_MODE_KEYS) {
+        const srcAmount = parseFloat(paymentForm.settlement[key] || '0') || 0;
+        if (srcAmount > 0) {
+          splitRows.push({ transaction_id: newTxn.transaction_id, mode, amount: srcAmount });
+          await applySettlementSource(mode, srcAmount, ctx);
+        }
+      }
+    }
+    if (splitRows.length > 0) {
+      await supabase.from('transaction_splits').insert(splitRows);
+    }
 
     setPaymentForm(emptyPayment);
     setShowPayment(false);
@@ -369,6 +434,7 @@ export default function Customers() {
       advanceBalance: String(opening?.amount || 0),
       openingCredit: String(openingCredit?.amount || 0),
       notes: c.notes || '',
+      linkedPartnerId: c.linked_partner_id || '',
     });
     setShowEdit(true);
   }
@@ -481,8 +547,12 @@ export default function Customers() {
     const reason = prompt('Enter void reason:');
     if (!reason) return;
 
-    if (isAdvanceDeposit(t)) await adjustCustomerAdvance(t.customer_id, -(t.amount || 0));
-    else await adjustCustomerCredit(t.customer_id, t.amount || 0);
+    if (isAdvanceDeposit(t)) {
+      await adjustCustomerAdvance(t.customer_id, -(t.amount || 0));
+    } else {
+      await adjustCustomerCredit(t.customer_id, t.amount || 0);
+      await undoSettlementForTransaction(t.transaction_id, null, t.customer_id);
+    }
 
     const { error } = await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', t.id);
     if (error) { alert('Failed to void: ' + error.message); return; }
@@ -578,6 +648,18 @@ export default function Customers() {
               placeholder="Notes (optional)"
               className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
             />
+            <label className="text-xs text-slate-600 block">
+              Belongs to partner <span className="text-slate-400">(lets settling this customer's balance use that partner's Home Expenses Owed / Profit Share / other-role balance)</span>
+              <select
+                value={form.linkedPartnerId}
+                onChange={(e) => setForm({ ...form, linkedPartnerId: e.target.value })}
+                className="mt-0.5 w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              >
+                <option value="">None</option>
+                <option value="taher">Taher</option>
+                <option value="abdulqadir">Abdulqadir</option>
+              </select>
+            </label>
             <div className="flex gap-2 pt-2 border-t border-slate-200">
               <button onClick={handleSaveCustomer} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium">Save</button>
               <button onClick={() => setShowAdd(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
@@ -641,6 +723,18 @@ export default function Customers() {
               placeholder="Notes (optional)"
               className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
             />
+            <label className="text-xs text-slate-600 block">
+              Belongs to partner <span className="text-slate-400">(lets settling this customer's balance use that partner's Home Expenses Owed / Profit Share / other-role balance)</span>
+              <select
+                value={form.linkedPartnerId}
+                onChange={(e) => setForm({ ...form, linkedPartnerId: e.target.value })}
+                className="mt-0.5 w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              >
+                <option value="">None</option>
+                <option value="taher">Taher</option>
+                <option value="abdulqadir">Abdulqadir</option>
+              </select>
+            </label>
             <div className="flex gap-2 pt-2 border-t border-slate-200">
               <button onClick={handleUpdateCustomer} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium">Update</button>
               <button onClick={() => setShowEdit(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
@@ -1023,6 +1117,21 @@ export default function Customers() {
                   <option value="paybill">Paybill</option>
                 </select>
               </div>
+              {paymentForm.paymentType === 'credit' && selectedCustomer.linked_partner_id && (
+                <SettlementModeFields
+                  partnerLabel={selectedCustomer.linked_partner_id === 'abdulqadir' ? 'Abdulqadir' : 'Taher'}
+                  crossLabel="Mohamedi's Supplier Balance"
+                  available={computeSettlementAvailable(
+                    transactions,
+                    shareRules,
+                    historicalProfit,
+                    selectedCustomer.linked_partner_id,
+                    linkedSupplierFor(selectedCustomer.linked_partner_id)?.balance || 0
+                  )}
+                  amounts={paymentForm.settlement}
+                  onChange={(next) => setPaymentForm({ ...paymentForm, settlement: next })}
+                />
+              )}
               <input
                 type="text"
                 value={paymentForm.notes}
