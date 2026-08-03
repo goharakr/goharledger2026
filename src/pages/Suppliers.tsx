@@ -10,12 +10,14 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, todayStr, isSaleIncomplete } from '../utils/format';
+import { formatKES, formatDate, formatTime, todayStr, isSaleIncomplete } from '../utils/format';
 import { adjustSupplierBalance, applySettlementSource, undoSettlementForTransaction } from '../utils/balances';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { usePersistentState } from '../context/PageStateContext';
+import { handleFormKeyNav } from '../utils/formKeyNav';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
@@ -89,6 +91,28 @@ const emptyPayment: PaymentForm = {
   settlement: emptySettlementAmounts,
 };
 
+interface BulkPaymentRow {
+  supplierId: string;
+  amount: string;
+  date: string;
+  mode: string;
+  notes: string;
+  isPostDated: boolean;
+  clearsOn: string;
+  transactionFee: string;
+}
+
+const emptyBulkPaymentRow: BulkPaymentRow = {
+  supplierId: '',
+  amount: '',
+  date: todayStr(),
+  mode: 'cash',
+  notes: '',
+  isPostDated: false,
+  clearsOn: '',
+  transactionFee: '',
+};
+
 export default function Suppliers() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
   const { user } = useAuth();
@@ -97,20 +121,24 @@ export default function Suppliers() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [shareRules, setShareRules] = useState<ShareRule[]>([]);
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
-  const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
+  const [selectedSupplier, setSelectedSupplier] = usePersistentState<Supplier | null>('suppliers.selectedSupplier', null);
   const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(false);
-  const [showInvoice, setShowInvoice] = useState(false);
-  const [showPayment, setShowPayment] = useState(false);
-  const [form, setForm] = useState<SupplierForm>(emptySupplier);
-  const [invoiceForm, setInvoiceForm] = useState<InvoiceForm>(emptyInvoice);
-  const [paymentForm, setPaymentForm] = useState<PaymentForm>(emptyPayment);
-  const [search, setSearch] = useState('');
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [showAdd, setShowAdd] = usePersistentState('suppliers.showAdd', false);
+  const [showInvoice, setShowInvoice] = usePersistentState('suppliers.showInvoice', false);
+  const [showPayment, setShowPayment] = usePersistentState('suppliers.showPayment', false);
+  const [form, setForm] = usePersistentState<SupplierForm>('suppliers.form', emptySupplier);
+  const [invoiceForm, setInvoiceForm] = usePersistentState<InvoiceForm>('suppliers.invoiceForm', emptyInvoice);
+  const [paymentForm, setPaymentForm] = usePersistentState<PaymentForm>('suppliers.paymentForm', emptyPayment);
+  const [search, setSearch] = usePersistentState('suppliers.search', '');
+  const [listSort, setListSort] = usePersistentState<'balance' | 'name'>('suppliers.listSort', 'balance');
+  const [editingId, setEditingId] = usePersistentState<string | null>('suppliers.editingId', null);
   const [showLedger, setShowLedger] = useState(false);
-  const [txnDatePreset, setTxnDatePreset] = useState<DatePreset>('month');
-  const [txnCustomFrom, setTxnCustomFrom] = useState('');
-  const [txnCustomTo, setTxnCustomTo] = useState('');
+  const [showBulkPayment, setShowBulkPayment] = usePersistentState('suppliers.showBulkPayment', false);
+  const [bulkPaymentForms, setBulkPaymentForms] = usePersistentState<BulkPaymentRow[]>('suppliers.bulkPaymentForms', () => Array.from({ length: 10 }, () => ({ ...emptyBulkPaymentRow })));
+  const [bulkPaymentSaving, setBulkPaymentSaving] = useState(false);
+  const [txnDatePreset, setTxnDatePreset] = usePersistentState<DatePreset>('suppliers.txnDatePreset', 'month');
+  const [txnCustomFrom, setTxnCustomFrom] = usePersistentState('suppliers.txnCustomFrom', '');
+  const [txnCustomTo, setTxnCustomTo] = usePersistentState('suppliers.txnCustomTo', '');
 
   useEffect(() => {
     fetchData();
@@ -369,6 +397,53 @@ export default function Suppliers() {
     refreshSupplierData();
   }
 
+  // Unlike "Pay Supplier" above (one payment, to the currently-selected
+  // supplier), each row here picks its own supplier - for logging payments
+  // to many different suppliers in one sitting, e.g. catching up on real data.
+  async function handleBulkPaymentSave() {
+    if (bulkPaymentSaving) return;
+    const validForms = bulkPaymentForms
+      .map((f, originalIndex) => ({ f, originalIndex }))
+      .filter(({ f }) => f.supplierId && f.amount && parseFloat(f.amount) > 0);
+    if (validForms.length === 0) return;
+    setBulkPaymentSaving(true);
+    try {
+      const failedRows: number[] = [];
+
+      for (let i = 0; i < validForms.length; i++) {
+        const { f, originalIndex } = validForms[i];
+        const amt = parseFloat(f.amount);
+        const supplier = suppliers.find((s) => s.id === f.supplierId);
+        if (!supplier) { failedRows.push(originalIndex + 1); continue; }
+
+        const { data: newTxn, error } = await insertTransactionWithId('SUP-' + f.date.replace(/-/g, ''), (txnId) => ({
+          transaction_id: txnId,
+          date: f.date,
+          type: 'supplier_payment',
+          primary_mode: f.mode,
+          amount: amt,
+          supplier_id: f.supplierId,
+          description: `Payment to ${supplier.name}`,
+          notes: f.notes || null,
+          clears_on: f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
+          created_by: user?.username || null,
+        }));
+        if (error || !newTxn) { console.error(error); failedRows.push(originalIndex + 1); continue; }
+        await adjustSupplierBalance(f.supplierId, -amt);
+        await insertTransactionFee(f.date, f.mode, f.transactionFee, supplier.name);
+      }
+
+      setBulkPaymentForms(Array.from({ length: 10 }, () => ({ ...emptyBulkPaymentRow, date: todayStr() })));
+      setShowBulkPayment(false);
+      refreshSupplierData();
+      if (failedRows.length > 0) {
+        alert(`Row(s) ${failedRows.join(', ')} failed to save and were skipped. The rest were saved successfully.`);
+      }
+    } finally {
+      setBulkPaymentSaving(false);
+    }
+  }
+
   async function handleVoidTransaction(id: string) {
     const txn = transactions.find((t) => t.id === id);
     if (!txn) return;
@@ -414,43 +489,121 @@ export default function Suppliers() {
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }
 
-  const filteredSuppliers = sortSuppliersByBalance(suppliers.filter((s) =>
-    s.name.toLowerCase().includes(search.toLowerCase()) ||
-    (s.phone || '').includes(search)
-  ));
+  // A payment or a sale (cost price paid straight to the supplier) reduces
+  // what's owed - everything else (invoices, opening balance) increases it.
+  // Mirrors the sign the amount column already uses below.
+  function supplierTxnAmount(t: Transaction): number {
+    return t.type === 'sale' ? (t.selling_price ?? t.amount ?? 0) : (t.amount ?? 0);
+  }
+  function supplierTxnSign(t: Transaction): 1 | -1 {
+    return t.type === 'supplier_payment' || t.type === 'sale' ? -1 : 1;
+  }
+
+  // Running balance after each transaction, computed over the supplier's full
+  // history (not just what the date filter currently shows) so it always
+  // reflects the true balance at that point in time.
+  function getSupplierRunningBalances(supplierId: string): Map<string, number> {
+    const all = transactions
+      .filter((t) => t.supplier_id === supplierId)
+      .slice()
+      .sort((a, b) => {
+        const d = new Date(a.date).getTime() - new Date(b.date).getTime();
+        if (d !== 0) return d;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+    const map = new Map<string, number>();
+    let running = 0;
+    for (const t of all) {
+      running += supplierTxnSign(t) * supplierTxnAmount(t);
+      map.set(t.id, running);
+    }
+    return map;
+  }
+
+  function getSupplierTotals(supplierId: string) {
+    const all = transactions.filter((t) => t.supplier_id === supplierId);
+    const invoiced = all.filter((t) => t.type === 'supplier_invoice').reduce((s, t) => s + (t.amount || 0), 0);
+    const paid = all
+      .filter((t) => t.type === 'supplier_payment' || t.type === 'sale')
+      .reduce((s, t) => s + supplierTxnAmount(t), 0);
+    return { invoiced, paid };
+  }
+
+  const filteredSuppliers = suppliers
+    .filter((s) => s.name.toLowerCase().includes(search.toLowerCase()) || (s.phone || '').includes(search))
+    .slice()
+    .sort((a, b) =>
+      listSort === 'balance'
+        ? Math.abs(b.balance || 0) - Math.abs(a.balance || 0)
+        : a.name.localeCompare(b.name)
+    );
+
+  const totalOwedToSuppliers = suppliers.reduce((sum, s) => sum + Math.max(s.balance || 0, 0), 0);
+
+  function addBulkPaymentRow() {
+    setBulkPaymentForms([...bulkPaymentForms, { ...emptyBulkPaymentRow, date: bulkPaymentForms[0]?.date || todayStr() }]);
+  }
+
+  const supplierRunningBalances = selectedSupplier ? getSupplierRunningBalances(selectedSupplier.id) : new Map<string, number>();
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          onClick={() => { setShowAdd(true); setEditingId(null); setForm(emptySupplier); }}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
-        >
-          <Plus size={16} /> Add Supplier
-        </button>
-        <button
-          onClick={() => setShowLedger(true)}
-          className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
-        >
-          <BookOpen size={16} /> View Ledger
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => { setShowAdd(true); setEditingId(null); setForm(emptySupplier); }}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Plus size={16} /> Add Supplier
+          </button>
+          <button
+            onClick={() => { setShowBulkPayment(true); setBulkPaymentForms(Array.from({ length: 10 }, () => ({ ...emptyBulkPaymentRow, date: todayStr() }))); }}
+            className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Plus size={16} /> Bulk Payments
+          </button>
+          <button
+            onClick={() => setShowLedger(true)}
+            className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <BookOpen size={16} /> View Ledger
+          </button>
+        </div>
+        <div className="bg-red-50 border border-red-100 rounded-lg px-3 py-2 text-sm">
+          <span className="text-red-600">Total Owed to Suppliers: </span>
+          <span className="font-semibold text-red-700">KES {formatKES(totalOwedToSuppliers)}</span>
+        </div>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input
-          type="text"
-          placeholder="Search suppliers..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-        />
+      {/* Search + Sort */}
+      <div className="flex flex-wrap gap-2">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Search suppliers..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+        </div>
+        <select
+          value={listSort}
+          onChange={(e) => setListSort(e.target.value as 'balance' | 'name')}
+          className="border border-slate-300 rounded-lg text-sm px-2 py-2 focus:ring-2 focus:ring-emerald-500 outline-none"
+        >
+          <option value="balance">Highest Balance First</option>
+          <option value="name">Name (A-Z)</option>
+        </select>
       </div>
 
-      {/* Add/Edit Supplier Modal */}
+      {/* Add/Edit Supplier Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showAdd && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') { setShowAdd(false); setEditingId(null); } }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-slate-800 text-sm">{editingId ? 'Edit' : 'Add'} Supplier</h3>
             <button onClick={() => { setShowAdd(false); setEditingId(null); }} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
@@ -461,6 +614,7 @@ export default function Suppliers() {
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Name"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -468,6 +622,7 @@ export default function Suppliers() {
                 type="text"
                 value={form.phone}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Phone"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -476,6 +631,7 @@ export default function Suppliers() {
               type="number"
               value={form.openingBalance}
               onChange={(e) => setForm({ ...form, openingBalance: e.target.value })}
+              onKeyDown={(e) => handleFormKeyNav(e)}
               placeholder="Opening Balance (amount owed)"
               className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
             />
@@ -483,12 +639,12 @@ export default function Suppliers() {
               type="text"
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSaveSupplier(); }}}
+              onKeyDown={(e) => handleFormKeyNav(e, handleSaveSupplier)}
               placeholder="Notes (optional)"
               className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
             />
             <div className="flex items-center gap-2">
-              <input type="checkbox" id="dualParty" checked={form.isDualParty} onChange={(e) => setForm({ ...form, isDualParty: e.target.checked })} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+              <input type="checkbox" id="dualParty" checked={form.isDualParty} onChange={(e) => setForm({ ...form, isDualParty: e.target.checked })} onKeyDown={(e) => handleFormKeyNav(e)} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
               <label htmlFor="dualParty" className="text-xs text-slate-600">Also a customer (dual-party)</label>
             </div>
             <label className="text-xs text-slate-600">
@@ -508,6 +664,171 @@ export default function Suppliers() {
               <button onClick={() => { setShowAdd(false); setEditingId(null); }} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
             </div>
           </div>
+        </div>
+        </div>
+      )}
+
+      {/* Bulk Payments - each row picks its own supplier, for logging payments to many
+          different suppliers at once */}
+      {showBulkPayment && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowBulkPayment(false); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-3xl max-h-[90vh] overflow-y-auto" data-form-nav>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-slate-800 text-sm">Bulk Payments to Suppliers</h3>
+            <button onClick={() => setShowBulkPayment(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
+          </div>
+          <div className="space-y-2">
+            {bulkPaymentForms.map((f, i) => (
+              <div key={i} className="border border-slate-200 rounded p-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-slate-500">#{i + 1}</span>
+                  {bulkPaymentForms.length > 1 && (
+                    <button
+                      onClick={() => setBulkPaymentForms(bulkPaymentForms.filter((_, idx) => idx !== i))}
+                      className="text-red-500 hover:text-red-700 text-xs"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                  <select
+                    value={f.supplierId}
+                    onChange={(e) => {
+                      const newForms = [...bulkPaymentForms];
+                      newForms[i] = { ...newForms[i], supplierId: e.target.value };
+                      setBulkPaymentForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkPaymentRow)}
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  >
+                    <option value="">Supplier</option>
+                    {sortSuppliersByBalance(suppliers).map((s) => <option key={s.id} value={s.id}>{s.name} ({formatKES(s.balance)})</option>)}
+                  </select>
+                  <input
+                    type="number"
+                    value={f.amount}
+                    onChange={(e) => {
+                      const newForms = [...bulkPaymentForms];
+                      newForms[i] = { ...newForms[i], amount: e.target.value };
+                      setBulkPaymentForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkPaymentRow)}
+                    placeholder="Amount"
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                  <input
+                    type="date"
+                    value={f.date}
+                    onChange={(e) => {
+                      const newForms = [...bulkPaymentForms];
+                      newForms[i] = { ...newForms[i], date: e.target.value };
+                      // Row 1's date drives every other row's date too - each
+                      // row can still be changed individually after that.
+                      if (i === 0) {
+                        for (let j = 1; j < newForms.length; j++) newForms[j] = { ...newForms[j], date: e.target.value };
+                      }
+                      setBulkPaymentForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkPaymentRow)}
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                  <select
+                    value={f.mode}
+                    onChange={(e) => {
+                      const newForms = [...bulkPaymentForms];
+                      newForms[i] = { ...newForms[i], mode: e.target.value };
+                      setBulkPaymentForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkPaymentRow)}
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  >
+                    <option value="cash">Cash</option>
+                    <option value="mpesa">Mpesa</option>
+                    <option value="paybill">Paybill</option>
+                  </select>
+                </div>
+                <input
+                  type="text"
+                  value={f.notes}
+                  onChange={(e) => {
+                    const newForms = [...bulkPaymentForms];
+                    newForms[i] = { ...newForms[i], notes: e.target.value };
+                    setBulkPaymentForms(newForms);
+                  }}
+                  onKeyDown={(e) => handleFormKeyNav(e, addBulkPaymentRow)}
+                  placeholder="Notes (optional)"
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none mb-2"
+                />
+
+                {/* Transaction fee (Mpesa/Paybill only lose money to network fees) */}
+                {(f.mode === 'mpesa' || f.mode === 'paybill') && (
+                  <input
+                    type="number"
+                    value={f.transactionFee}
+                    onChange={(e) => {
+                      const newForms = [...bulkPaymentForms];
+                      newForms[i] = { ...newForms[i], transactionFee: e.target.value };
+                      setBulkPaymentForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkPaymentRow)}
+                    placeholder="Transaction fee (optional)"
+                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none mb-2"
+                  />
+                )}
+
+                {/* Post-dated cheque (only makes sense for Paybill/Bank) */}
+                {f.mode === 'paybill' && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={f.isPostDated}
+                      onChange={(e) => {
+                        const newForms = [...bulkPaymentForms];
+                        newForms[i] = { ...newForms[i], isPostDated: e.target.checked };
+                        setBulkPaymentForms(newForms);
+                      }}
+                      onKeyDown={(e) => handleFormKeyNav(e, addBulkPaymentRow)}
+                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <label className="text-xs text-slate-600">Post-dated cheque</label>
+                    {f.isPostDated && (
+                      <input
+                        type="date"
+                        value={f.clearsOn}
+                        onChange={(e) => {
+                          const newForms = [...bulkPaymentForms];
+                          newForms[i] = { ...newForms[i], clearsOn: e.target.value };
+                          setBulkPaymentForms(newForms);
+                        }}
+                        onKeyDown={(e) => handleFormKeyNav(e, addBulkPaymentRow)}
+                        className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
+                        placeholder="Clears on"
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-3 mt-3 pt-3 border-t border-slate-200">
+            <button
+              onClick={addBulkPaymentRow}
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-1.5 rounded text-sm font-medium flex items-center gap-1"
+            >
+              <Plus size={14} /> Add Row
+            </button>
+            <button onClick={handleBulkPaymentSave} disabled={bulkPaymentSaving} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm font-medium">
+              {bulkPaymentSaving ? 'Saving...' : 'Save All'}
+            </button>
+            <button onClick={() => setShowBulkPayment(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
+          </div>
+        </div>
         </div>
       )}
 
@@ -577,14 +898,28 @@ export default function Suppliers() {
                 </div>
               </div>
 
-              {/* Balance */}
-              <div className={`rounded-lg p-4 border mb-4 ${(selectedSupplier.balance || 0) < 0 ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
-                <p className={`text-sm ${(selectedSupplier.balance || 0) < 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                  {(selectedSupplier.balance || 0) < 0 ? 'Supplier Owes You (Credit)' : 'Balance Owed'}
-                </p>
-                <p className={`text-2xl font-bold ${(selectedSupplier.balance || 0) < 0 ? 'text-emerald-700' : 'text-red-700'}`}>
-                  KES {formatKES(Math.abs(selectedSupplier.balance || 0))}
-                </p>
+              {/* Balance + Totals */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                <div className={`rounded-lg p-4 border ${(selectedSupplier.balance || 0) < 0 ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
+                  <p className={`text-sm ${(selectedSupplier.balance || 0) < 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {(selectedSupplier.balance || 0) < 0 ? 'Supplier Owes You (Credit)' : 'Balance Owed'}
+                  </p>
+                  <p className={`text-2xl font-bold ${(selectedSupplier.balance || 0) < 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                    KES {formatKES(Math.abs(selectedSupplier.balance || 0))}
+                  </p>
+                </div>
+                <div className="rounded-lg p-4 border bg-amber-50 border-amber-100">
+                  <p className="text-sm text-amber-600">Total Invoiced</p>
+                  <p className="text-2xl font-bold text-amber-700">
+                    KES {formatKES(getSupplierTotals(selectedSupplier.id).invoiced)}
+                  </p>
+                </div>
+                <div className="rounded-lg p-4 border bg-slate-50 border-slate-200">
+                  <p className="text-sm text-slate-600">Total Paid</p>
+                  <p className="text-2xl font-bold text-slate-700">
+                    KES {formatKES(getSupplierTotals(selectedSupplier.id).paid)}
+                  </p>
+                </div>
               </div>
 
               {/* Transaction History */}
@@ -605,16 +940,22 @@ export default function Suppliers() {
                       <th className="px-3 py-2">Type</th>
                       <th className="px-3 py-2">Description</th>
                       <th className="px-3 py-2 text-right">Amount</th>
+                      <th className="px-3 py-2 text-right">Balance</th>
                       <th className="px-3 py-2 text-center">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {getSupplierTransactions(selectedSupplier.id).length === 0 ? (
-                      <tr><td colSpan={5} className="px-3 py-4 text-center text-slate-400 text-xs">No transactions</td></tr>
+                      <tr><td colSpan={6} className="px-3 py-4 text-center text-slate-400 text-xs">No transactions</td></tr>
                     ) : (
-                      getSupplierTransactions(selectedSupplier.id).map((t) => (
+                      getSupplierTransactions(selectedSupplier.id).map((t) => {
+                        const runningBalance = supplierRunningBalances.get(t.id) ?? 0;
+                        return (
                         <tr key={t.id} className={`hover:bg-slate-50 transition-colors ${isSaleIncomplete(t) ? 'bg-green-50' : ''}`} title={isSaleIncomplete(t) ? 'Missing payment mode, cost price, or selling price' : undefined}>
-                          <td className="px-3 py-2 text-slate-600">{formatDate(t.date)}</td>
+                          <td className="px-3 py-2 text-slate-600">
+                            {formatDate(t.date)}
+                            <span className="block text-xs text-slate-400">{formatTime(t.created_at)}</span>
+                          </td>
                           <td className="px-3 py-2">
                             <span className={`text-xs px-2 py-0.5 rounded-full ${
                               t.type === 'expense' ? 'bg-red-100 text-red-700' :
@@ -650,6 +991,9 @@ export default function Suppliers() {
                           }`}>
                             {t.type === 'supplier_payment' || t.type === 'sale' ? '-' : '+'}{formatKES(t.type === 'sale' ? (t.selling_price ?? t.amount) : t.amount)}
                           </td>
+                          <td className="px-3 py-2 text-right text-slate-600">
+                            {formatKES(Math.abs(runningBalance))}
+                          </td>
                           <td className="px-3 py-2 text-center">
                             <button
                               onClick={() => {
@@ -661,7 +1005,8 @@ export default function Suppliers() {
                             </button>
                           </td>
                         </tr>
-                      ))
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -675,8 +1020,8 @@ export default function Suppliers() {
 
       {/* Invoice Modal */}
       {showInvoice && selectedSupplier && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-md">
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onKeyDown={(e) => { if (e.key === 'Escape') setShowInvoice(false); }}>
+          <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-md" data-form-nav>
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold text-slate-800 text-sm">Invoice - {selectedSupplier.name}</h3>
               <button onClick={() => setShowInvoice(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
@@ -687,12 +1032,14 @@ export default function Suppliers() {
                   type="date"
                   value={invoiceForm.date}
                   onChange={(e) => setInvoiceForm({ ...invoiceForm, date: e.target.value })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 />
                 <input
                   type="number"
                   value={invoiceForm.amount}
                   onChange={(e) => setInvoiceForm({ ...invoiceForm, amount: e.target.value })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   placeholder="Amount"
                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 />
@@ -701,6 +1048,7 @@ export default function Suppliers() {
                 type="date"
                 value={invoiceForm.dueDate}
                 onChange={(e) => setInvoiceForm({ ...invoiceForm, dueDate: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Due Date"
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -708,6 +1056,7 @@ export default function Suppliers() {
                 type="text"
                 value={invoiceForm.notes}
                 onChange={(e) => setInvoiceForm({ ...invoiceForm, notes: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Notes (optional)"
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -717,6 +1066,7 @@ export default function Suppliers() {
                   id="setReminder"
                   checked={invoiceForm.setReminder}
                   onChange={(e) => setInvoiceForm({ ...invoiceForm, setReminder: e.target.checked })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                 />
                 <label htmlFor="setReminder" className="text-xs text-slate-600">Set reminder</label>
@@ -725,6 +1075,7 @@ export default function Suppliers() {
                     type="date"
                     value={invoiceForm.reminderDate}
                     onChange={(e) => setInvoiceForm({ ...invoiceForm, reminderDate: e.target.value })}
+                    onKeyDown={(e) => handleFormKeyNav(e, handleAddInvoice)}
                     className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
                     placeholder="Reminder date"
                   />
@@ -738,8 +1089,8 @@ export default function Suppliers() {
 
       {/* Payment Modal */}
       {showPayment && selectedSupplier && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-md">
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onKeyDown={(e) => { if (e.key === 'Escape') setShowPayment(false); }}>
+          <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-md" data-form-nav>
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold text-slate-800 text-sm">Pay - {selectedSupplier.name}</h3>
               <button onClick={() => setShowPayment(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
@@ -750,6 +1101,7 @@ export default function Suppliers() {
                   type="number"
                   value={paymentForm.amount}
                   onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   placeholder="Amount"
                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 />
@@ -757,11 +1109,13 @@ export default function Suppliers() {
                   type="date"
                   value={paymentForm.date}
                   onChange={(e) => setPaymentForm({ ...paymentForm, date: e.target.value })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 />
                 <select
                   value={paymentForm.mode}
                   onChange={(e) => setPaymentForm({ ...paymentForm, mode: e.target.value })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 >
                   <option value="cash">Cash</option>
@@ -774,6 +1128,7 @@ export default function Suppliers() {
                   type="number"
                   value={paymentForm.transactionFee}
                   onChange={(e) => setPaymentForm({ ...paymentForm, transactionFee: e.target.value })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   placeholder="Transaction fee (optional)"
                   className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 />
@@ -785,6 +1140,7 @@ export default function Suppliers() {
                     id="paymentPostDated"
                     checked={paymentForm.isPostDated}
                     onChange={(e) => setPaymentForm({ ...paymentForm, isPostDated: e.target.checked })}
+                    onKeyDown={(e) => handleFormKeyNav(e)}
                     className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                   />
                   <label htmlFor="paymentPostDated" className="text-xs text-slate-600">Post-dated cheque</label>
@@ -793,6 +1149,7 @@ export default function Suppliers() {
                       type="date"
                       value={paymentForm.clearsOn}
                       onChange={(e) => setPaymentForm({ ...paymentForm, clearsOn: e.target.value })}
+                      onKeyDown={(e) => handleFormKeyNav(e)}
                       className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
                       placeholder="Clears on"
                     />
@@ -818,7 +1175,7 @@ export default function Suppliers() {
                 type="text"
                 value={paymentForm.notes}
                 onChange={(e) => setPaymentForm({ ...paymentForm, notes: e.target.value })}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handlePayment(); }}}
+                onKeyDown={(e) => handleFormKeyNav(e, handlePayment)}
                 placeholder="Notes (optional)"
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -832,7 +1189,7 @@ export default function Suppliers() {
         open={showLedger}
         onClose={() => setShowLedger(false)}
         title="Supplier Ledger"
-        filterTypes={['supplier_invoice', 'supplier_payment', 'expense']}
+        filterTypes={['supplier_invoice', 'supplier_payment']}
       />
     </div>
   );

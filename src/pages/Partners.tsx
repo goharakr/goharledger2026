@@ -20,6 +20,8 @@ import { fetchAllRows } from '../utils/fetchAll';
 import { buildMonthlyFigures, getDoubleCountedMonths as getDoubleCountedMonthsShared, calculateHomeExpensesOwed, calculateShareDue as calculateShareDueShared } from '../utils/shareDue';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { usePersistentState } from '../context/PageStateContext';
+import { handleFormKeyNav } from '../utils/formKeyNav';
 import LedgerModal from '../components/LedgerModal';
 import type { Transaction, HistoricalProfit } from '../types';
 
@@ -42,7 +44,7 @@ export default function Partners() {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const partnerParam = searchParams.get('partner');
-  const [activePartner, setActivePartner] = useState<'taher' | 'abdulqadir'>(
+  const [activePartner, setActivePartner] = usePersistentState<'taher' | 'abdulqadir'>('partners.activePartner', () =>
     partnerParam === 'abdulqadir' || partnerParam === 'taher'
       ? partnerParam
       : user?.username === 'abdulqadir' ? 'abdulqadir' : 'taher'
@@ -51,16 +53,16 @@ export default function Partners() {
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
   const [shareRules, setShareRules] = useState<{ partner_id: string; rule_type: string; value: number }[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showDraw, setShowDraw] = useState(false);
-  const [showReturn, setShowReturn] = useState(false);
-  const [drawForm, setDrawForm] = useState<DrawForm>(emptyDraw);
-  const [returnForm, setReturnForm] = useState<DrawForm>(emptyDraw);
-  const [showMarkTaken, setShowMarkTaken] = useState<{ type: 'profit' | 'expense'; amount: number; id: string } | null>(null);
-  const [markForm, setMarkForm] = useState<DrawForm>(emptyDraw);
+  const [showDraw, setShowDraw] = usePersistentState('partners.showDraw', false);
+  const [showReturn, setShowReturn] = usePersistentState('partners.showReturn', false);
+  const [drawForm, setDrawForm] = usePersistentState<DrawForm>('partners.drawForm', emptyDraw);
+  const [returnForm, setReturnForm] = usePersistentState<DrawForm>('partners.returnForm', emptyDraw);
+  const [showMarkTaken, setShowMarkTaken] = usePersistentState<{ type: 'profit' | 'expense'; amount: number; id: string } | null>('partners.showMarkTaken', null);
+  const [markForm, setMarkForm] = usePersistentState<DrawForm>('partners.markForm', emptyDraw);
   const [showLedger, setShowLedger] = useState(false);
-  const [takenPreset, setTakenPreset] = useState<DatePreset>('month');
-  const [takenCustomFrom, setTakenCustomFrom] = useState('');
-  const [takenCustomTo, setTakenCustomTo] = useState('');
+  const [takenPreset, setTakenPreset] = usePersistentState<DatePreset>('partners.takenPreset', 'month');
+  const [takenCustomFrom, setTakenCustomFrom] = usePersistentState('partners.takenCustomFrom', '');
+  const [takenCustomTo, setTakenCustomTo] = usePersistentState('partners.takenCustomTo', '');
   const [showEditRules, setShowEditRules] = useState(false);
   const [ruleForm, setRuleForm] = useState({ type: 'fixed' as 'fixed' | 'percentage', taherValue: '100000', abdulqadirValue: '100000' });
 
@@ -438,18 +440,22 @@ export default function Partners() {
         </div>
       )}
 
-      {/* Draw Modal */}
+      {/* Draw Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showDraw && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-6">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowDraw(false); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-slate-800">Take Money from Shop</h3>
             <button onClick={() => setShowDraw(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18} /></button>
           </div>
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div><label className="block text-sm font-medium text-slate-700 mb-1">Amount</label><input type="number" value={drawForm.amount} onChange={(e) => setDrawForm({ ...drawForm, amount: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
-              <div><label className="block text-sm font-medium text-slate-700 mb-1">Date</label><input type="date" value={drawForm.date} onChange={(e) => setDrawForm({ ...drawForm, date: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
-              <div><label className="block text-sm font-medium text-slate-700 mb-1">Mode</label><select value={drawForm.mode} onChange={(e) => setDrawForm({ ...drawForm, mode: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"><option value="cash">Cash</option><option value="mpesa">Mpesa</option><option value="paybill">Paybill</option></select></div>
+              <div><label className="block text-sm font-medium text-slate-700 mb-1">Amount</label><input type="number" value={drawForm.amount} onChange={(e) => setDrawForm({ ...drawForm, amount: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
+              <div><label className="block text-sm font-medium text-slate-700 mb-1">Date</label><input type="date" value={drawForm.date} onChange={(e) => setDrawForm({ ...drawForm, date: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
+              <div><label className="block text-sm font-medium text-slate-700 mb-1">Mode</label><select value={drawForm.mode} onChange={(e) => setDrawForm({ ...drawForm, mode: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"><option value="cash">Cash</option><option value="mpesa">Mpesa</option><option value="paybill">Paybill</option></select></div>
             </div>
             <div><label className="block text-sm font-medium text-slate-700 mb-1">Notes</label><textarea value={drawForm.notes} onChange={(e) => setDrawForm({ ...drawForm, notes: e.target.value })} rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
             <div className="flex gap-3">
@@ -458,20 +464,25 @@ export default function Partners() {
             </div>
           </div>
         </div>
+        </div>
       )}
 
-      {/* Return Modal */}
+      {/* Return Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showReturn && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-6">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowReturn(false); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-slate-800">Return Money to Shop</h3>
             <button onClick={() => setShowReturn(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18} /></button>
           </div>
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div><label className="block text-sm font-medium text-slate-700 mb-1">Amount</label><input type="number" value={returnForm.amount} onChange={(e) => setReturnForm({ ...returnForm, amount: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
-              <div><label className="block text-sm font-medium text-slate-700 mb-1">Date</label><input type="date" value={returnForm.date} onChange={(e) => setReturnForm({ ...returnForm, date: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
-              <div><label className="block text-sm font-medium text-slate-700 mb-1">Mode</label><select value={returnForm.mode} onChange={(e) => setReturnForm({ ...returnForm, mode: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"><option value="cash">Cash</option><option value="mpesa">Mpesa</option><option value="paybill">Paybill</option></select></div>
+              <div><label className="block text-sm font-medium text-slate-700 mb-1">Amount</label><input type="number" value={returnForm.amount} onChange={(e) => setReturnForm({ ...returnForm, amount: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
+              <div><label className="block text-sm font-medium text-slate-700 mb-1">Date</label><input type="date" value={returnForm.date} onChange={(e) => setReturnForm({ ...returnForm, date: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
+              <div><label className="block text-sm font-medium text-slate-700 mb-1">Mode</label><select value={returnForm.mode} onChange={(e) => setReturnForm({ ...returnForm, mode: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"><option value="cash">Cash</option><option value="mpesa">Mpesa</option><option value="paybill">Paybill</option></select></div>
             </div>
             <div><label className="block text-sm font-medium text-slate-700 mb-1">Notes</label><textarea value={returnForm.notes} onChange={(e) => setReturnForm({ ...returnForm, notes: e.target.value })} rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
             <div className="flex gap-3">
@@ -480,20 +491,25 @@ export default function Partners() {
             </div>
           </div>
         </div>
+        </div>
       )}
 
-      {/* Mark Taken Modal */}
+      {/* Mark Taken Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showMarkTaken && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-6">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowMarkTaken(null); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-slate-800">Mark {showMarkTaken.type === 'profit' ? 'Profit Share' : 'Home Expense'} as Taken</h3>
             <button onClick={() => setShowMarkTaken(null)} className="p-1 hover:bg-slate-100 rounded"><X size={18} /></button>
           </div>
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div><label className="block text-sm font-medium text-slate-700 mb-1">Amount</label><input type="number" value={markForm.amount} onChange={(e) => setMarkForm({ ...markForm, amount: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
-              <div><label className="block text-sm font-medium text-slate-700 mb-1">Date</label><input type="date" value={markForm.date} onChange={(e) => setMarkForm({ ...markForm, date: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
-              <div><label className="block text-sm font-medium text-slate-700 mb-1">Mode</label><select value={markForm.mode} onChange={(e) => setMarkForm({ ...markForm, mode: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"><option value="cash">Cash</option><option value="mpesa">Mpesa</option><option value="paybill">Paybill</option></select></div>
+              <div><label className="block text-sm font-medium text-slate-700 mb-1">Amount</label><input type="number" value={markForm.amount} onChange={(e) => setMarkForm({ ...markForm, amount: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
+              <div><label className="block text-sm font-medium text-slate-700 mb-1">Date</label><input type="date" value={markForm.date} onChange={(e) => setMarkForm({ ...markForm, date: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
+              <div><label className="block text-sm font-medium text-slate-700 mb-1">Mode</label><select value={markForm.mode} onChange={(e) => setMarkForm({ ...markForm, mode: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"><option value="cash">Cash</option><option value="mpesa">Mpesa</option><option value="paybill">Paybill</option></select></div>
             </div>
             <div><label className="block text-sm font-medium text-slate-700 mb-1">Notes</label><textarea value={markForm.notes} onChange={(e) => setMarkForm({ ...markForm, notes: e.target.value })} rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
             <div className="flex gap-3">
@@ -501,6 +517,7 @@ export default function Partners() {
               <button onClick={() => setShowMarkTaken(null)} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm">Cancel</button>
             </div>
           </div>
+        </div>
         </div>
       )}
 

@@ -17,6 +17,8 @@ import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { usePersistentState } from '../context/PageStateContext';
+import { handleFormKeyNav } from '../utils/formKeyNav';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
@@ -54,22 +56,22 @@ export default function Capital() {
   const [capitalTxns, setCapitalTxns] = useState<Transaction[]>([]);
   const [loans, setLoans] = useState<LoanTracker[]>([]);
   const [loanPayments, setLoanPayments] = useState<Transaction[]>([]);
-  const [historyDatePreset, setHistoryDatePreset] = useState<DatePreset>('month');
-  const [historyCustomFrom, setHistoryCustomFrom] = useState('');
-  const [historyCustomTo, setHistoryCustomTo] = useState('');
+  const [historyDatePreset, setHistoryDatePreset] = usePersistentState<DatePreset>('capital.historyDatePreset', 'month');
+  const [historyCustomFrom, setHistoryCustomFrom] = usePersistentState('capital.historyCustomFrom', '');
+  const [historyCustomTo, setHistoryCustomTo] = usePersistentState('capital.historyCustomTo', '');
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showCapital, setShowCapital] = useState(false);
-  const [showLoanPayment, setShowLoanPayment] = useState(false);
-  const [showAddLoan, setShowAddLoan] = useState(false);
-  const [showEditLoan, setShowEditLoan] = useState<string | null>(null);
-  const [showHistorical, setShowHistorical] = useState(false);
-  const [selectedLoan, setSelectedLoan] = useState<string>('');
-  const [editingCapitalId, setEditingCapitalId] = useState<string | null>(null);
-  const [editingHistoricalId, setEditingHistoricalId] = useState<string | null>(null);
-  const [capitalForm, setCapitalForm] = useState<CapitalForm>(emptyCapital);
-  const [loanPaymentForm, setLoanPaymentForm] = useState<LoanPaymentForm>({ amount: '', date: todayStr(), mode: 'cash', notes: '' });
-  const [newLoanForm, setNewLoanForm] = useState({
+  const [showCapital, setShowCapital] = usePersistentState('capital.showCapital', false);
+  const [showLoanPayment, setShowLoanPayment] = usePersistentState('capital.showLoanPayment', false);
+  const [showAddLoan, setShowAddLoan] = usePersistentState('capital.showAddLoan', false);
+  const [showEditLoan, setShowEditLoan] = usePersistentState<string | null>('capital.showEditLoan', null);
+  const [showHistorical, setShowHistorical] = usePersistentState('capital.showHistorical', false);
+  const [selectedLoan, setSelectedLoan] = usePersistentState<string>('capital.selectedLoan', '');
+  const [editingCapitalId, setEditingCapitalId] = usePersistentState<string | null>('capital.editingCapitalId', null);
+  const [editingHistoricalId, setEditingHistoricalId] = usePersistentState<string | null>('capital.editingHistoricalId', null);
+  const [capitalForm, setCapitalForm] = usePersistentState<CapitalForm>('capital.capitalForm', emptyCapital);
+  const [loanPaymentForm, setLoanPaymentForm] = usePersistentState<LoanPaymentForm>('capital.loanPaymentForm', { amount: '', date: todayStr(), mode: 'cash', notes: '' });
+  const [newLoanForm, setNewLoanForm] = usePersistentState('capital.newLoanForm', {
     loanName: '',
     totalAmount: '',
     amountPaid: '0',
@@ -77,7 +79,7 @@ export default function Capital() {
     startDate: todayStr(),
     notes: '',
   });
-  const [editLoanForm, setEditLoanForm] = useState({
+  const [editLoanForm, setEditLoanForm] = usePersistentState('capital.editLoanForm', {
     loanName: '',
     totalAmount: '',
     amountPaid: '',
@@ -85,7 +87,7 @@ export default function Capital() {
     startDate: '',
     notes: '',
   });
-  const [historicalForm, setHistoricalForm] = useState({
+  const [historicalForm, setHistoricalForm] = usePersistentState('capital.historicalForm', {
     month: thisMonthStr(),
     totalProfit: '',
     taherShare: '',
@@ -453,113 +455,128 @@ export default function Capital() {
         </button>
       </div>
 
-      {/* Capital Entry Modal */}
+      {/* Capital Entry Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showCapital && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') { setShowCapital(false); setEditingCapitalId(null); } }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-slate-800 text-sm">{editingCapitalId ? 'Edit' : 'Add'} Capital Entry</h3>
             <button onClick={() => { setShowCapital(false); setEditingCapitalId(null); }} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
           </div>
           <div className="space-y-2">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <select value={capitalForm.partnerId} onChange={(e) => setCapitalForm({ ...capitalForm, partnerId: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm">
+              <select value={capitalForm.partnerId} onChange={(e) => setCapitalForm({ ...capitalForm, partnerId: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="border border-slate-300 rounded px-2 py-1.5 text-sm">
                 <option value="taher">Taher</option>
                 <option value="abdulqadir">Abdulqadir</option>
               </select>
-              <select value={capitalForm.entryType} onChange={(e) => setCapitalForm({ ...capitalForm, entryType: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm">
+              <select value={capitalForm.entryType} onChange={(e) => setCapitalForm({ ...capitalForm, entryType: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="border border-slate-300 rounded px-2 py-1.5 text-sm">
                 <option value="initial_capital">Initial</option>
                 <option value="additional_investment">Addition</option>
                 <option value="retained_profit">Retained</option>
               </select>
-              <input type="number" value={capitalForm.amount} onChange={(e) => setCapitalForm({ ...capitalForm, amount: e.target.value })} placeholder="Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-              <input type="date" value={capitalForm.date} onChange={(e) => setCapitalForm({ ...capitalForm, date: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="number" value={capitalForm.amount} onChange={(e) => setCapitalForm({ ...capitalForm, amount: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="date" value={capitalForm.date} onChange={(e) => setCapitalForm({ ...capitalForm, date: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
             </div>
             <div>
-              <select value={capitalForm.mode} onChange={(e) => setCapitalForm({ ...capitalForm, mode: e.target.value })} className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm">
+              <select value={capitalForm.mode} onChange={(e) => setCapitalForm({ ...capitalForm, mode: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm">
                 <option value="">No real cash (e.g. Retained Profit) - don't add to wallet balance</option>
                 <option value="mpesa">Mpesa - add to Mpesa balance</option>
                 <option value="cash">Cash - add to Cash in Hand</option>
                 <option value="paybill">Paybill - add to Bank balance</option>
               </select>
             </div>
-            <input type="text" value={capitalForm.description} onChange={(e) => setCapitalForm({ ...capitalForm, description: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (editingCapitalId ? handleUpdateCapital : handleSaveCapital)(); }}} placeholder="Description (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
+            <input type="text" value={capitalForm.description} onChange={(e) => setCapitalForm({ ...capitalForm, description: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, () => (editingCapitalId ? handleUpdateCapital : handleSaveCapital)())} placeholder="Description (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
             <div className="flex gap-2 pt-2 border-t border-slate-200">
               <button onClick={editingCapitalId ? handleUpdateCapital : handleSaveCapital} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium">{editingCapitalId ? 'Update' : 'Save'}</button>
               <button onClick={() => { setShowCapital(false); setEditingCapitalId(null); }} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
             </div>
           </div>
         </div>
+        </div>
       )}
 
-      {/* Loan Payment Modal */}
+      {/* Loan Payment Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showLoanPayment && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowLoanPayment(false); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-slate-800 text-sm">Loan Payment</h3>
             <button onClick={() => setShowLoanPayment(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
           </div>
           <div className="space-y-2">
-            <select value={selectedLoan} onChange={(e) => setSelectedLoan(e.target.value)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm">
+            <select value={selectedLoan} onChange={(e) => setSelectedLoan(e.target.value)} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm">
               <option value="">Select Loan</option>
               {loans.map((l) => <option key={l.id} value={l.id}>{l.loan_name} ({formatKES(l.remaining_balance)})</option>)}
             </select>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <input type="number" value={loanPaymentForm.amount} onChange={(e) => setLoanPaymentForm({ ...loanPaymentForm, amount: e.target.value })} placeholder="Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-              <input type="date" value={loanPaymentForm.date} onChange={(e) => setLoanPaymentForm({ ...loanPaymentForm, date: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-              <select value={loanPaymentForm.mode} onChange={(e) => setLoanPaymentForm({ ...loanPaymentForm, mode: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm">
+              <input type="number" value={loanPaymentForm.amount} onChange={(e) => setLoanPaymentForm({ ...loanPaymentForm, amount: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="date" value={loanPaymentForm.date} onChange={(e) => setLoanPaymentForm({ ...loanPaymentForm, date: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <select value={loanPaymentForm.mode} onChange={(e) => setLoanPaymentForm({ ...loanPaymentForm, mode: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="border border-slate-300 rounded px-2 py-1.5 text-sm">
                 <option value="cash">Cash</option>
                 <option value="mpesa">Mpesa</option>
                 <option value="paybill">Paybill</option>
               </select>
             </div>
-            <input type="text" value={loanPaymentForm.notes} onChange={(e) => setLoanPaymentForm({ ...loanPaymentForm, notes: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleLoanPayment(); }}} placeholder="Notes (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
+            <input type="text" value={loanPaymentForm.notes} onChange={(e) => setLoanPaymentForm({ ...loanPaymentForm, notes: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, handleLoanPayment)} placeholder="Notes (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
             <button onClick={handleLoanPayment} className="w-full bg-amber-600 hover:bg-amber-700 text-white py-1.5 rounded text-sm font-medium">Pay Loan</button>
           </div>
         </div>
+        </div>
       )}
 
-      {/* Add New Loan Modal */}
+      {/* Add New Loan Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showAddLoan && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowAddLoan(false); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-slate-800 text-sm">Add New Loan</h3>
             <button onClick={() => setShowAddLoan(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
           </div>
           <div className="space-y-2">
             <div className="grid grid-cols-2 gap-2">
-              <input type="text" value={newLoanForm.loanName} onChange={(e) => setNewLoanForm({ ...newLoanForm, loanName: e.target.value })} placeholder="Loan Name" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-              <input type="number" value={newLoanForm.totalAmount} onChange={(e) => setNewLoanForm({ ...newLoanForm, totalAmount: e.target.value })} placeholder="Total Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="text" value={newLoanForm.loanName} onChange={(e) => setNewLoanForm({ ...newLoanForm, loanName: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Loan Name" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="number" value={newLoanForm.totalAmount} onChange={(e) => setNewLoanForm({ ...newLoanForm, totalAmount: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Total Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <input type="number" value={newLoanForm.amountPaid} onChange={(e) => setNewLoanForm({ ...newLoanForm, amountPaid: e.target.value })} placeholder="Paid" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-              <input type="number" value={newLoanForm.monthlyInstallment} onChange={(e) => setNewLoanForm({ ...newLoanForm, monthlyInstallment: e.target.value })} placeholder="Monthly" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-              <input type="date" value={newLoanForm.startDate} onChange={(e) => setNewLoanForm({ ...newLoanForm, startDate: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="number" value={newLoanForm.amountPaid} onChange={(e) => setNewLoanForm({ ...newLoanForm, amountPaid: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Paid" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="number" value={newLoanForm.monthlyInstallment} onChange={(e) => setNewLoanForm({ ...newLoanForm, monthlyInstallment: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Monthly" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="date" value={newLoanForm.startDate} onChange={(e) => setNewLoanForm({ ...newLoanForm, startDate: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
             </div>
-            <input type="text" value={newLoanForm.notes} onChange={(e) => setNewLoanForm({ ...newLoanForm, notes: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddLoan(); }}} placeholder="Notes (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
+            <input type="text" value={newLoanForm.notes} onChange={(e) => setNewLoanForm({ ...newLoanForm, notes: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, handleAddLoan)} placeholder="Notes (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
             <button onClick={handleAddLoan} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded text-sm font-medium">Add Loan</button>
           </div>
+        </div>
         </div>
       )}
 
       {/* Edit Loan Modal */}
       {showEditLoan && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-md">
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onKeyDown={(e) => { if (e.key === 'Escape') setShowEditLoan(null); }}>
+          <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-md" data-form-nav>
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold text-slate-800 text-sm">Edit Loan</h3>
               <button onClick={() => setShowEditLoan(null)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
             </div>
             <div className="space-y-2">
               <div className="grid grid-cols-2 gap-2">
-                <input type="text" value={editLoanForm.loanName} onChange={(e) => setEditLoanForm({ ...editLoanForm, loanName: e.target.value })} placeholder="Loan Name" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-                <input type="number" value={editLoanForm.totalAmount} onChange={(e) => setEditLoanForm({ ...editLoanForm, totalAmount: e.target.value })} placeholder="Total" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                <input type="text" value={editLoanForm.loanName} onChange={(e) => setEditLoanForm({ ...editLoanForm, loanName: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Loan Name" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                <input type="number" value={editLoanForm.totalAmount} onChange={(e) => setEditLoanForm({ ...editLoanForm, totalAmount: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Total" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <input type="number" value={editLoanForm.amountPaid} onChange={(e) => setEditLoanForm({ ...editLoanForm, amountPaid: e.target.value })} placeholder="Paid" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-                <input type="number" value={editLoanForm.monthlyInstallment} onChange={(e) => setEditLoanForm({ ...editLoanForm, monthlyInstallment: e.target.value })} placeholder="Monthly" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-                <input type="date" value={editLoanForm.startDate} onChange={(e) => setEditLoanForm({ ...editLoanForm, startDate: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                <input type="number" value={editLoanForm.amountPaid} onChange={(e) => setEditLoanForm({ ...editLoanForm, amountPaid: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Paid" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                <input type="number" value={editLoanForm.monthlyInstallment} onChange={(e) => setEditLoanForm({ ...editLoanForm, monthlyInstallment: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Monthly" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                <input type="date" value={editLoanForm.startDate} onChange={(e) => setEditLoanForm({ ...editLoanForm, startDate: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
               </div>
-              <input type="text" value={editLoanForm.notes} onChange={(e) => setEditLoanForm({ ...editLoanForm, notes: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleEditLoan(); }}} placeholder="Notes" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="text" value={editLoanForm.notes} onChange={(e) => setEditLoanForm({ ...editLoanForm, notes: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, handleEditLoan)} placeholder="Notes" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
               <div className="flex gap-2 pt-2 border-t border-slate-200">
                 <button onClick={handleEditLoan} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium">Update</button>
                 <button onClick={() => setShowEditLoan(null)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
@@ -569,29 +586,34 @@ export default function Capital() {
         </div>
       )}
 
-      {/* Historical Profit Modal */}
+      {/* Historical Profit Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showHistorical && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') { setShowHistorical(false); setEditingHistoricalId(null); } }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-slate-800 text-sm">{editingHistoricalId ? 'Edit' : 'Add'} Historical Profit</h3>
             <button onClick={() => { setShowHistorical(false); setEditingHistoricalId(null); }} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
           </div>
           <div className="space-y-2">
             <div className="grid grid-cols-2 gap-2">
-              <input type="month" value={historicalForm.month} onChange={(e) => setHistoricalForm({ ...historicalForm, month: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-              <input type="number" value={historicalForm.totalProfit} onChange={(e) => setHistoricalForm({ ...historicalForm, totalProfit: e.target.value })} placeholder="Total Profit" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="month" value={historicalForm.month} onChange={(e) => setHistoricalForm({ ...historicalForm, month: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="number" value={historicalForm.totalProfit} onChange={(e) => setHistoricalForm({ ...historicalForm, totalProfit: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Total Profit" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <input type="number" value={historicalForm.taherShare} onChange={(e) => setHistoricalForm({ ...historicalForm, taherShare: e.target.value })} placeholder="Taher Share" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-              <input type="number" value={historicalForm.abdulqadirShare} onChange={(e) => setHistoricalForm({ ...historicalForm, abdulqadirShare: e.target.value })} placeholder="Abdul Share" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="number" value={historicalForm.taherShare} onChange={(e) => setHistoricalForm({ ...historicalForm, taherShare: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Taher Share" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="number" value={historicalForm.abdulqadirShare} onChange={(e) => setHistoricalForm({ ...historicalForm, abdulqadirShare: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Abdul Share" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <input type="number" value={historicalForm.taherTaken} onChange={(e) => setHistoricalForm({ ...historicalForm, taherTaken: e.target.value })} placeholder="Taher Taken" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-              <input type="number" value={historicalForm.abdulqadirTaken} onChange={(e) => setHistoricalForm({ ...historicalForm, abdulqadirTaken: e.target.value })} placeholder="Abdul Taken" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="number" value={historicalForm.taherTaken} onChange={(e) => setHistoricalForm({ ...historicalForm, taherTaken: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Taher Taken" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <input type="number" value={historicalForm.abdulqadirTaken} onChange={(e) => setHistoricalForm({ ...historicalForm, abdulqadirTaken: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Abdul Taken" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
             </div>
-            <input type="text" value={historicalForm.notes} onChange={(e) => setHistoricalForm({ ...historicalForm, notes: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (editingHistoricalId ? handleUpdateHistorical : handleSaveHistorical)(); }}} placeholder="Notes (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
+            <input type="text" value={historicalForm.notes} onChange={(e) => setHistoricalForm({ ...historicalForm, notes: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, () => (editingHistoricalId ? handleUpdateHistorical : handleSaveHistorical)())} placeholder="Notes (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
             <button onClick={editingHistoricalId ? handleUpdateHistorical : handleSaveHistorical} className="w-full bg-purple-600 hover:bg-purple-700 text-white py-1.5 rounded text-sm font-medium">{editingHistoricalId ? 'Update' : 'Save'}</button>
           </div>
+        </div>
         </div>
       )}
 

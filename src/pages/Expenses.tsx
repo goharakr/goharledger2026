@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Settings,
   BookOpen,
+  UserPlus,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr } from '../utils/format';
@@ -18,6 +19,8 @@ import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { usePersistentState } from '../context/PageStateContext';
+import { handleFormKeyNav } from '../utils/formKeyNav';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
@@ -31,6 +34,8 @@ import SettlementModeFields, {
   SettlementAmounts,
 } from '../components/SettlementModeFields';
 import type { ShareRule } from '../utils/shareDue';
+import { findBestMatch } from '../utils/fuzzyMatch';
+import { parseExpenseSheetText } from '../utils/expenseSmartEntryParser';
 import type { Transaction, Supplier, LoanTracker, ExpenseCategory, Customer, HistoricalProfit } from '../types';
 
 interface ExpenseForm {
@@ -67,10 +72,79 @@ const emptyForm: ExpenseForm = {
   settlement: emptySettlementAmounts,
 };
 
+interface BulkExpenseRow {
+  date: string;
+  amount: string;
+  mode: string;
+  category: string;
+  partnerId: string;
+  source: 'shop' | 'own_pocket';
+  description: string;
+  isPostDated: boolean;
+  clearsOn: string;
+  transactionFee: string;
+  // Only set on rows that came from Smart Entry and still have something
+  // worth a second look before saving - never set on a manually-typed row.
+  smartFlags?: string[];
+}
+
+const emptyBulkRow: BulkExpenseRow = {
+  date: todayStr(),
+  amount: '',
+  mode: 'cash',
+  category: '',
+  partnerId: '',
+  source: 'shop',
+  description: '',
+  isPostDated: false,
+  clearsOn: '',
+  transactionFee: '',
+};
+
+interface BulkSupplierPaymentRow {
+  supplierId: string;
+  amount: string;
+  date: string;
+  mode: string;
+  notes: string;
+  isPostDated: boolean;
+  clearsOn: string;
+  transactionFee: string;
+  smartFlags?: string[];
+}
+
+const emptyBulkSupplierRow: BulkSupplierPaymentRow = {
+  supplierId: '',
+  amount: '',
+  date: todayStr(),
+  mode: 'cash',
+  notes: '',
+  isPostDated: false,
+  clearsOn: '',
+  transactionFee: '',
+};
+
+// A row parsed from a Smart Entry paste, before it's handed off to whichever
+// tab's Bulk Entry actually saves it - Shop/Home/Supplier Bulk Entry each
+// live on their own tab, so one paste's rows get split into these 3 groups.
+interface ExpenseSmartPreviewRow {
+  destination: 'shop' | 'home' | 'supplier';
+  date: string;
+  amount: string;
+  mode: string;
+  category: string;
+  partnerId: string;
+  source: 'shop' | 'own_pocket';
+  supplierId: string;
+  matchName: string;
+  description: string;
+  flags: string[];
+}
+
 export default function Expenses() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'shop' | 'home' | 'partners' | 'loans' | 'suppliers'>('shop');
+  const [activeTab, setActiveTab] = usePersistentState<'shop' | 'home' | 'partners' | 'loans' | 'suppliers'>('expenses.activeTab', 'shop');
   const [expenses, setExpenses] = useState<Transaction[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loans, setLoans] = useState<LoanTracker[]>([]);
@@ -81,22 +155,41 @@ export default function Expenses() {
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
   const [splits, setSplits] = useState<{ transaction_id: string; mode: string; amount: number }[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<ExpenseForm>(emptyForm);
-  const [search, setSearch] = useState('');
-  const [filterCategory, setFilterCategory] = useState('');
-  const [datePreset, setDatePreset] = useState<DatePreset>('month');
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
-  const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set());
+  const [showAdd, setShowAdd] = usePersistentState('expenses.showAdd', false);
+  const [editingId, setEditingId] = usePersistentState<string | null>('expenses.editingId', null);
+  const [form, setForm] = usePersistentState<ExpenseForm>('expenses.form', emptyForm);
+  const [search, setSearch] = usePersistentState('expenses.search', '');
+  const [filterCategory, setFilterCategory] = usePersistentState('expenses.filterCategory', '');
+  const [datePreset, setDatePreset] = usePersistentState<DatePreset>('expenses.datePreset', 'month');
+  const [customFrom, setCustomFrom] = usePersistentState('expenses.customFrom', '');
+  const [customTo, setCustomTo] = usePersistentState('expenses.customTo', '');
+  const [expandedDates, setExpandedDates] = usePersistentState<Set<string>>('expenses.expandedDates', () => new Set());
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryDesc, setNewCategoryDesc] = useState('');
   const [showLedger, setShowLedger] = useState(false);
+  const [showBulk, setShowBulk] = usePersistentState('expenses.showBulk', false);
+  const [bulkForms, setBulkForms] = usePersistentState<BulkExpenseRow[]>('expenses.bulkForms', () => Array.from({ length: 10 }, () => ({ ...emptyBulkRow })));
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [showBulkSupplier, setShowBulkSupplier] = usePersistentState('expenses.showBulkSupplier', false);
+  const [bulkSupplierForms, setBulkSupplierForms] = usePersistentState<BulkSupplierPaymentRow[]>('expenses.bulkSupplierForms', () => Array.from({ length: 10 }, () => ({ ...emptyBulkSupplierRow })));
+  const [bulkSupplierSaving, setBulkSupplierSaving] = useState(false);
+  const [showQuickAddSupplier, setShowQuickAddSupplier] = useState(false);
+  const [quickSupplier, setQuickSupplier] = useState({ name: '', phone: '', balance: '' });
+  // Which Bulk Payments row has its quick-add mini-form open (null = none)
+  const [bulkQuickAddSupplierRow, setBulkQuickAddSupplierRow] = useState<number | null>(null);
+  const [showSmartEntry, setShowSmartEntry] = usePersistentState('expenses.showSmartEntry', false);
+  const [smartEntryPaste, setSmartEntryPaste] = usePersistentState('expenses.smartEntryPaste', '');
+  const [smartEntryPreview, setSmartEntryPreview] = usePersistentState<ExpenseSmartPreviewRow[]>('expenses.smartEntryPreview', () => []);
+  // Which month/year to assume for Smart Entry dates that have no month in
+  // them ("1ST"/"2ND"...) - defaults to the current month, but is editable so
+  // pasting an older sheet after the month has moved on doesn't misdate everything.
+  const [smartEntryMonth, setSmartEntryMonth] = usePersistentState('expenses.smartEntryMonth', () => todayStr().slice(0, 7));
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchData();
+    setSelectedIds(new Set());
   }, [activeTab, refreshKey]);
 
   async function fetchData() {
@@ -175,6 +268,176 @@ export default function Expenses() {
       description: `Transaction fee - ${relatedTo}`,
       created_by: user?.username || null,
     }));
+  }
+
+  async function handleQuickAddSupplier() {
+    const name = quickSupplier.name.trim();
+    if (!name) return;
+    if (suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+      alert('A supplier with this name already exists.');
+      return;
+    }
+    const openingBalance = parseFloat(quickSupplier.balance || '0');
+    const { data } = await supabase.from('suppliers').insert({
+      name,
+      phone: quickSupplier.phone || null,
+      balance: openingBalance,
+    }).select().single();
+    if (data) {
+      if (openingBalance !== 0) {
+        await supabase.from('transactions').insert({
+          transaction_id: `OPN-BAL-${data.id}`,
+          date: todayStr(),
+          type: 'supplier_invoice',
+          primary_mode: null,
+          amount: openingBalance,
+          supplier_id: data.id,
+          description: `Opening balance - ${data.name}`,
+          created_by: user?.username || null,
+        });
+      }
+      setSuppliers((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
+      setForm((f) => ({ ...f, supplierId: data.id }));
+      setShowQuickAddSupplier(false);
+      setQuickSupplier({ name: '', phone: '', balance: '' });
+    }
+  }
+
+  // Same as the quick-add above, but for one specific Bulk Payments row instead
+  // of the single Add form - the new supplier still becomes available to every
+  // other row's dropdown right away too.
+  async function handleBulkQuickAddSupplier(rowIndex: number) {
+    const name = quickSupplier.name.trim();
+    if (!name) return;
+    if (suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+      alert('A supplier with this name already exists.');
+      return;
+    }
+    const openingBalance = parseFloat(quickSupplier.balance || '0');
+    const { data } = await supabase.from('suppliers').insert({
+      name,
+      phone: quickSupplier.phone || null,
+      balance: openingBalance,
+    }).select().single();
+    if (data) {
+      if (openingBalance !== 0) {
+        await supabase.from('transactions').insert({
+          transaction_id: `OPN-BAL-${data.id}`,
+          date: todayStr(),
+          type: 'supplier_invoice',
+          primary_mode: null,
+          amount: openingBalance,
+          supplier_id: data.id,
+          description: `Opening balance - ${data.name}`,
+          created_by: user?.username || null,
+        });
+      }
+      setSuppliers((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
+      setBulkSupplierForms((prev) => {
+        const next = [...prev];
+        next[rowIndex] = { ...next[rowIndex], supplierId: data.id };
+        return next;
+      });
+      setBulkQuickAddSupplierRow(null);
+      setQuickSupplier({ name: '', phone: '', balance: '' });
+    }
+  }
+
+  // Turns a paste of a monthly expenses sheet (Date "1ST"/"2ND".../Mode/Type/
+  // Amount/Comment, no month or year) into preview rows split by destination -
+  // Shop Expenses, Home Expenses, or Supplier Payments each live on their own
+  // tab, so a single paste's rows get grouped for handing off to whichever
+  // tab's Bulk Entry the user is on. Category and Supplier are guessed via a
+  // fuzzy match against what already exists and always flagged for a check -
+  // nothing here is saved until the user reviews it in that tab's Bulk Entry.
+  function handleExpenseSmartEntryParse() {
+    const parsed = parseExpenseSheetText(smartEntryPaste);
+    const [yearStr, monthStr] = smartEntryMonth.split('-');
+    const year = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10);
+    const shopCats = expenseCategories.filter((c) => c.name !== 'home_expense' && c.name !== 'stock' && c.name !== 'supplier_payment');
+
+    const preview: ExpenseSmartPreviewRow[] = parsed.map((r) => {
+      const flags: string[] = [];
+      const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(r.day).padStart(2, '0')}`;
+
+      const modeLower = r.mode.toLowerCase();
+      let mode = 'cash';
+      if (modeLower === 'cash' || modeLower === 'mpesa' || modeLower === 'paybill') {
+        mode = modeLower;
+      } else if (r.mode) {
+        flags.push(`Could not recognise mode "${r.mode}" - defaulted to Cash.`);
+      } else {
+        flags.push('No mode given - defaulted to Cash.');
+      }
+
+      if (r.type === 'SUPPLIERS') {
+        let supplierId = '', matchName = '';
+        const match = findBestMatch(r.comment, suppliers, (s) => s.name);
+        if (match) {
+          supplierId = match.item.id;
+          matchName = match.item.name;
+          flags.push(`Matched "${r.comment}" to supplier "${match.item.name}" - please confirm.`);
+        } else {
+          flags.push(`No matching supplier found for "${r.comment}" - please pick one.`);
+        }
+        return { destination: 'supplier', date: dateStr, amount: String(r.amount), mode, category: '', partnerId: '', source: 'shop', supplierId, matchName, description: r.comment, flags };
+      }
+
+      if (r.type === 'HOME EXPENSES') {
+        flags.push('Home expense - defaulted to Taher, From Shop. Please confirm.');
+        return { destination: 'home', date: dateStr, amount: String(r.amount), mode, category: '', partnerId: 'taher', source: 'shop', supplierId: '', matchName: '', description: r.comment, flags };
+      }
+
+      const isTaher = r.type.includes('TAHER');
+      const isAbdulqadir = r.type.includes('ABDUL');
+      if (isTaher || isAbdulqadir) {
+        const partner = isTaher ? 'taher' : 'abdulqadir';
+        flags.push(`Partner draw for ${partner} - please confirm.`);
+        return { destination: 'shop', date: dateStr, amount: String(r.amount), mode, category: partner, partnerId: '', source: 'shop', supplierId: '', matchName: '', description: r.comment, flags };
+      }
+
+      // OUT or an unrecognised Type - treated as a Shop Expense either way.
+      let category = '', matchName = '';
+      const match = findBestMatch(r.comment, shopCats, (c) => c.name.replace(/_/g, ' '));
+      if (match) {
+        category = match.item.name;
+        matchName = match.item.name.replace(/_/g, ' ');
+        flags.push(`Matched "${r.comment}" to category "${matchName}" - please confirm.`);
+      } else {
+        flags.push(`No matching category found for "${r.comment}" - please pick or create one.`);
+      }
+      if (r.type !== 'OUT') flags.push(`Type "${r.type}" not recognised - treated as a Shop Expense.`);
+      return { destination: 'shop', date: dateStr, amount: String(r.amount), mode, category, partnerId: '', source: 'shop', supplierId: '', matchName, description: r.comment, flags };
+    });
+
+    setSmartEntryPreview(preview);
+  }
+
+  // Loads whichever group of parsed rows matches the tab currently open -
+  // Shop/Home/Supplier Bulk Entry each live on their own tab, so this gets
+  // clicked once per tab to load that tab's share of the same paste.
+  function handleAddExpenseSmartEntryToBulk() {
+    if (activeTab === 'shop') {
+      const rows = smartEntryPreview.filter((r) => r.destination === 'shop');
+      if (rows.length === 0) { alert('No Shop Expense rows found in this paste.'); return; }
+      setBulkForms(rows.map((r) => ({ ...emptyBulkRow, date: r.date, amount: r.amount, mode: r.mode, category: r.category, description: r.description, smartFlags: r.flags })));
+      setShowBulk(true);
+    } else if (activeTab === 'home') {
+      const rows = smartEntryPreview.filter((r) => r.destination === 'home');
+      if (rows.length === 0) { alert('No Home Expense rows found in this paste.'); return; }
+      setBulkForms(rows.map((r) => ({ ...emptyBulkRow, date: r.date, amount: r.amount, mode: r.mode, partnerId: r.partnerId, source: r.source, description: r.description, smartFlags: r.flags })));
+      setShowBulk(true);
+    } else if (activeTab === 'suppliers') {
+      const rows = smartEntryPreview.filter((r) => r.destination === 'supplier');
+      if (rows.length === 0) { alert('No Supplier Payment rows found in this paste.'); return; }
+      setBulkSupplierForms(rows.map((r) => ({ ...emptyBulkSupplierRow, date: r.date, amount: r.amount, mode: r.mode, supplierId: r.supplierId, notes: r.description, smartFlags: r.flags })));
+      setShowBulkSupplier(true);
+    } else {
+      alert('Switch to the Shop Expenses, Home Expenses, or Supplier Payments tab first, then click this again to load that group.');
+      return;
+    }
+    setShowSmartEntry(false);
   }
 
   async function handleSaveCategory() {
@@ -358,9 +621,122 @@ export default function Expenses() {
     triggerRefresh();
   }
 
-  async function handleVoid(id: string, reason: string) {
+  // Only used for the Shop Expenses and Home Expenses tabs - suppliers/loans/partners
+  // payments each need a picked record (loan, supplier) that doesn't fit a fast
+  // multi-row entry flow the way plain expenses do.
+  async function handleBulkSave() {
+    if (bulkSaving) return;
+    const isHomeExpense = activeTab === 'home';
+    const validForms = bulkForms
+      .map((f, originalIndex) => ({ f, originalIndex }))
+      .filter(({ f }) => f.amount && parseFloat(f.amount) > 0);
+    if (validForms.length === 0) return;
+    setBulkSaving(true);
+    try {
+      const failedRows: number[] = [];
+
+      for (let i = 0; i < validForms.length; i++) {
+        const { f, originalIndex } = validForms[i];
+        const amt = parseFloat(f.amount);
+        const category = isHomeExpense ? 'home_expense' : f.category;
+        const isPartnerExpense = !isHomeExpense && (category === 'taher' || category === 'abdulqadir');
+
+        const { data: newTxn, error } = await insertTransactionWithId('EXP-' + f.date.replace(/-/g, ''), (txnId) => ({
+          transaction_id: txnId,
+          date: f.date,
+          type: isPartnerExpense ? 'partner_draw' : 'expense',
+          primary_mode: isHomeExpense && f.source === 'own_pocket' ? null : f.mode,
+          amount: amt,
+          category,
+          description: f.description || null,
+          notes: isHomeExpense ? `From ${f.source === 'own_pocket' ? 'Own Pocket' : 'Shop'}` : null,
+          partner_id: isPartnerExpense ? category : (isHomeExpense ? f.partnerId || null : null),
+          clears_on: f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
+          created_by: user?.username || null,
+        }));
+        if (error || !newTxn) { console.error(error); failedRows.push(originalIndex + 1); continue; }
+        await insertTransactionFee(f.date, f.mode, f.transactionFee, f.description || category);
+      }
+
+      setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyBulkRow, date: todayStr() })));
+      setShowBulk(false);
+      fetchData();
+      triggerRefresh();
+      if (failedRows.length > 0) {
+        alert(`Row(s) ${failedRows.join(', ')} failed to save and were skipped. The rest were saved successfully.`);
+      }
+    } finally {
+      setBulkSaving(false);
+    }
+  }
+
+  // Unlike the single "Add Supplier Payment" form (one payment, one supplier
+  // picked at a time), each row here picks its own supplier - for logging
+  // payments to many different suppliers in one sitting.
+  async function handleBulkSupplierSave() {
+    if (bulkSupplierSaving) return;
+    const validForms = bulkSupplierForms
+      .map((f, originalIndex) => ({ f, originalIndex }))
+      .filter(({ f }) => f.supplierId && f.amount && parseFloat(f.amount) > 0);
+    if (validForms.length === 0) return;
+    setBulkSupplierSaving(true);
+    try {
+      const failedRows: number[] = [];
+      const savedDates = new Set<string>();
+
+      for (let i = 0; i < validForms.length; i++) {
+        const { f, originalIndex } = validForms[i];
+        const amt = parseFloat(f.amount);
+        const supplier = suppliers.find((s) => s.id === f.supplierId);
+        if (!supplier) { failedRows.push(originalIndex + 1); continue; }
+
+        const { data: newTxn, error } = await insertTransactionWithId('SUP-' + f.date.replace(/-/g, ''), (txnId) => ({
+          transaction_id: txnId,
+          date: f.date,
+          type: 'supplier_payment',
+          primary_mode: f.mode,
+          amount: amt,
+          supplier_id: f.supplierId,
+          description: `Payment to ${supplier.name}`,
+          notes: f.notes || null,
+          clears_on: f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
+          created_by: user?.username || null,
+        }));
+        if (error || !newTxn) { console.error(error); failedRows.push(originalIndex + 1); continue; }
+        savedDates.add(f.date);
+        await adjustSupplierBalance(f.supplierId, -amt);
+        await insertTransactionFee(f.date, f.mode, f.transactionFee, supplier.name);
+      }
+
+      setBulkSupplierForms(Array.from({ length: 10 }, () => ({ ...emptyBulkSupplierRow, date: todayStr() })));
+      setShowBulkSupplier(false);
+      // Make what was just saved immediately visible - not buried under a
+      // collapsed date row, or invisible because the date filter doesn't
+      // happen to cover it.
+      if (savedDates.size > 0) {
+        const nextExpanded = new Set(expandedDates);
+        savedDates.forEach((d) => nextExpanded.add(d));
+        setExpandedDates(nextExpanded);
+        setDatePreset('all');
+        setCustomFrom('');
+        setCustomTo('');
+      }
+      fetchData();
+      triggerRefresh();
+      if (failedRows.length > 0) {
+        alert(`Row(s) ${failedRows.join(', ')} failed to save and were skipped. The rest were saved successfully.`);
+      }
+    } finally {
+      setBulkSupplierSaving(false);
+    }
+  }
+
+  // Reverses whatever balance this entry affected and marks it void - shared
+  // by the single Void button and Bulk Delete, which just calls this once per
+  // selected row and does the fetch/refresh a single time at the end.
+  async function voidOne(id: string, reason: string) {
     const txn = expenses.find((e) => e.id === id);
-    if (!txn) return;
+    if (!txn) return true;
 
     // Reverse supplier balance - covers a supplier-payment TYPE transaction (paid via
     // the Suppliers tab) as well as a stock/supplier_payment CATEGORY expense
@@ -375,9 +751,31 @@ export default function Expenses() {
     }
 
     const { error } = await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', id);
-    if (error) { alert('Failed to void: ' + error.message); return; }
+    if (error) { console.error(error); return false; }
+    return true;
+  }
+
+  async function handleVoid(id: string, reason: string) {
+    const ok = await voidOne(id, reason);
+    if (!ok) { alert('Failed to void'); return; }
     fetchData();
     triggerRefresh();
+  }
+
+  async function handleBulkVoid() {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Delete ${selectedIds.size} selected entrie(s)? This will reverse any balance changes.`)) return;
+    let failedCount = 0;
+    for (const id of selectedIds) {
+      const ok = await voidOne(id, 'Bulk delete');
+      if (!ok) failedCount++;
+    }
+    setSelectedIds(new Set());
+    fetchData();
+    triggerRefresh();
+    if (failedCount > 0) {
+      alert(`${failedCount} entrie(s) failed to delete. The rest were deleted successfully.`);
+    }
   }
 
   function startEdit(expense: Transaction) {
@@ -555,6 +953,14 @@ export default function Expenses() {
   // up anywhere. Use the dedicated "Supplier Payments" tab for those instead.
   const shopSelectableCategories = shopCategories.filter((c) => c.name !== 'stock' && c.name !== 'supplier_payment');
 
+  function addBulkRow() {
+    setBulkForms([...bulkForms, { ...emptyBulkRow, date: bulkForms[0]?.date || todayStr() }]);
+  }
+
+  function addBulkSupplierRow() {
+    setBulkSupplierForms([...bulkSupplierForms, { ...emptyBulkSupplierRow, date: bulkSupplierForms[0]?.date || todayStr() }]);
+  }
+
   return (
     <div className="space-y-4">
       {/* Tabs */}
@@ -562,7 +968,7 @@ export default function Expenses() {
         {(['shop', 'home', 'partners', 'suppliers', 'loans'] as const).map((tab) => (
           <button
             key={tab}
-            onClick={() => { setActiveTab(tab); setShowAdd(false); setEditingId(null); }}
+            onClick={() => { setActiveTab(tab); setShowAdd(false); setEditingId(null); setShowBulk(false); }}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
               activeTab === tab ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
             }`}
@@ -580,6 +986,30 @@ export default function Expenses() {
         >
           <Plus size={16} /> Add {activeTab === 'shop' ? 'Expense' : activeTab === 'home' ? 'Home Expense' : activeTab === 'partners' ? 'Partner Draw' : activeTab === 'suppliers' ? 'Supplier Payment' : 'Loan Payment'}
         </button>
+        {(activeTab === 'shop' || activeTab === 'home') && (
+          <button
+            onClick={() => { setShowBulk(true); setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyBulkRow, date: todayStr() }))); }}
+            className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Plus size={16} /> Bulk Entry
+          </button>
+        )}
+        {activeTab === 'suppliers' && (
+          <button
+            onClick={() => { setShowBulkSupplier(true); setBulkSupplierForms(Array.from({ length: 10 }, () => ({ ...emptyBulkSupplierRow, date: todayStr() }))); }}
+            className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Plus size={16} /> Bulk Payments
+          </button>
+        )}
+        {(activeTab === 'shop' || activeTab === 'home' || activeTab === 'suppliers') && (
+          <button
+            onClick={() => setShowSmartEntry(!showSmartEntry)}
+            className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Plus size={16} /> Smart Entry
+          </button>
+        )}
         {activeTab === 'shop' && (
           <button
             onClick={() => setShowCategoryManager(!showCategoryManager)}
@@ -655,9 +1085,101 @@ export default function Expenses() {
         />
       </div>
 
-      {/* Add/Edit Modal */}
+      {/* Smart Entry - paste a monthly expenses sheet, review the parsed rows
+          here, then hand each group off to its own tab's Bulk Entry (already
+          filled in) for the real editing and Save All. */}
+      {showSmartEntry && (
+        <div
+          className="bg-white rounded-xl border border-slate-200 shadow-lg p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowSmartEntry(false); }}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-slate-800">Smart Entry</h3>
+            <button onClick={() => setShowSmartEntry(false)} className="p-1 hover:bg-slate-100 rounded">
+              <X size={16} />
+            </button>
+          </div>
+          <p className="text-xs text-slate-500 mb-2">
+            Paste rows copied from a monthly expenses sheet (Date/Mode/Type/Amount/Comment). Dates like "1ST"/"2ND" have no month in them - pick which month this paste is for below. Nothing is saved until you send each group to its tab's Bulk Entry and press Save All there.
+          </p>
+          <div className="mb-2">
+            <label className="block text-xs font-medium text-slate-600 mb-1">Which month is this for?</label>
+            <input
+              type="month"
+              value={smartEntryMonth}
+              onChange={(e) => setSmartEntryMonth(e.target.value)}
+              className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+            />
+          </div>
+          <textarea
+            value={smartEntryPaste}
+            onChange={(e) => setSmartEntryPaste(e.target.value)}
+            placeholder="Paste your expenses sheet here..."
+            rows={8}
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+          <div className="flex items-center gap-3 mt-2">
+            <button
+              onClick={handleExpenseSmartEntryParse}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium"
+            >
+              Parse pasted rows
+            </button>
+            <button
+              onClick={() => { setSmartEntryPaste(''); setSmartEntryPreview([]); }}
+              className="text-slate-500 hover:text-slate-700 text-sm"
+            >
+              Clear
+            </button>
+            {smartEntryPreview.length > 0 && (
+              <span className="text-xs text-slate-500 ml-auto">
+                {smartEntryPreview.length} parsed: {smartEntryPreview.filter((r) => r.destination === 'shop').length} Shop, {smartEntryPreview.filter((r) => r.destination === 'home').length} Home, {smartEntryPreview.filter((r) => r.destination === 'supplier').length} Supplier
+              </span>
+            )}
+          </div>
+
+          {smartEntryPreview.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-slate-200 space-y-2 max-h-96 overflow-y-auto">
+              {smartEntryPreview.map((r, i) => (
+                <div key={i} className="border border-amber-300 bg-amber-50 rounded p-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <span className="px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-700 capitalize">{r.destination}</span>
+                    <span className="font-medium text-slate-700">{r.date}</span>
+                    <span className="text-slate-500">KES {formatKES(parseFloat(r.amount))}</span>
+                    <span className="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 capitalize">{r.mode}</span>
+                    {r.matchName && <span className="text-slate-500">→ {r.matchName}</span>}
+                    {r.category && !r.matchName && <span className="text-slate-500">→ {r.category}</span>}
+                  </div>
+                  {r.flags.length > 0 && (
+                    <ul className="text-amber-700 list-disc list-inside space-y-0.5">
+                      {r.flags.map((f, fi) => <li key={fi}>{f}</li>)}
+                    </ul>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {smartEntryPreview.length > 0 && (
+            <div className="flex gap-3 mt-3 pt-3 border-t border-slate-200">
+              <button
+                onClick={handleAddExpenseSmartEntryToBulk}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium"
+              >
+                Add to Bulk Entry ({activeTab === 'shop' ? smartEntryPreview.filter((r) => r.destination === 'shop').length : activeTab === 'home' ? smartEntryPreview.filter((r) => r.destination === 'home').length : activeTab === 'suppliers' ? smartEntryPreview.filter((r) => r.destination === 'supplier').length : 0} on this tab) →
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Add/Edit Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showAdd && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') { setShowAdd(false); setEditingId(null); } }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-slate-800 text-sm">
               {editingId ? 'Edit' : 'Add'} {activeTab === 'shop' ? 'Expense' : activeTab === 'home' ? 'Home Expense' : activeTab === 'partners' ? 'Partner Draw' : activeTab === 'suppliers' ? 'Supplier Payment' : 'Loan Payment'}
@@ -675,12 +1197,14 @@ export default function Expenses() {
                 type="date"
                 value={form.date}
                 onChange={(e) => setForm({ ...form, date: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
               <input
                 type="number"
                 value={form.amount}
                 onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Amount"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -690,6 +1214,7 @@ export default function Expenses() {
                 <select
                   value={form.mode}
                   onChange={(e) => setForm({ ...form, mode: e.target.value })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 >
                   <option value="cash">Cash</option>
@@ -705,6 +1230,7 @@ export default function Expenses() {
                 type="number"
                 value={form.transactionFee}
                 onChange={(e) => setForm({ ...form, transactionFee: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Transaction fee (optional)"
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -718,6 +1244,7 @@ export default function Expenses() {
                   id="isPostDated"
                   checked={form.isPostDated}
                   onChange={(e) => setForm({ ...form, isPostDated: e.target.checked })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                 />
                 <label htmlFor="isPostDated" className="text-xs text-slate-600">Post-dated cheque</label>
@@ -726,6 +1253,7 @@ export default function Expenses() {
                     type="date"
                     value={form.clearsOn}
                     onChange={(e) => setForm({ ...form, clearsOn: e.target.value })}
+                    onKeyDown={(e) => handleFormKeyNav(e)}
                     className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
                     placeholder="Clears on"
                   />
@@ -738,6 +1266,7 @@ export default function Expenses() {
               <select
                 value={form.category}
                 onChange={(e) => setForm({ ...form, category: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               >
                 <option value="">Category</option>
@@ -750,6 +1279,7 @@ export default function Expenses() {
                 <select
                   value={form.partnerId}
                   onChange={(e) => setForm({ ...form, partnerId: e.target.value })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 >
                   <option value="">Partner</option>
@@ -759,6 +1289,7 @@ export default function Expenses() {
                 <select
                   value={form.source}
                   onChange={(e) => setForm({ ...form, source: e.target.value as 'shop' | 'own_pocket' })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 >
                   <option value="shop">From Shop</option>
@@ -771,6 +1302,7 @@ export default function Expenses() {
               <select
                 value={form.partnerId}
                 onChange={(e) => setForm({ ...form, partnerId: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               >
                 <option value="">Partner</option>
@@ -783,6 +1315,7 @@ export default function Expenses() {
               <select
                 value={form.loanId}
                 onChange={(e) => setForm({ ...form, loanId: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               >
                 <option value="">Select Loan</option>
@@ -791,14 +1324,60 @@ export default function Expenses() {
             )}
 
             {activeTab === 'suppliers' && (
-              <select
-                value={form.supplierId}
-                onChange={(e) => setForm({ ...form, supplierId: e.target.value })}
-                className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-              >
-                <option value="">Supplier</option>
-                {sortSuppliersByBalance(suppliers).map((s) => <option key={s.id} value={s.id}>{s.name} ({formatKES(s.balance)})</option>)}
-              </select>
+              <div className="flex gap-1">
+                <select
+                  value={form.supplierId}
+                  onChange={(e) => setForm({ ...form, supplierId: e.target.value })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
+                  className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                >
+                  <option value="">Supplier</option>
+                  {sortSuppliersByBalance(suppliers).map((s) => <option key={s.id} value={s.id}>{s.name} ({formatKES(s.balance)})</option>)}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setShowQuickAddSupplier(!showQuickAddSupplier)}
+                  className="p-1.5 border border-slate-300 rounded hover:bg-slate-50 shrink-0"
+                  title="Add new supplier"
+                >
+                  <UserPlus size={16} className="text-slate-500" />
+                </button>
+              </div>
+            )}
+
+            {/* Inline quick-add supplier */}
+            {activeTab === 'suppliers' && showQuickAddSupplier && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-emerald-50 border border-emerald-200 rounded p-2">
+                <input
+                  type="text"
+                  value={quickSupplier.name}
+                  onChange={(e) => setQuickSupplier({ ...quickSupplier, name: e.target.value })}
+                  placeholder="New supplier name"
+                  className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+                <input
+                  type="text"
+                  value={quickSupplier.phone}
+                  onChange={(e) => setQuickSupplier({ ...quickSupplier, phone: e.target.value })}
+                  placeholder="Phone (optional)"
+                  className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+                <input
+                  type="number"
+                  value={quickSupplier.balance}
+                  onChange={(e) => setQuickSupplier({ ...quickSupplier, balance: e.target.value })}
+                  placeholder="Opening balance (optional)"
+                  className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+                <div className="flex gap-1">
+                  <button type="button" onClick={handleQuickAddSupplier} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">
+                    Add
+                  </button>
+                  <button type="button" onClick={() => setShowQuickAddSupplier(false)} className="text-slate-500 hover:text-slate-700 text-xs">
+                    Cancel
+                  </button>
+                </div>
+              </div>
             )}
 
             {activeTab === 'suppliers' && !editingId && form.supplierId && suppliers.find((s) => s.id === form.supplierId)?.linked_partner_id && (
@@ -822,6 +1401,7 @@ export default function Expenses() {
               type="text"
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
+              onKeyDown={(e) => handleFormKeyNav(e)}
               placeholder="Description (optional)"
               className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
             />
@@ -831,12 +1411,7 @@ export default function Expenses() {
               type="text"
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  (editingId ? handleUpdate : handleSave)();
-                }
-              }}
+              onKeyDown={(e) => handleFormKeyNav(e, () => (editingId ? handleUpdate : handleSave)())}
               placeholder="Notes (optional)"
               className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
             />
@@ -857,6 +1432,428 @@ export default function Expenses() {
               </button>
             </div>
           </div>
+        </div>
+        </div>
+      )}
+
+      {/* Bulk Entry - shop/home expenses only; suppliers/loans/partners payments each need a
+          picked record that doesn't fit a fast multi-row flow */}
+      {showBulk && (activeTab === 'shop' || activeTab === 'home') && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowBulk(false); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-3xl max-h-[90vh] overflow-y-auto" data-form-nav>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-slate-800 text-sm">Bulk Entry - {activeTab === 'shop' ? 'Shop Expenses' : 'Home Expenses'}</h3>
+            <button onClick={() => setShowBulk(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
+          </div>
+          <div className="space-y-2">
+            {bulkForms.map((f, i) => (
+              <div key={i} className={`border rounded p-2 ${f.smartFlags?.length ? 'border-2 border-amber-300 bg-amber-50' : 'border-slate-200'}`}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-slate-500">#{i + 1}</span>
+                  {bulkForms.length > 1 && (
+                    <button
+                      onClick={() => setBulkForms(bulkForms.filter((_, idx) => idx !== i))}
+                      className="text-red-500 hover:text-red-700 text-xs"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                {f.smartFlags?.length ? (
+                  <ul className="text-amber-700 text-xs list-disc list-inside space-y-0.5 mb-2">
+                    {f.smartFlags.map((flag, fi) => <li key={fi}>{flag}</li>)}
+                  </ul>
+                ) : null}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
+                  <input
+                    type="date"
+                    value={f.date}
+                    onChange={(e) => {
+                      const newForms = [...bulkForms];
+                      newForms[i] = { ...newForms[i], date: e.target.value };
+                      // Row 1's date drives every other row's date too - each
+                      // row can still be changed individually after that.
+                      if (i === 0) {
+                        for (let j = 1; j < newForms.length; j++) newForms[j] = { ...newForms[j], date: e.target.value };
+                      }
+                      setBulkForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                  <input
+                    type="number"
+                    value={f.amount}
+                    onChange={(e) => {
+                      const newForms = [...bulkForms];
+                      newForms[i] = { ...newForms[i], amount: e.target.value };
+                      setBulkForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
+                    placeholder="Amount"
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                  {activeTab === 'home' && f.source === 'own_pocket' ? (
+                    <div className="border border-slate-200 bg-slate-50 rounded px-2 py-1.5 text-xs text-slate-500 flex items-center">No mode - own money</div>
+                  ) : (
+                    <select
+                      value={f.mode}
+                      onChange={(e) => {
+                        const newForms = [...bulkForms];
+                        newForms[i] = { ...newForms[i], mode: e.target.value };
+                        setBulkForms(newForms);
+                      }}
+                      onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
+                      className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    >
+                      <option value="cash">Cash</option>
+                      <option value="mpesa">Mpesa</option>
+                      <option value="paybill">Paybill</option>
+                    </select>
+                  )}
+                </div>
+
+                {activeTab === 'shop' && (
+                  <select
+                    value={f.category}
+                    onChange={(e) => {
+                      const newForms = [...bulkForms];
+                      newForms[i] = { ...newForms[i], category: e.target.value };
+                      setBulkForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
+                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm mb-2 focus:ring-2 focus:ring-emerald-500 outline-none"
+                  >
+                    <option value="">Category</option>
+                    {shopSelectableCategories.map((c) => <option key={c.id} value={c.name}>{c.name.replace('_', ' ')}</option>)}
+                  </select>
+                )}
+
+                {activeTab === 'home' && (
+                  <div className="grid grid-cols-2 gap-2 mb-2">
+                    <select
+                      value={f.partnerId}
+                      onChange={(e) => {
+                        const newForms = [...bulkForms];
+                        newForms[i] = { ...newForms[i], partnerId: e.target.value };
+                        setBulkForms(newForms);
+                      }}
+                      onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
+                      className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    >
+                      <option value="">Partner</option>
+                      <option value="taher">Taher</option>
+                      <option value="abdulqadir">Abdulqadir</option>
+                    </select>
+                    <select
+                      value={f.source}
+                      onChange={(e) => {
+                        const newForms = [...bulkForms];
+                        newForms[i] = { ...newForms[i], source: e.target.value as 'shop' | 'own_pocket' };
+                        setBulkForms(newForms);
+                      }}
+                      onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
+                      className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    >
+                      <option value="shop">From Shop</option>
+                      <option value="own_pocket">Own Pocket</option>
+                    </select>
+                  </div>
+                )}
+
+                <input
+                  type="text"
+                  value={f.description}
+                  onChange={(e) => {
+                    const newForms = [...bulkForms];
+                    newForms[i] = { ...newForms[i], description: e.target.value };
+                    setBulkForms(newForms);
+                  }}
+                  onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
+                  placeholder="Description (optional)"
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none mb-2"
+                />
+
+                {/* Transaction fee (Mpesa/Paybill only lose money to network fees) */}
+                {(f.mode === 'mpesa' || f.mode === 'paybill') && (
+                  <input
+                    type="number"
+                    value={f.transactionFee}
+                    onChange={(e) => {
+                      const newForms = [...bulkForms];
+                      newForms[i] = { ...newForms[i], transactionFee: e.target.value };
+                      setBulkForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
+                    placeholder="Transaction fee (optional)"
+                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none mb-2"
+                  />
+                )}
+
+                {/* Post-dated cheque (only makes sense for Paybill/Bank) */}
+                {f.mode === 'paybill' && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={f.isPostDated}
+                      onChange={(e) => {
+                        const newForms = [...bulkForms];
+                        newForms[i] = { ...newForms[i], isPostDated: e.target.checked };
+                        setBulkForms(newForms);
+                      }}
+                      onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
+                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <label className="text-xs text-slate-600">Post-dated cheque</label>
+                    {f.isPostDated && (
+                      <input
+                        type="date"
+                        value={f.clearsOn}
+                        onChange={(e) => {
+                          const newForms = [...bulkForms];
+                          newForms[i] = { ...newForms[i], clearsOn: e.target.value };
+                          setBulkForms(newForms);
+                        }}
+                        onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
+                        className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
+                        placeholder="Clears on"
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-3 mt-3 pt-3 border-t border-slate-200">
+            <button
+              onClick={addBulkRow}
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-1.5 rounded text-sm font-medium flex items-center gap-1"
+            >
+              <Plus size={14} /> Add Row
+            </button>
+            <button onClick={handleBulkSave} disabled={bulkSaving} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm font-medium">
+              {bulkSaving ? 'Saving...' : 'Save All'}
+            </button>
+            <button onClick={() => setShowBulk(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
+          </div>
+        </div>
+        </div>
+      )}
+
+      {/* Bulk Payments - Suppliers tab only; each row picks its own supplier, for
+          logging payments to many different suppliers at once */}
+      {showBulkSupplier && activeTab === 'suppliers' && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowBulkSupplier(false); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-3xl max-h-[90vh] overflow-y-auto" data-form-nav>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-slate-800 text-sm">Bulk Payments to Suppliers</h3>
+            <button onClick={() => setShowBulkSupplier(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
+          </div>
+          <div className="space-y-2">
+            {bulkSupplierForms.map((f, i) => (
+              <div key={i} className={`border rounded p-2 ${f.smartFlags?.length ? 'border-2 border-amber-300 bg-amber-50' : 'border-slate-200'}`}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-slate-500">#{i + 1}</span>
+                  {bulkSupplierForms.length > 1 && (
+                    <button
+                      onClick={() => setBulkSupplierForms(bulkSupplierForms.filter((_, idx) => idx !== i))}
+                      className="text-red-500 hover:text-red-700 text-xs"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                {f.smartFlags?.length ? (
+                  <ul className="text-amber-700 text-xs list-disc list-inside space-y-0.5 mb-2">
+                    {f.smartFlags.map((flag, fi) => <li key={fi}>{flag}</li>)}
+                  </ul>
+                ) : null}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                  <div className="flex gap-1">
+                    <select
+                      value={f.supplierId}
+                      onChange={(e) => {
+                        const newForms = [...bulkSupplierForms];
+                        newForms[i] = { ...newForms[i], supplierId: e.target.value };
+                        setBulkSupplierForms(newForms);
+                      }}
+                      onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                      className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    >
+                      <option value="">Supplier</option>
+                      {sortSuppliersByBalance(suppliers).map((s) => <option key={s.id} value={s.id}>{s.name} ({formatKES(s.balance)})</option>)}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setBulkQuickAddSupplierRow(bulkQuickAddSupplierRow === i ? null : i)}
+                      className="p-1.5 border border-slate-300 rounded hover:bg-slate-50 shrink-0"
+                      title="Add new supplier"
+                    >
+                      <UserPlus size={16} className="text-slate-500" />
+                    </button>
+                  </div>
+                  <input
+                    type="number"
+                    value={f.amount}
+                    onChange={(e) => {
+                      const newForms = [...bulkSupplierForms];
+                      newForms[i] = { ...newForms[i], amount: e.target.value };
+                      setBulkSupplierForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                    placeholder="Amount"
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                </div>
+
+                {/* Inline quick-add supplier, this row only */}
+                {bulkQuickAddSupplierRow === i && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-emerald-50 border border-emerald-200 rounded p-2 mb-2">
+                    <input
+                      type="text"
+                      value={quickSupplier.name}
+                      onChange={(e) => setQuickSupplier({ ...quickSupplier, name: e.target.value })}
+                      placeholder="New supplier name"
+                      className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                    <input
+                      type="text"
+                      value={quickSupplier.phone}
+                      onChange={(e) => setQuickSupplier({ ...quickSupplier, phone: e.target.value })}
+                      placeholder="Phone (optional)"
+                      className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                    <input
+                      type="number"
+                      value={quickSupplier.balance}
+                      onChange={(e) => setQuickSupplier({ ...quickSupplier, balance: e.target.value })}
+                      placeholder="Opening balance (optional)"
+                      className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                    <div className="flex gap-1">
+                      <button type="button" onClick={() => handleBulkQuickAddSupplier(i)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">
+                        Add
+                      </button>
+                      <button type="button" onClick={() => setBulkQuickAddSupplierRow(null)} className="text-slate-500 hover:text-slate-700 text-xs">
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                  <input
+                    type="date"
+                    value={f.date}
+                    onChange={(e) => {
+                      const newForms = [...bulkSupplierForms];
+                      newForms[i] = { ...newForms[i], date: e.target.value };
+                      // Row 1's date drives every other row's date too - each
+                      // row can still be changed individually after that.
+                      if (i === 0) {
+                        for (let j = 1; j < newForms.length; j++) newForms[j] = { ...newForms[j], date: e.target.value };
+                      }
+                      setBulkSupplierForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                  <select
+                    value={f.mode}
+                    onChange={(e) => {
+                      const newForms = [...bulkSupplierForms];
+                      newForms[i] = { ...newForms[i], mode: e.target.value };
+                      setBulkSupplierForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                    className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  >
+                    <option value="cash">Cash</option>
+                    <option value="mpesa">Mpesa</option>
+                    <option value="paybill">Paybill</option>
+                  </select>
+                </div>
+                <input
+                  type="text"
+                  value={f.notes}
+                  onChange={(e) => {
+                    const newForms = [...bulkSupplierForms];
+                    newForms[i] = { ...newForms[i], notes: e.target.value };
+                    setBulkSupplierForms(newForms);
+                  }}
+                  onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                  placeholder="Notes (optional)"
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none mb-2"
+                />
+
+                {/* Transaction fee (Mpesa/Paybill only lose money to network fees) */}
+                {(f.mode === 'mpesa' || f.mode === 'paybill') && (
+                  <input
+                    type="number"
+                    value={f.transactionFee}
+                    onChange={(e) => {
+                      const newForms = [...bulkSupplierForms];
+                      newForms[i] = { ...newForms[i], transactionFee: e.target.value };
+                      setBulkSupplierForms(newForms);
+                    }}
+                    onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                    placeholder="Transaction fee (optional)"
+                    className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none mb-2"
+                  />
+                )}
+
+                {/* Post-dated cheque (only makes sense for Paybill/Bank) */}
+                {f.mode === 'paybill' && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={f.isPostDated}
+                      onChange={(e) => {
+                        const newForms = [...bulkSupplierForms];
+                        newForms[i] = { ...newForms[i], isPostDated: e.target.checked };
+                        setBulkSupplierForms(newForms);
+                      }}
+                      onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <label className="text-xs text-slate-600">Post-dated cheque</label>
+                    {f.isPostDated && (
+                      <input
+                        type="date"
+                        value={f.clearsOn}
+                        onChange={(e) => {
+                          const newForms = [...bulkSupplierForms];
+                          newForms[i] = { ...newForms[i], clearsOn: e.target.value };
+                          setBulkSupplierForms(newForms);
+                        }}
+                        onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                        className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
+                        placeholder="Clears on"
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-3 mt-3 pt-3 border-t border-slate-200">
+            <button
+              onClick={addBulkSupplierRow}
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-1.5 rounded text-sm font-medium flex items-center gap-1"
+            >
+              <Plus size={14} /> Add Row
+            </button>
+            <button onClick={handleBulkSupplierSave} disabled={bulkSupplierSaving} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm font-medium">
+              {bulkSupplierSaving ? 'Saving...' : 'Save All'}
+            </button>
+            <button onClick={() => setShowBulkSupplier(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
+          </div>
+        </div>
         </div>
       )}
 
@@ -899,6 +1896,22 @@ export default function Expenses() {
         </div>
       )}
 
+      {/* Bulk Delete bar - appears once anything is selected below */}
+      {selectedIds.size > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-center gap-3">
+          <span className="text-sm text-red-700 font-medium">{selectedIds.size} selected</span>
+          <button
+            onClick={handleBulkVoid}
+            className="bg-red-600 hover:bg-red-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Trash2 size={14} /> Delete Selected ({selectedIds.size})
+          </button>
+          <button onClick={() => setSelectedIds(new Set())} className="text-slate-500 hover:text-slate-700 text-sm">
+            Clear selection
+          </button>
+        </div>
+      )}
+
       {/* Expenses List */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
         {loading ? (
@@ -911,27 +1924,46 @@ export default function Expenses() {
               const dayExpenses = grouped.get(date) || [];
               const isExpanded = expandedDates.has(date);
               const dayTotal = dayExpenses.reduce((s, e) => s + e.amount, 0);
+              const dayIds = dayExpenses.map((e) => e.id);
+              const allDaySelected = dayIds.length > 0 && dayIds.every((id) => selectedIds.has(id));
 
               return (
                 <div key={date}>
-                  <button
-                    onClick={() => {
-                      const next = new Set(expandedDates);
-                      if (next.has(date)) next.delete(date); else next.add(date);
-                      setExpandedDates(next);
-                    }}
-                    className="w-full px-4 py-3 flex items-center gap-3 hover:bg-slate-50 transition-colors"
-                  >
-                    {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                    <span className="font-medium text-slate-800">{formatDate(date)}</span>
-                    <span className="text-sm text-slate-500 ml-2">{dayExpenses.length} entries</span>
-                    <span className="ml-auto text-sm font-medium text-red-600">KES {formatKES(dayTotal)}</span>
-                  </button>
+                  <div className="w-full px-4 py-3 flex items-center gap-3 hover:bg-slate-50 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={allDaySelected}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        const next = new Set(selectedIds);
+                        if (allDaySelected) dayIds.forEach((id) => next.delete(id));
+                        else dayIds.forEach((id) => next.add(id));
+                        setSelectedIds(next);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="rounded border-slate-300 text-red-600 focus:ring-red-500"
+                      title="Select all entries on this date"
+                    />
+                    <button
+                      onClick={() => {
+                        const next = new Set(expandedDates);
+                        if (next.has(date)) next.delete(date); else next.add(date);
+                        setExpandedDates(next);
+                      }}
+                      className="flex-1 flex items-center gap-3 text-left"
+                    >
+                      {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      <span className="font-medium text-slate-800">{formatDate(date)}</span>
+                      <span className="text-sm text-slate-500 ml-2">{dayExpenses.length} entries</span>
+                      <span className="ml-auto text-sm font-medium text-red-600">KES {formatKES(dayTotal)}</span>
+                    </button>
+                  </div>
                   {isExpanded && (
                     <div className="bg-slate-50 overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="text-left text-xs text-slate-500 border-b border-slate-200">
+                            <th className="px-4 py-2"></th>
                             <th className="px-4 py-2">ID</th>
                             <th className="px-4 py-2">Category</th>
                             <th className="px-4 py-2">Description</th>
@@ -943,6 +1975,18 @@ export default function Expenses() {
                         <tbody className="divide-y divide-slate-100">
                           {dayExpenses.map((exp) => (
                             <tr key={exp.id} className="hover:bg-white transition-colors">
+                              <td className="px-4 py-2">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIds.has(exp.id)}
+                                  onChange={(e) => {
+                                    const next = new Set(selectedIds);
+                                    if (e.target.checked) next.add(exp.id); else next.delete(exp.id);
+                                    setSelectedIds(next);
+                                  }}
+                                  className="rounded border-slate-300 text-red-600 focus:ring-red-500"
+                                />
+                              </td>
                               <td className="px-4 py-2 font-mono text-xs text-slate-500">{exp.transaction_id}</td>
                               <td className="px-4 py-2">
                                 <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -1007,8 +2051,18 @@ export default function Expenses() {
       <LedgerModal
         open={showLedger}
         onClose={() => setShowLedger(false)}
-        title="Expenses Ledger"
-        filterTypes={['expense', 'partner_draw']}
+        title={
+          activeTab === 'suppliers' ? 'Supplier Payments Ledger' :
+          activeTab === 'partners' ? 'Partner Draws Ledger' :
+          activeTab === 'loans' ? 'Loan Payments Ledger' :
+          'Expenses Ledger'
+        }
+        filterTypes={
+          activeTab === 'suppliers' ? ['supplier_invoice', 'supplier_payment'] :
+          activeTab === 'partners' ? ['partner_draw'] :
+          activeTab === 'loans' ? ['loan_payment'] :
+          ['expense', 'partner_draw']
+        }
       />
     </div>
   );

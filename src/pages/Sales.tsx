@@ -20,8 +20,11 @@ import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance } from '../utils/balances';
 import { syncCommissionExpense, voidCommissionExpense } from '../utils/commissionExpense';
+import { parseSmartEntryText, parsePayments, detectCommission, parseExcelSmartEntryText, detectPercentCommission } from '../utils/smartEntryParser';
+import { findBestMatch } from '../utils/fuzzyMatch';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { usePersistentState } from '../context/PageStateContext';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
@@ -47,9 +50,37 @@ interface SaleForm {
   isUnclassified: boolean;
   advanceMode: string;
   payCostToSupplier: boolean;
-  costSupplierId: string;
-  costSupplierAmount: string;
-  costSupplierMode: string;
+  costSuppliers: CostSupplierRow[];
+  // Only set on rows that came from Smart Entry and still have something
+  // worth a second look before saving - never set on a normally-typed row.
+  smartFlags?: string[];
+}
+
+// One row of a (possibly multi-supplier) cost-price split - the item's cost
+// price doesn't always come from a single supplier, and any part left
+// unassigned here is understood as stock the shop already owned.
+interface CostSupplierRow {
+  supplierId: string;
+  amount: string;
+  mode: string;
+}
+
+interface SmartPreviewRow {
+  posId: string | null;
+  date: string;
+  sellingPrice: number;
+  costPrice: number;
+  profit: number;
+  commission: number;
+  mode: SaleMode;
+  customerId: string;
+  customerMatchName: string;
+  splitMpesa: number;
+  splitCash: number;
+  splitPaybill: number;
+  notes: string;
+  flags: string[];
+  duplicate: boolean;
 }
 
 const emptyForm: SaleForm = {
@@ -69,9 +100,7 @@ const emptyForm: SaleForm = {
   isUnclassified: false,
   advanceMode: 'cash',
   payCostToSupplier: false,
-  costSupplierId: '',
-  costSupplierAmount: '',
-  costSupplierMode: 'cash',
+  costSuppliers: [],
 };
 
 export default function Sales() {
@@ -82,30 +111,43 @@ export default function Sales() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(false);
-  const [showBulk, setShowBulk] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [showAdd, setShowAdd] = usePersistentState('sales.showAdd', false);
+  const [showBulk, setShowBulk] = usePersistentState('sales.showBulk', false);
+  const [editingId, setEditingId] = usePersistentState<string | null>('sales.editingId', null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<SaleForm>(emptyForm);
-  const [bulkForms, setBulkForms] = useState<SaleForm[]>(Array.from({ length: 10 }, () => ({ ...emptyForm })));
-  const [search, setSearch] = useState('');
-  const [filterMode, setFilterMode] = useState<string>('');
-  const [datePreset, setDatePreset] = useState<DatePreset>('month');
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
-  const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set());
-  const [highlightedSaleId, setHighlightedSaleId] = useState<string | null>(null);
+  const [form, setForm] = usePersistentState<SaleForm>('sales.form', emptyForm);
+  const [bulkForms, setBulkForms] = usePersistentState<SaleForm[]>('sales.bulkForms', () => Array.from({ length: 10 }, () => ({ ...emptyForm })));
+  const [search, setSearch] = usePersistentState('sales.search', '');
+  const [filterMode, setFilterMode] = usePersistentState<string>('sales.filterMode', '');
+  const [datePreset, setDatePreset] = usePersistentState<DatePreset>('sales.datePreset', 'month');
+  const [customFrom, setCustomFrom] = usePersistentState('sales.customFrom', '');
+  const [customTo, setCustomTo] = usePersistentState('sales.customTo', '');
+  const [expandedDates, setExpandedDates] = usePersistentState<Set<string>>('sales.expandedDates', () => new Set());
+  const [highlightedSaleId, setHighlightedSaleId] = usePersistentState<string | null>('sales.highlightedSaleId', null);
   const [showLedger, setShowLedger] = useState(false);
   const [showQuickAddCustomer, setShowQuickAddCustomer] = useState(false);
   const [showQuickAddSupplier, setShowQuickAddSupplier] = useState(false);
   const [quickCustomer, setQuickCustomer] = useState({ name: '', phone: '', creditLimit: '' });
   const [quickSupplier, setQuickSupplier] = useState({ name: '', phone: '', balance: '' });
-  const [showQuickAddCostSupplier, setShowQuickAddCostSupplier] = useState(false);
+  // Index into form.costSuppliers of the row whose quick-add mini-form is
+  // open (null = none) - there can be several cost-supplier rows now, so a
+  // single boolean isn't enough to say which one's panel is showing.
+  const [costSupplierQuickAddIndex, setCostSupplierQuickAddIndex] = useState<number | null>(null);
   const [quickCostSupplier, setQuickCostSupplier] = useState({ name: '', phone: '' });
-  const [refundingSale, setRefundingSale] = useState<Transaction | null>(null);
-  const [refundForm, setRefundForm] = useState({ amount: '', costPrice: '', mode: 'cash', date: todayStr() });
-  const [showDepositAdvance, setShowDepositAdvance] = useState(false);
-  const [advanceDepositForm, setAdvanceDepositForm] = useState({ customerId: '', amount: '', date: todayStr(), mode: 'cash', notes: '' });
+  // Which Bulk Entry row has its quick-add mini-form open (null = none) - only
+  // one at a time, but it always shows inline in the row that opened it,
+  // not in one shared spot you'd have to go looking for.
+  const [bulkQuickAddCustomerRow, setBulkQuickAddCustomerRow] = useState<number | null>(null);
+  const [bulkQuickAddSupplierRow, setBulkQuickAddSupplierRow] = useState<number | null>(null);
+  // Same idea as costSupplierQuickAddIndex, but also needs which bulk row.
+  const [bulkQuickAddCostSupplierRow, setBulkQuickAddCostSupplierRow] = useState<{ row: number; idx: number } | null>(null);
+  const [refundingSale, setRefundingSale] = usePersistentState<Transaction | null>('sales.refundingSale', null);
+  const [refundForm, setRefundForm] = usePersistentState('sales.refundForm', { amount: '', costPrice: '', profit: '', mode: 'cash', date: todayStr() });
+  const [showDepositAdvance, setShowDepositAdvance] = usePersistentState('sales.showDepositAdvance', false);
+  const [advanceDepositForm, setAdvanceDepositForm] = usePersistentState('sales.advanceDepositForm', { customerId: '', amount: '', date: todayStr(), mode: 'cash', notes: '' });
+  const [showSmartEntry, setShowSmartEntry] = usePersistentState('sales.showSmartEntry', false);
+  const [smartEntryPaste, setSmartEntryPaste] = usePersistentState('sales.smartEntryPaste', '');
+  const [smartEntryPreview, setSmartEntryPreview] = usePersistentState<SmartPreviewRow[]>('sales.smartEntryPreview', () => []);
 
   useEffect(() => {
     fetchData();
@@ -183,6 +225,96 @@ export default function Sales() {
     }
   }
 
+  // Same as the quick-adds above, but for one specific Bulk Entry row instead
+  // of the single Add/Edit form - the new customer/supplier still becomes
+  // available to every other row's dropdown right away too.
+  async function handleBulkQuickAddCustomer(rowIndex: number) {
+    const name = quickCustomer.name.trim();
+    if (!name) return;
+    if (customers.some((c) => c.name.toLowerCase() === name.toLowerCase())) {
+      alert('A customer with this name already exists.');
+      return;
+    }
+    const { data } = await supabase.from('customers').insert({
+      name,
+      phone: quickCustomer.phone || null,
+      credit_limit: parseFloat(quickCustomer.creditLimit || '0'),
+    }).select().single();
+    if (data) {
+      setCustomers((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
+      setBulkForms((prev) => {
+        const next = [...prev];
+        next[rowIndex] = { ...next[rowIndex], customerId: data.id };
+        return next;
+      });
+      setBulkQuickAddCustomerRow(null);
+      setQuickCustomer({ name: '', phone: '', creditLimit: '' });
+    }
+  }
+
+  async function handleBulkQuickAddSupplier(rowIndex: number) {
+    const name = quickSupplier.name.trim();
+    if (!name) return;
+    if (suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+      alert('A supplier with this name already exists.');
+      return;
+    }
+    const openingBalance = parseFloat(quickSupplier.balance || '0');
+    const { data } = await supabase.from('suppliers').insert({
+      name,
+      phone: quickSupplier.phone || null,
+      balance: openingBalance,
+    }).select().single();
+    if (data) {
+      if (openingBalance !== 0) {
+        await supabase.from('transactions').insert({
+          transaction_id: `OPN-BAL-${data.id}`,
+          date: todayStr(),
+          type: 'supplier_invoice',
+          primary_mode: null,
+          amount: openingBalance,
+          supplier_id: data.id,
+          description: `Opening balance - ${data.name}`,
+          created_by: user?.username || null,
+        });
+      }
+      setSuppliers((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
+      setBulkForms((prev) => {
+        const next = [...prev];
+        next[rowIndex] = { ...next[rowIndex], supplierId: data.id };
+        return next;
+      });
+      setBulkQuickAddSupplierRow(null);
+      setQuickSupplier({ name: '', phone: '', balance: '' });
+    }
+  }
+
+  async function handleBulkQuickAddCostSupplier(rowIndex: number, subIndex: number) {
+    const name = quickCostSupplier.name.trim();
+    if (!name) return;
+    if (suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+      alert('A supplier with this name already exists.');
+      return;
+    }
+    const { data } = await supabase.from('suppliers').insert({
+      name,
+      phone: quickCostSupplier.phone || null,
+      balance: 0,
+    }).select().single();
+    if (data) {
+      setSuppliers((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
+      setBulkForms((prev) => {
+        const next = [...prev];
+        const costSuppliers = [...next[rowIndex].costSuppliers];
+        costSuppliers[subIndex] = { ...costSuppliers[subIndex], supplierId: data.id };
+        next[rowIndex] = { ...next[rowIndex], costSuppliers };
+        return next;
+      });
+      setBulkQuickAddCostSupplierRow(null);
+      setQuickCostSupplier({ name: '', phone: '' });
+    }
+  }
+
   async function handleDepositAdvance() {
     if (!advanceDepositForm.customerId || !advanceDepositForm.amount || parseFloat(advanceDepositForm.amount) <= 0) return;
 
@@ -211,7 +343,7 @@ export default function Sales() {
     triggerRefresh();
   }
 
-  async function handleQuickAddCostSupplier() {
+  async function handleQuickAddCostSupplier(subIndex: number) {
     const name = quickCostSupplier.name.trim();
     if (!name) return;
     if (suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
@@ -225,8 +357,12 @@ export default function Sales() {
     }).select().single();
     if (data) {
       setSuppliers((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
-      setForm((f) => ({ ...f, costSupplierId: data.id }));
-      setShowQuickAddCostSupplier(false);
+      setForm((f) => {
+        const costSuppliers = [...f.costSuppliers];
+        costSuppliers[subIndex] = { ...costSuppliers[subIndex], supplierId: data.id };
+        return { ...f, costSuppliers };
+      });
+      setCostSupplierQuickAddIndex(null);
       setQuickCostSupplier({ name: '', phone: '' });
     }
   }
@@ -248,6 +384,18 @@ export default function Sales() {
     // profit will show as 0 until the cost price is filled in via Edit.
     if (!form.costPrice || form.costPrice.trim() === '') {
       alert('Cost Price not entered. The sale will still be saved - profit will show as 0 until you edit it later and fill in the real cost.');
+    }
+
+    // The supplier split can't add up to more than the cost price itself -
+    // whatever's left over is understood as stock the shop already owned,
+    // not a negative amount owed to a supplier.
+    if (form.payCostToSupplier) {
+      const cpTotal = parseFloat(form.costPrice || '0');
+      const assigned = form.costSuppliers.reduce((s, c) => s + (parseFloat(c.amount || '0') || 0), 0);
+      if (assigned > cpTotal + 0.01) {
+        alert(`Supplier amounts (KES ${assigned.toLocaleString()}) add up to more than the Cost Price (KES ${cpTotal.toLocaleString()}). Please fix this before saving.`);
+        return;
+      }
     }
 
     setSaving(true);
@@ -304,45 +452,51 @@ export default function Sales() {
       await adjustSupplierBalance(form.supplierId, -sp);
     }
 
-    // Optionally, pay a supplier back for the cost of this item right away
-    // (e.g. bought on the spot from another shop, sold immediately). Recorded
-    // as an invoice (cost taken) plus a payment (cost given back) so both
-    // show up as their own lines on that supplier's ledger, not one opaque entry.
-    if (form.payCostToSupplier && form.costSupplierId && parseFloat(form.costSupplierAmount || '0') > 0) {
-      const costAmt = parseFloat(form.costSupplierAmount);
-      const invPrefix = 'INV-' + form.date.replace(/-/g, '');
-      const { data: invTxn, error: invError } = await insertTransactionWithId(invPrefix, (transactionId) => ({
-        transaction_id: transactionId,
-        date: form.date,
-        type: 'supplier_invoice',
-        primary_mode: null,
-        amount: costAmt,
-        supplier_id: form.costSupplierId,
-        description: 'Cost price taken on sale ' + txnId,
-        created_by: user?.username || null,
-      }));
-      if (invError || !invTxn) {
-        console.error(invError);
-        alert('Sale saved, but recording the supplier cost failed: ' + (invError?.message || 'unknown error'));
-      } else {
-        await adjustSupplierBalance(form.costSupplierId, costAmt);
+    // Optionally, pay one or more suppliers back for the cost of this item
+    // right away (e.g. bought on the spot from another shop, sold
+    // immediately) - the cost can be split across several suppliers, with
+    // whatever's left unassigned understood as stock the shop already owned.
+    // Each supplier gets its own invoice (cost taken) plus payment (cost
+    // given back) so both show up as their own lines on that supplier's ledger.
+    if (form.payCostToSupplier) {
+      for (const cs of form.costSuppliers) {
+        const costAmt = parseFloat(cs.amount || '0');
+        if (!cs.supplierId || costAmt <= 0) continue;
+
+        const invPrefix = 'INV-' + form.date.replace(/-/g, '');
+        const { data: invTxn, error: invError } = await insertTransactionWithId(invPrefix, (transactionId) => ({
+          transaction_id: transactionId,
+          date: form.date,
+          type: 'supplier_invoice',
+          primary_mode: null,
+          amount: costAmt,
+          supplier_id: cs.supplierId,
+          description: 'Cost price taken on sale ' + txnId,
+          created_by: user?.username || null,
+        }));
+        if (invError || !invTxn) {
+          console.error(invError);
+          alert('Sale saved, but recording a supplier cost failed: ' + (invError?.message || 'unknown error'));
+          continue;
+        }
+        await adjustSupplierBalance(cs.supplierId, costAmt);
 
         const payPrefix = 'SUP-' + form.date.replace(/-/g, '');
         const { data: payTxn, error: payError } = await insertTransactionWithId(payPrefix, (transactionId) => ({
           transaction_id: transactionId,
           date: form.date,
           type: 'supplier_payment',
-          primary_mode: form.costSupplierMode,
+          primary_mode: cs.mode,
           amount: costAmt,
-          supplier_id: form.costSupplierId,
+          supplier_id: cs.supplierId,
           description: 'Cost price paid on sale ' + txnId,
           created_by: user?.username || null,
         }));
         if (payError || !payTxn) {
           console.error(payError);
-          alert('Sale saved, and the supplier cost was recorded, but paying it back failed: ' + (payError?.message || 'unknown error'));
+          alert('Sale saved, and a supplier cost was recorded, but paying it back failed: ' + (payError?.message || 'unknown error'));
         } else {
-          await adjustSupplierBalance(form.costSupplierId, -costAmt);
+          await adjustSupplierBalance(cs.supplierId, -costAmt);
         }
       }
     }
@@ -362,9 +516,10 @@ export default function Sales() {
 
   async function handleBulkSave() {
     if (saving) return;
+    const overAllocatedRows: number[] = [];
     const validForms = bulkForms
       .map((f, originalIndex) => ({ f, originalIndex }))
-      .filter(({ f }) => {
+      .filter(({ f, originalIndex }) => {
         if (!f.sellingPrice || parseFloat(f.sellingPrice) <= 0) return false;
         if ((f.mode === 'credit' || f.mode === 'advance') && !f.customerId) return false;
         if (f.mode === 'supplier' && !f.supplierId) return false;
@@ -372,8 +527,22 @@ export default function Sales() {
           const splitTotal = parseFloat(f.splitMpesa || '0') + parseFloat(f.splitCash || '0') + parseFloat(f.splitPaybill || '0');
           if (splitTotal <= 0) return false;
         }
+        // Same rule as the single Add Sale form: the supplier split can't add
+        // up to more than the cost price - the rest is stock the shop
+        // already owned, not a negative amount owed to a supplier.
+        if (f.payCostToSupplier) {
+          const cpTotal = parseFloat(f.costPrice || '0');
+          const assigned = f.costSuppliers.reduce((s, c) => s + (parseFloat(c.amount || '0') || 0), 0);
+          if (assigned > cpTotal + 0.01) {
+            overAllocatedRows.push(originalIndex + 1);
+            return false;
+          }
+        }
         return true;
       });
+    if (overAllocatedRows.length > 0) {
+      alert(`Row(s) ${overAllocatedRows.join(', ')}: supplier amounts add up to more than the Cost Price. Fix these rows before they can be saved - the rest will still save.`);
+    }
     if (validForms.length === 0) return;
     setSaving(true);
     try {
@@ -435,6 +604,40 @@ export default function Sales() {
       if (comm > 0) {
         await syncCommissionExpense(txnId, f.date, comm, f.commissionMode, user?.username || null);
       }
+
+      if (f.payCostToSupplier) {
+        for (const cs of f.costSuppliers) {
+          const costAmt = parseFloat(cs.amount || '0');
+          if (!cs.supplierId || costAmt <= 0) continue;
+
+          const invPrefix = 'INV-' + f.date.replace(/-/g, '');
+          const { data: invTxn, error: invError } = await insertTransactionWithId(invPrefix, (transactionId) => ({
+            transaction_id: transactionId,
+            date: f.date,
+            type: 'supplier_invoice',
+            primary_mode: null,
+            amount: costAmt,
+            supplier_id: cs.supplierId,
+            description: 'Cost price taken on sale ' + txnId,
+            created_by: user?.username || null,
+          }));
+          if (invError || !invTxn) { console.error(invError); continue; }
+          await adjustSupplierBalance(cs.supplierId, costAmt);
+
+          const payPrefix = 'SUP-' + f.date.replace(/-/g, '');
+          const { data: payTxn, error: payError } = await insertTransactionWithId(payPrefix, (transactionId) => ({
+            transaction_id: transactionId,
+            date: f.date,
+            type: 'supplier_payment',
+            primary_mode: cs.mode,
+            amount: costAmt,
+            supplier_id: cs.supplierId,
+            description: 'Cost price paid on sale ' + txnId,
+            created_by: user?.username || null,
+          }));
+          if (!payError && payTxn) await adjustSupplierBalance(cs.supplierId, -costAmt);
+        }
+      }
     }
 
     setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyForm })));
@@ -447,6 +650,199 @@ export default function Sales() {
     } finally {
       setSaving(false);
     }
+  }
+
+  // Turns a paste from an external sales export into preview rows. Understands
+  // two formats in the same paste, parsed independently then merged:
+  // 1) the POS export (Sale Id/Date-time/Sold To/...) - reverses any
+  //    "LESS ### CMSN" commission netted out of the source's own Total, works
+  //    out Cash/Mpesa/Paybill/Credit/Split from the Payment Type text,
+  //    fuzzy-matches a "Sold To" name against existing customers, and checks
+  //    the source's own Sale ID against already-saved sales so a re-paste of
+  //    the same rows gets skipped instead of silently duplicated.
+  // 2) a spreadsheet-style table (Date "DD/MM - Day"/Mode/Selling
+  //    Price/Cost Price/Commission/Profit/Comments) - assumes the current
+  //    year (the date has none), and is always flagged for a closer look
+  //    since it's newer and less battle-tested than the POS format.
+  function handleSmartEntryParse() {
+    const parsed = parseSmartEntryText(smartEntryPaste);
+    const posPreview: SmartPreviewRow[] = parsed.map((r) => {
+      const flags: string[] = [];
+      let sellingPrice = r.total;
+      let commission = 0;
+      const cm = detectCommission(r.comments);
+      if (cm) {
+        if (cm.confident) {
+          commission = cm.amount;
+          sellingPrice = r.total + cm.amount;
+        } else {
+          flags.push(`Comment mentions "LESS ${cm.amount.toLocaleString()}" without confirming it's commission - check if Selling Price/Commission should change.`);
+        }
+      }
+
+      const payments = parsePayments(r.paymentTypeStr);
+      let mode: SaleMode = 'cash';
+      let splitMpesa = 0, splitCash = 0, splitPaybill = 0;
+      let customerId = '';
+      let customerMatchName = '';
+
+      if (r.soldTo) {
+        mode = 'credit';
+        const match = findBestMatch(r.soldTo, customers, (c) => c.name);
+        if (match) {
+          customerId = match.item.id;
+          customerMatchName = match.item.name;
+          flags.push(`Matched customer "${r.soldTo}" to "${match.item.name}" - please confirm this is the right customer.`);
+        } else {
+          flags.push(`Sold To "${r.soldTo}" - no matching customer found. Pick one or quick-add it.`);
+        }
+      } else if (payments.length > 1) {
+        mode = 'split';
+        for (const p of payments) {
+          if (p.mode === 'mpesa') splitMpesa += p.amount;
+          else if (p.mode === 'cash') splitCash += p.amount;
+          else if (p.mode === 'paybill') splitPaybill += p.amount;
+          else flags.push(`Could not recognise payment method "${p.label}".`);
+        }
+        if (commission > 0) {
+          // The split amounts summed to the source's smaller (post-commission)
+          // Total. Bump the largest bucket so the split still adds up to the
+          // corrected Selling Price - which wallet really covered the
+          // commission is a guess, so it's flagged either way.
+          const buckets: Array<['mpesa' | 'cash' | 'paybill', number]> = [
+            ['mpesa', splitMpesa], ['cash', splitCash], ['paybill', splitPaybill],
+          ];
+          buckets.sort((a, b) => b[1] - a[1]);
+          const biggest = buckets[0][0];
+          if (biggest === 'mpesa') splitMpesa += commission;
+          else if (biggest === 'cash') splitCash += commission;
+          else splitPaybill += commission;
+          flags.push(`Added the KES ${commission.toLocaleString()} commission into the ${biggest} split amount as a guess - check which wallet it really came from.`);
+        }
+      } else if (payments.length === 1) {
+        mode = payments[0].mode || 'cash';
+        if (!payments[0].mode) flags.push(`Could not recognise payment method "${payments[0].label}" - defaulted to Cash.`);
+      } else {
+        flags.push('No payment method found in the paste - defaulted to Cash.');
+      }
+
+      if (commission > 0) flags.push("Source doesn't say which wallet paid the commission - Commission Mode needs picking.");
+
+      const posTag = r.posId ? `[POS #${r.posId}] ` : '';
+      const duplicate = !!r.posId && sales.some((s) => !s.is_void && s.notes?.includes(`[POS #${r.posId}]`));
+
+      return {
+        posId: r.posId,
+        date: r.date,
+        sellingPrice,
+        costPrice: r.costOfGoods,
+        profit: sellingPrice - r.costOfGoods,
+        commission,
+        mode,
+        customerId,
+        customerMatchName,
+        splitMpesa, splitCash, splitPaybill,
+        notes: (posTag + r.comments).trim(),
+        flags,
+        duplicate,
+      };
+    });
+
+    const parsedExcel = parseExcelSmartEntryText(smartEntryPaste, new Date().getFullYear());
+    const excelPreview: SmartPreviewRow[] = parsedExcel.map((r) => {
+      const flags: string[] = ['From the Excel-style paste - please double check.'];
+
+      let mode: SaleMode = 'cash';
+      const modeLower = r.modeStr.toLowerCase();
+      if (modeLower === 'cash' || modeLower === 'mpesa' || modeLower === 'paybill') {
+        mode = modeLower as SaleMode;
+      } else if (!r.modeStr) {
+        mode = 'credit';
+        flags.push('No mode given - defaulted to Credit. Please check and set the correct mode.');
+      } else {
+        flags.push(`Could not recognise mode "${r.modeStr}" - defaulted to Cash.`);
+      }
+
+      // Cost Price and Profit fill each other in when only one is missing -
+      // same 3-way relationship as the regular Sale form.
+      let costPrice = r.costPrice;
+      let profit = r.profit;
+      if (costPrice === null && profit !== null) {
+        costPrice = r.sellingPrice - profit;
+      } else if (profit === null && costPrice !== null) {
+        profit = r.sellingPrice - costPrice;
+      } else if (costPrice === null && profit === null) {
+        costPrice = 0;
+        profit = r.sellingPrice;
+        flags.push('Cost Price not given - profit will show as the full Selling Price until you fill it in.');
+      }
+
+      const pct = detectPercentCommission(r.comments);
+      if (pct !== null) {
+        flags.push(`Comment mentions a ${pct}% deduction - please check Commission and Selling Price are correct.`);
+      }
+      if (r.commission > 0) {
+        flags.push("Doesn't say which wallet paid the commission - Commission Mode needs picking.");
+      }
+
+      // Credit mode still needs a customer to attach to - fuzzy-match off any
+      // name mentioned in the comment, same courtesy as the POS format's Sold To.
+      let customerId = '';
+      let customerMatchName = '';
+      if (mode === 'credit' && r.comments) {
+        const match = findBestMatch(r.comments, customers, (c) => c.name);
+        if (match) {
+          customerId = match.item.id;
+          customerMatchName = match.item.name;
+          flags.push(`Matched a name in the comment to customer "${match.item.name}" - please confirm.`);
+        } else {
+          flags.push('Credit mode but no matching customer found in the comment - pick one or quick-add it.');
+        }
+      }
+
+      return {
+        posId: null,
+        date: r.date,
+        sellingPrice: r.sellingPrice,
+        costPrice: costPrice || 0,
+        profit: profit || 0,
+        commission: r.commission,
+        mode,
+        customerId,
+        customerMatchName,
+        splitMpesa: 0, splitCash: 0, splitPaybill: 0,
+        notes: r.comments,
+        flags,
+        duplicate: false,
+      };
+    });
+
+    setSmartEntryPreview([...posPreview, ...excelPreview]);
+  }
+
+  function handleAddSmartEntryToBulk() {
+    const toAdd = smartEntryPreview.filter((r) => !r.duplicate);
+    const forms: SaleForm[] = toAdd.map((r) => ({
+      ...emptyForm,
+      date: r.date,
+      mode: r.mode,
+      sellingPrice: r.sellingPrice ? String(r.sellingPrice) : '',
+      costPrice: r.costPrice ? String(r.costPrice) : '',
+      profit: String(r.profit),
+      commission: r.commission ? String(r.commission) : '',
+      customerId: r.customerId,
+      splitMpesa: r.splitMpesa ? String(r.splitMpesa) : '',
+      splitCash: r.splitCash ? String(r.splitCash) : '',
+      splitPaybill: r.splitPaybill ? String(r.splitPaybill) : '',
+      notes: r.notes,
+      smartFlags: r.flags,
+    }));
+    if (forms.length === 0) return;
+    setBulkForms(forms);
+    setShowBulk(true);
+    setShowSmartEntry(false);
+    setSmartEntryPreview([]);
+    setSmartEntryPaste('');
   }
 
   async function handleVoid(id: string, reason: string) {
@@ -507,6 +903,49 @@ export default function Sales() {
   function refundableAmount(sale: Transaction): number {
     const original = Math.abs(sale.selling_price ?? sale.amount ?? 0);
     return Math.max(0, original - alreadyRefunded(sale));
+  }
+
+  // Refund Amount/Cost Price/Profit auto-fill each other the same way the main
+  // Sales form does (Amount stands in for Selling Price here) - type any 2,
+  // the 3rd works itself out; whichever box you actually type into wins.
+  function refundFilled(v: string): boolean {
+    return v !== undefined && v !== null && v.trim() !== '';
+  }
+
+  function handleRefundAmountChange(value: string) {
+    const amt = parseFloat(value || '0');
+    setRefundForm((prev) => {
+      if (refundFilled(prev.costPrice)) {
+        return { ...prev, amount: value, profit: String(amt - parseFloat(prev.costPrice)) };
+      } else if (refundFilled(prev.profit)) {
+        return { ...prev, amount: value, costPrice: String(amt - parseFloat(prev.profit)) };
+      }
+      return { ...prev, amount: value };
+    });
+  }
+
+  function handleRefundCPChange(value: string) {
+    const cp = parseFloat(value || '0');
+    setRefundForm((prev) => {
+      if (refundFilled(prev.amount)) {
+        return { ...prev, costPrice: value, profit: String(parseFloat(prev.amount) - cp) };
+      } else if (refundFilled(prev.profit)) {
+        return { ...prev, costPrice: value, amount: String(cp + parseFloat(prev.profit)) };
+      }
+      return { ...prev, costPrice: value };
+    });
+  }
+
+  function handleRefundProfitChange(value: string) {
+    const profit = parseFloat(value || '0');
+    setRefundForm((prev) => {
+      if (refundFilled(prev.amount)) {
+        return { ...prev, profit: value, costPrice: String(parseFloat(prev.amount) - profit) };
+      } else if (refundFilled(prev.costPrice)) {
+        return { ...prev, profit: value, amount: String(parseFloat(prev.costPrice) + profit) };
+      }
+      return { ...prev, profit: value };
+    });
   }
 
   async function handleRefund() {
@@ -601,7 +1040,7 @@ export default function Sales() {
     }
 
     setRefundingSale(null);
-    setRefundForm({ amount: '', costPrice: '', mode: 'cash', date: todayStr() });
+    setRefundForm({ amount: '', costPrice: '', profit: '', mode: 'cash', date: todayStr() });
     fetchData();
     triggerRefresh();
     } finally {
@@ -727,9 +1166,7 @@ export default function Sales() {
       isUnclassified: sale.is_unclassified,
       advanceMode: sale.settlement_mode || 'cash',
       payCostToSupplier: false,
-      costSupplierId: '',
-      costSupplierAmount: '',
-      costSupplierMode: 'cash',
+      costSuppliers: [],
     });
     setShowAdd(true);
   }
@@ -787,10 +1224,16 @@ export default function Sales() {
           <Plus size={16} /> Add Sale
         </button>
         <button
-          onClick={() => { setShowBulk(true); setShowAdd(false); setEditingId(null); setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyForm, date: todayStr() }))); }}
+          onClick={() => { setShowBulk(true); setShowAdd(false); setShowSmartEntry(false); setEditingId(null); setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyForm, date: todayStr() }))); }}
           className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
         >
           <Plus size={16} /> Bulk Entry
+        </button>
+        <button
+          onClick={() => { setShowSmartEntry(true); setShowAdd(false); setShowBulk(false); setEditingId(null); }}
+          className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
+        >
+          <Plus size={16} /> Smart Entry
         </button>
         <button
           onClick={() => setShowLedger(true)}
@@ -883,8 +1326,8 @@ export default function Sales() {
             quickSupplier={quickSupplier}
             setQuickSupplier={setQuickSupplier}
             onQuickAddSupplier={handleQuickAddSupplier}
-            showQuickAddCostSupplier={showQuickAddCostSupplier}
-            setShowQuickAddCostSupplier={setShowQuickAddCostSupplier}
+            costSupplierQuickAddIndex={costSupplierQuickAddIndex}
+            setCostSupplierQuickAddIndex={setCostSupplierQuickAddIndex}
             quickCostSupplier={quickCostSupplier}
             setQuickCostSupplier={setQuickCostSupplier}
             onQuickAddCostSupplier={handleQuickAddCostSupplier}
@@ -899,6 +1342,93 @@ export default function Sales() {
             }}
           />
         </div>
+        </div>
+      )}
+
+      {/* Smart Entry - paste a sales export from elsewhere, review the parsed
+          rows here, then hand them to Bulk Entry (already filled in) for the
+          real editing and Save All - its own tab, not mixed into Bulk Entry. */}
+      {showSmartEntry && (
+        <div
+          className="bg-white rounded-xl border border-slate-200 shadow-lg p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowSmartEntry(false); }}
+        >
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-slate-800">Smart Entry</h3>
+            <button onClick={() => setShowSmartEntry(false)} className="p-1 hover:bg-slate-100 rounded">
+              <X size={16} />
+            </button>
+          </div>
+          <p className="text-xs text-slate-500 mb-2">
+            Paste rows copied from another sales sheet or system. This reads them and works out Date, Selling Price, Cost Price, Commission, and Mode for you - nothing is saved until you send them to Bulk Entry and press Save All there.
+          </p>
+          <textarea
+            value={smartEntryPaste}
+            onChange={(e) => setSmartEntryPaste(e.target.value)}
+            placeholder="Paste your sales export here..."
+            rows={8}
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+          <div className="flex items-center gap-3 mt-2">
+            <button
+              onClick={handleSmartEntryParse}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium"
+            >
+              Parse pasted rows
+            </button>
+            <button
+              onClick={() => { setSmartEntryPaste(''); setSmartEntryPreview([]); }}
+              className="text-slate-500 hover:text-slate-700 text-sm"
+            >
+              Clear
+            </button>
+            {smartEntryPreview.length > 0 && (
+              <span className="text-xs text-slate-500 ml-auto">
+                {smartEntryPreview.length} parsed
+                {smartEntryPreview.some((r) => r.flags.length > 0) && `, ${smartEntryPreview.filter((r) => r.flags.length > 0).length} need a check`}
+                {smartEntryPreview.some((r) => r.duplicate) && `, ${smartEntryPreview.filter((r) => r.duplicate).length} already imported (skipped)`}
+              </span>
+            )}
+          </div>
+
+          {smartEntryPreview.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-slate-200 space-y-2 max-h-96 overflow-y-auto">
+              {smartEntryPreview.map((r, i) => (
+                <div
+                  key={i}
+                  className={`border rounded p-2 text-xs ${r.duplicate ? 'border-slate-200 bg-slate-50 opacity-60' : r.flags.length > 0 ? 'border-amber-300 bg-amber-50' : 'border-slate-200'}`}
+                >
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <span className="font-medium text-slate-700">{r.date}</span>
+                    <span className="text-slate-500">SP {formatKES(r.sellingPrice)}</span>
+                    <span className="text-slate-500">CP {formatKES(r.costPrice)}</span>
+                    <span className="text-slate-500">Profit {formatKES(r.profit)}</span>
+                    {r.commission > 0 && <span className="text-slate-500">Commission {formatKES(r.commission)}</span>}
+                    <span className="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 capitalize">{r.mode}</span>
+                    {r.customerMatchName && <span className="text-slate-500">→ {r.customerMatchName}</span>}
+                    {r.duplicate && <span className="px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-600">Already imported</span>}
+                  </div>
+                  {r.flags.length > 0 && (
+                    <ul className="text-amber-700 list-disc list-inside space-y-0.5">
+                      {r.flags.map((f, fi) => <li key={fi}>{f}</li>)}
+                    </ul>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {smartEntryPreview.length > 0 && (
+            <div className="flex gap-3 mt-3 pt-3 border-t border-slate-200">
+              <button
+                onClick={handleAddSmartEntryToBulk}
+                disabled={smartEntryPreview.every((r) => r.duplicate)}
+                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm font-medium"
+              >
+                Add to Bulk Entry →
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -918,7 +1448,7 @@ export default function Sales() {
           </div>
           <div className="space-y-2">
             {bulkForms.map((f, i) => (
-              <div key={i} className="border border-slate-200 rounded p-2">
+              <div key={i} className={`border rounded p-2 ${f.smartFlags?.length ? 'border-amber-300 bg-amber-50' : 'border-slate-200'}`}>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs text-slate-500">#{i + 1}</span>
                   {bulkForms.length > 1 && (
@@ -933,6 +1463,11 @@ export default function Sales() {
                     </button>
                   )}
                 </div>
+                {f.smartFlags && f.smartFlags.length > 0 && (
+                  <ul className="text-xs text-amber-700 list-disc list-inside mb-2 space-y-0.5">
+                    {f.smartFlags.map((flag, fi) => <li key={fi}>{flag}</li>)}
+                  </ul>
+                )}
                 <SaleFormFields
                   form={f}
                   setForm={(updater) => {
@@ -955,6 +1490,21 @@ export default function Sales() {
                   onCancel={() => {}}
                   saveLabel=""
                   hideActions
+                  showQuickAddCustomer={bulkQuickAddCustomerRow === i}
+                  setShowQuickAddCustomer={(v) => setBulkQuickAddCustomerRow(v ? i : null)}
+                  quickCustomer={quickCustomer}
+                  setQuickCustomer={setQuickCustomer}
+                  onQuickAddCustomer={() => handleBulkQuickAddCustomer(i)}
+                  showQuickAddSupplier={bulkQuickAddSupplierRow === i}
+                  setShowQuickAddSupplier={(v) => setBulkQuickAddSupplierRow(v ? i : null)}
+                  quickSupplier={quickSupplier}
+                  setQuickSupplier={setQuickSupplier}
+                  onQuickAddSupplier={() => handleBulkQuickAddSupplier(i)}
+                  costSupplierQuickAddIndex={bulkQuickAddCostSupplierRow?.row === i ? bulkQuickAddCostSupplierRow.idx : null}
+                  setCostSupplierQuickAddIndex={(idx) => setBulkQuickAddCostSupplierRow(idx === null ? null : { row: i, idx })}
+                  quickCostSupplier={quickCostSupplier}
+                  setQuickCostSupplier={setQuickCostSupplier}
+                  onQuickAddCostSupplier={(subIndex) => handleBulkQuickAddCostSupplier(i, subIndex)}
                   onKeyDown={(e) => {
                     // Reaches here only once focus is on this row's very
                     // last box and Enter is pressed - move on to a new row.
@@ -1081,7 +1631,7 @@ export default function Sales() {
                                       <button
                                         onClick={() => {
                                           setRefundingSale(sale);
-                                          setRefundForm({ amount: '', costPrice: '', mode: 'cash', date: todayStr() });
+                                          setRefundForm({ amount: '', costPrice: '', profit: '', mode: 'cash', date: todayStr() });
                                         }}
                                         className="p-1 hover:bg-amber-100 rounded"
                                         title="Refund"
@@ -1205,9 +1755,21 @@ export default function Sales() {
                 <X size={16} />
               </button>
             </div>
-            <p className="text-xs text-slate-500">
-              Original sale: {formatKES(refundingSale.selling_price || 0)} (cost {formatKES(refundingSale.cost_price || 0)})
-            </p>
+            {/* Original sale, shown in full so you know exactly what you're refunding against */}
+            <div className="bg-slate-50 border border-slate-200 rounded p-2 grid grid-cols-3 gap-2 text-center">
+              <div>
+                <p className="text-xs text-slate-500">SP</p>
+                <p className="text-sm font-medium text-slate-800">{formatKES(refundingSale.selling_price || 0)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-500">CP</p>
+                <p className="text-sm font-medium text-slate-800">{formatKES(refundingSale.cost_price || 0)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-500">Profit</p>
+                <p className="text-sm font-medium text-slate-800">{formatKES(saleProfit(refundingSale))}</p>
+              </div>
+            </div>
             <p className="text-xs text-slate-500">
               Refundable: KES {formatKES(refundableAmount(refundingSale))}
               {alreadyRefunded(refundingSale) > 0 && ` (KES ${formatKES(alreadyRefunded(refundingSale))} already refunded)`}
@@ -1222,19 +1784,34 @@ export default function Sales() {
               <input
                 type="number"
                 value={refundForm.amount}
-                onChange={(e) => setRefundForm({ ...refundForm, amount: e.target.value })}
+                onChange={(e) => handleRefundAmountChange(e.target.value)}
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Cost price of the refunded amount (optional - leave blank to work it out automatically)</label>
-              <input
-                type="number"
-                value={refundForm.costPrice}
-                onChange={(e) => setRefundForm({ ...refundForm, costPrice: e.target.value })}
-                placeholder="Auto-calculated if left blank"
-                className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-              />
+            {/* Cost Price and Profit auto-fill each other, same rule as the Sales form -
+                type one, the other works itself out; leave both blank for the automatic
+                proportional guess (same share of cost as the amount is of the original sale) */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Cost price (optional)</label>
+                <input
+                  type="number"
+                  value={refundForm.costPrice}
+                  onChange={(e) => handleRefundCPChange(e.target.value)}
+                  placeholder="Auto if left blank"
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Profit (optional)</label>
+                <input
+                  type="number"
+                  value={refundForm.profit}
+                  onChange={(e) => handleRefundProfitChange(e.target.value)}
+                  placeholder="Auto if left blank"
+                  className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
               {['cash', 'mpesa', 'paybill', 'split'].includes(refundingSale.primary_mode || '') && (
@@ -1296,8 +1873,8 @@ function SaleFormFields({
   quickSupplier,
   setQuickSupplier,
   onQuickAddSupplier,
-  showQuickAddCostSupplier,
-  setShowQuickAddCostSupplier,
+  costSupplierQuickAddIndex,
+  setCostSupplierQuickAddIndex,
   quickCostSupplier,
   setQuickCostSupplier,
   onQuickAddCostSupplier,
@@ -1323,11 +1900,11 @@ function SaleFormFields({
   quickSupplier?: { name: string; phone: string; balance: string };
   setQuickSupplier?: (v: { name: string; phone: string; balance: string }) => void;
   onQuickAddSupplier?: () => void;
-  showQuickAddCostSupplier?: boolean;
-  setShowQuickAddCostSupplier?: (v: boolean) => void;
+  costSupplierQuickAddIndex?: number | null;
+  setCostSupplierQuickAddIndex?: (v: number | null) => void;
   quickCostSupplier?: { name: string; phone: string };
   setQuickCostSupplier?: (v: { name: string; phone: string }) => void;
-  onQuickAddCostSupplier?: () => void;
+  onQuickAddCostSupplier?: (subIndex: number) => void;
   isEditing?: boolean;
   onKeyDown?: (e: React.KeyboardEvent, field: keyof SaleForm) => void;
 }) {
@@ -1335,6 +1912,22 @@ function SaleFormFields({
 
   const update = (field: keyof SaleForm, value: string | boolean) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const updateCostSupplier = (idx: number, field: 'supplierId' | 'amount' | 'mode', value: string) => {
+    setForm((prev) => {
+      const costSuppliers = [...prev.costSuppliers];
+      costSuppliers[idx] = { ...costSuppliers[idx], [field]: value };
+      return { ...prev, costSuppliers };
+    });
+  };
+
+  const addCostSupplierRow = () => {
+    setForm((prev) => ({ ...prev, costSuppliers: [...prev.costSuppliers, { supplierId: '', amount: '', mode: 'cash' }] }));
+  };
+
+  const removeCostSupplierRow = (idx: number) => {
+    setForm((prev) => ({ ...prev, costSuppliers: prev.costSuppliers.filter((_, i) => i !== idx) }));
   };
 
   const filled = (v: string) => v !== undefined && v !== null && v.trim() !== '';
@@ -1569,7 +2162,9 @@ function SaleFormFields({
         </div>
       )}
 
-      {/* Optional: pay a supplier back for this item's cost price right away */}
+      {/* Optional: pay one or more suppliers back for this item's cost price
+          right away - the cost can be split across several suppliers, and
+          whatever's left over is understood as stock the shop already owned. */}
       {onQuickAddCostSupplier && (
         <div className="space-y-2">
           <label className="flex items-center gap-2 text-sm text-slate-600">
@@ -1579,77 +2174,104 @@ function SaleFormFields({
               onChange={(e) => setForm((prev) => ({
                 ...prev,
                 payCostToSupplier: e.target.checked,
-                costSupplierAmount: e.target.checked && !prev.costSupplierAmount ? prev.costPrice : prev.costSupplierAmount,
+                costSuppliers: e.target.checked && prev.costSuppliers.length === 0
+                  ? [{ supplierId: '', amount: prev.costPrice, mode: 'cash' }]
+                  : prev.costSuppliers,
               }))}
               onKeyDown={(e) => handleKeyDown(e, 'payCostToSupplier')}
             />
             Pay cost price to a supplier now
           </label>
           {form.payCostToSupplier && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <div className="col-span-2 flex gap-1">
-                <select
-                  value={form.costSupplierId}
-                  onChange={(e) => update('costSupplierId', e.target.value)}
-                  onKeyDown={(e) => handleKeyDown(e, 'costSupplierId')}
-                  className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-                >
-                  <option value="">Supplier</option>
-                  {sortSuppliersByBalance(suppliers).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => setShowQuickAddCostSupplier && setShowQuickAddCostSupplier(!showQuickAddCostSupplier)}
-                  className="p-1.5 border border-slate-300 rounded hover:bg-slate-50 shrink-0"
-                  title="Add new supplier"
-                >
-                  <UserPlus size={16} className="text-slate-500" />
-                </button>
-              </div>
-              <input
-                type="number"
-                value={form.costSupplierAmount}
-                onChange={(e) => update('costSupplierAmount', e.target.value)}
-                onKeyDown={(e) => handleKeyDown(e, 'costSupplierAmount')}
-                placeholder="Amount"
-                className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-              />
-              <select
-                value={form.costSupplierMode}
-                onChange={(e) => update('costSupplierMode', e.target.value)}
-                onKeyDown={(e) => handleKeyDown(e, 'costSupplierMode')}
-                className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+            <div className="space-y-2">
+              {form.costSuppliers.map((cs, idx) => (
+                <div key={idx} className="space-y-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    <div className="col-span-2 flex gap-1">
+                      <select
+                        value={cs.supplierId}
+                        onChange={(e) => updateCostSupplier(idx, 'supplierId', e.target.value)}
+                        onKeyDown={(e) => handleKeyDown(e, 'costSuppliers')}
+                        className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                      >
+                        <option value="">Supplier</option>
+                        {sortSuppliersByBalance(suppliers).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => setCostSupplierQuickAddIndex && setCostSupplierQuickAddIndex(costSupplierQuickAddIndex === idx ? null : idx)}
+                        className="p-1.5 border border-slate-300 rounded hover:bg-slate-50 shrink-0"
+                        title="Add new supplier"
+                      >
+                        <UserPlus size={16} className="text-slate-500" />
+                      </button>
+                    </div>
+                    <input
+                      type="number"
+                      value={cs.amount}
+                      onChange={(e) => updateCostSupplier(idx, 'amount', e.target.value)}
+                      onKeyDown={(e) => handleKeyDown(e, 'costSuppliers')}
+                      placeholder="Amount"
+                      className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                    <select
+                      value={cs.mode}
+                      onChange={(e) => updateCostSupplier(idx, 'mode', e.target.value)}
+                      onKeyDown={(e) => handleKeyDown(e, 'costSuppliers')}
+                      className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    >
+                      <option value="cash">Cash</option>
+                      <option value="mpesa">Mpesa</option>
+                      <option value="paybill">Paybill</option>
+                    </select>
+                    {form.costSuppliers.length > 1 ? (
+                      <button type="button" onClick={() => removeCostSupplierRow(idx)} className="text-red-500 hover:text-red-700 text-xs">
+                        Remove
+                      </button>
+                    ) : <div />}
+                  </div>
+                  {costSupplierQuickAddIndex === idx && quickCostSupplier && setQuickCostSupplier && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-emerald-50 border border-emerald-200 rounded p-2">
+                      <input
+                        type="text"
+                        value={quickCostSupplier.name}
+                        onChange={(e) => setQuickCostSupplier({ ...quickCostSupplier, name: e.target.value })}
+                        placeholder="New supplier name"
+                        className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={quickCostSupplier.phone}
+                        onChange={(e) => setQuickCostSupplier({ ...quickCostSupplier, phone: e.target.value })}
+                        placeholder="Phone (optional)"
+                        className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                      />
+                      <div />
+                      <div className="flex gap-1">
+                        <button type="button" onClick={() => onQuickAddCostSupplier(idx)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">
+                          Add
+                        </button>
+                        <button type="button" onClick={() => setCostSupplierQuickAddIndex && setCostSupplierQuickAddIndex(null)} className="text-slate-500 hover:text-slate-700 text-xs">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={addCostSupplierRow}
+                className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded flex items-center gap-1"
               >
-                <option value="cash">Cash</option>
-                <option value="mpesa">Mpesa</option>
-                <option value="paybill">Paybill</option>
-              </select>
-            </div>
-          )}
-          {showQuickAddCostSupplier && quickCostSupplier && setQuickCostSupplier && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-emerald-50 border border-emerald-200 rounded p-2">
-              <input
-                type="text"
-                value={quickCostSupplier.name}
-                onChange={(e) => setQuickCostSupplier({ ...quickCostSupplier, name: e.target.value })}
-                placeholder="New supplier name"
-                className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-              />
-              <input
-                type="text"
-                value={quickCostSupplier.phone}
-                onChange={(e) => setQuickCostSupplier({ ...quickCostSupplier, phone: e.target.value })}
-                placeholder="Phone (optional)"
-                className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-              />
-              <div />
-              <div className="flex gap-1">
-                <button type="button" onClick={onQuickAddCostSupplier} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">
-                  Add
-                </button>
-                <button type="button" onClick={() => setShowQuickAddCostSupplier && setShowQuickAddCostSupplier(false)} className="text-slate-500 hover:text-slate-700 text-xs">
-                  Cancel
-                </button>
+                <Plus size={12} /> Add Supplier
+              </button>
+              <div className="text-xs text-slate-500 flex flex-wrap gap-3">
+                <span>Cost Price: KES {(parseFloat(form.costPrice || '0')).toLocaleString()}</span>
+                <span>Assigned to suppliers: KES {form.costSuppliers.reduce((s, c) => s + (parseFloat(c.amount || '0') || 0), 0).toLocaleString()}</span>
+                <span className={(parseFloat(form.costPrice || '0') - form.costSuppliers.reduce((s, c) => s + (parseFloat(c.amount || '0') || 0), 0)) < 0 ? 'text-red-600 font-medium' : ''}>
+                  From my shop: KES {(parseFloat(form.costPrice || '0') - form.costSuppliers.reduce((s, c) => s + (parseFloat(c.amount || '0') || 0), 0)).toLocaleString()}
+                </span>
               </div>
             </div>
           )}

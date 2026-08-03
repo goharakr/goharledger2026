@@ -9,6 +9,7 @@ import {
 import { supabase } from '../utils/supabase';
 import { formatKES, getMonthLabel, saleProfit, todayStr } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
+import { usePersistentState } from '../context/PageStateContext';
 import LedgerModal from '../components/LedgerModal';
 import { fetchAllRows } from '../utils/fetchAll';
 import type { Transaction, ShareRule, HistoricalProfit } from '../types';
@@ -18,13 +19,13 @@ export default function ProfitLoss() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [shareRules, setShareRules] = useState<ShareRule[]>([]);
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
-  const [selectedMonth, setSelectedMonth] = useState(() => {
+  const [selectedMonth, setSelectedMonth] = usePersistentState('profitLoss.selectedMonth', () => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   });
   const [loading, setLoading] = useState(true);
-  const [editingRules, setEditingRules] = useState(false);
-  const [ruleForm, setRuleForm] = useState({ type: 'fixed' as 'fixed' | 'percentage', taherValue: '100000', abdulqadirValue: '100000' });
+  const [editingRules, setEditingRules] = usePersistentState('profitLoss.editingRules', false);
+  const [ruleForm, setRuleForm] = usePersistentState('profitLoss.ruleForm', { type: 'fixed' as 'fixed' | 'percentage', taherValue: '100000', abdulqadirValue: '100000' });
   const [showLedger, setShowLedger] = useState(false);
 
   useEffect(() => {

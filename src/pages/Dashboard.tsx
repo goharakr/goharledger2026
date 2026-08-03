@@ -27,6 +27,7 @@ import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, saleProfit, todayStr, thisMonthStr } from '../utils/format';
 import { sortCustomersByBalance, sortSuppliersByBalance } from '../utils/sortEntities';
 import { useDataRefresh } from '../context/DataContext';
+import { usePersistentState } from '../context/PageStateContext';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
 import { fetchAllRows } from '../utils/fetchAll';
@@ -63,18 +64,18 @@ export default function Dashboard() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [loading, setLoading] = useState(true);
-  const [monthFilter, setMonthFilter] = useState(thisMonthStr());
+  const [monthFilter, setMonthFilter] = usePersistentState('dashboard.monthFilter', thisMonthStr());
   const [monthlyBalances, setMonthlyBalances] = useState<{ id: string; month: string; mpesa: number; cash: number; paybill: number }[]>([]);
   const [computedForwardedBalance, setComputedForwardedBalance] = useState({ mpesa: 0, cash: 0, bank: 0 });
-  const [showForwardedBalance, setShowForwardedBalance] = useState(false);
-  const [forwardedBalanceForm, setForwardedBalanceForm] = useState({ mpesa: '', cash: '', paybill: '' });
+  const [showForwardedBalance, setShowForwardedBalance] = usePersistentState('dashboard.showForwardedBalance', false);
+  const [forwardedBalanceForm, setForwardedBalanceForm] = usePersistentState('dashboard.forwardedBalanceForm', { mpesa: '', cash: '', paybill: '' });
   const [physicalCounts, setPhysicalCounts] = useState<{ id: string; month: string; mpesa_actual: number; cash_actual: number; paybill_actual: number; mpesa_system: number; cash_system: number; paybill_system: number }[]>([]);
-  const [showPhysicalCount, setShowPhysicalCount] = useState(false);
-  const [physicalCountForm, setPhysicalCountForm] = useState({ mpesa: '', cash: '', paybill: '' });
-  const [showReminderModal, setShowReminderModal] = useState(false);
-  const [showAlerts, setShowAlerts] = useState(true);
-  const [editingReminder, setEditingReminder] = useState<string | null>(null);
-  const [reminderForm, setReminderForm] = useState({
+  const [showPhysicalCount, setShowPhysicalCount] = usePersistentState('dashboard.showPhysicalCount', false);
+  const [physicalCountForm, setPhysicalCountForm] = usePersistentState('dashboard.physicalCountForm', { mpesa: '', cash: '', paybill: '' });
+  const [showReminderModal, setShowReminderModal] = usePersistentState('dashboard.showReminderModal', false);
+  const [showAlerts, setShowAlerts] = usePersistentState('dashboard.showAlerts', true);
+  const [editingReminder, setEditingReminder] = usePersistentState<string | null>('dashboard.editingReminder', null);
+  const [reminderForm, setReminderForm] = usePersistentState('dashboard.reminderForm', {
     entityType: 'supplier' as 'supplier' | 'customer',
     entityId: '',
     amount: '',
@@ -85,16 +86,16 @@ export default function Dashboard() {
   });
 
   // Daily sales with date filter
-  const [dailySalesPreset, setDailySalesPreset] = useState<DatePreset>('today');
-  const [dailySalesCustomFrom, setDailySalesCustomFrom] = useState('');
-  const [dailySalesCustomTo, setDailySalesCustomTo] = useState('');
+  const [dailySalesPreset, setDailySalesPreset] = usePersistentState<DatePreset>('dashboard.dailySalesPreset', 'today');
+  const [dailySalesCustomFrom, setDailySalesCustomFrom] = usePersistentState('dashboard.dailySalesCustomFrom', '');
+  const [dailySalesCustomTo, setDailySalesCustomTo] = usePersistentState('dashboard.dailySalesCustomTo', '');
   const { from: dailySalesFrom, to: dailySalesTo } = getDatePresetRange(dailySalesPreset, dailySalesCustomFrom, dailySalesCustomTo);
   const [dailySalesBreakdown, setDailySalesBreakdown] = useState<DailySalesBreakdown | null>(null);
 
   // Monthly capital filter
-  const [capitalPreset, setCapitalPreset] = useState<DatePreset>('month');
-  const [capitalCustomFrom, setCapitalCustomFrom] = useState('');
-  const [capitalCustomTo, setCapitalCustomTo] = useState('');
+  const [capitalPreset, setCapitalPreset] = usePersistentState<DatePreset>('dashboard.capitalPreset', 'month');
+  const [capitalCustomFrom, setCapitalCustomFrom] = usePersistentState('dashboard.capitalCustomFrom', '');
+  const [capitalCustomTo, setCapitalCustomTo] = usePersistentState('dashboard.capitalCustomTo', '');
   const { from: capitalFrom, to: capitalTo } = getDatePresetRange(capitalPreset, capitalCustomFrom, capitalCustomTo);
   const [monthlyCapital, setMonthlyCapital] = useState<MonthlyCapital | null>(null);
 
@@ -604,21 +605,21 @@ export default function Dashboard() {
 
       {/* Supplier Total Owed - MOVED UP */}
       <button onClick={() => navigate('/suppliers')} className="w-full text-left">
-        <div className="rounded-xl border shadow-sm p-5 transition-colors bg-emerald-50 border-emerald-200 hover:bg-emerald-100">
+        <div className="rounded-xl border shadow-sm p-5 transition-colors bg-red-50 border-red-200 hover:bg-red-100">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <AlertCircle size={24} className="text-emerald-500" />
+              <AlertCircle size={24} className="text-red-500" />
               <div>
-                <p className="text-sm text-emerald-600">Suppliers Owe You</p>
-                <p className="text-2xl font-bold text-emerald-700">
-                  KES {formatKES(stats?.suppliersOweShop || 0)}
+                <p className="text-sm text-red-600">You Owe Suppliers</p>
+                <p className="text-2xl font-bold text-red-700">
+                  KES {formatKES(stats?.shopOwesSuppliers || 0)}
                 </p>
-                {(stats?.shopOwesSuppliers || 0) > 0 && (
-                  <p className="text-xs text-red-600 mt-1">You owe suppliers: KES {formatKES(stats?.shopOwesSuppliers || 0)}</p>
+                {(stats?.suppliersOweShop || 0) > 0 && (
+                  <p className="text-xs text-emerald-600 mt-1">Suppliers owe you: KES {formatKES(stats?.suppliersOweShop || 0)}</p>
                 )}
               </div>
             </div>
-            <span className="text-sm text-emerald-600">Click to view suppliers</span>
+            <span className="text-sm text-red-600">Click to view suppliers</span>
           </div>
         </div>
       </button>

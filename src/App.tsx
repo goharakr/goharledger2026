@@ -2,6 +2,7 @@ import { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { DataProvider } from './context/DataContext';
+import { PageStateProvider } from './context/PageStateContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Login from './pages/Login';
 import ResetPassword from './pages/ResetPassword';
@@ -30,6 +31,7 @@ function App() {
   return (
     <AuthProvider>
       <DataProvider>
+        <PageStateProvider>
         <BrowserRouter basename={import.meta.env.BASE_URL}>
           <Suspense fallback={<PageLoading />}>
             <Routes>
@@ -50,6 +52,7 @@ function App() {
             </Routes>
           </Suspense>
         </BrowserRouter>
+        </PageStateProvider>
       </DataProvider>
     </AuthProvider>
   );

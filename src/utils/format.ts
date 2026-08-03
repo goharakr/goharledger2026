@@ -35,6 +35,12 @@ export function formatDate(dateStr: string | null | undefined): string {
   });
 }
 
+export function formatTime(isoStr: string | null | undefined): string {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  return d.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit' });
+}
+
 export function formatDateShort(dateStr: string | null | undefined): string {
   if (!dateStr) return '';
   const d = new Date(dateStr);

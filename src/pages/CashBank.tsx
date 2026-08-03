@@ -16,6 +16,8 @@ import { fetchAllRows } from '../utils/fetchAll';
 import { computeWalletBalance, tomorrowStr } from '../utils/walletBalance';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { usePersistentState } from '../context/PageStateContext';
+import { handleFormKeyNav } from '../utils/formKeyNav';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
@@ -43,19 +45,19 @@ export default function CashBank() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [splits, setSplits] = useState<{ transaction_id: string; mode: string; amount: number }[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeMode, setActiveMode] = useState<string>('all');
-  const [showTransfer, setShowTransfer] = useState(false);
-  const [transferForm, setTransferForm] = useState<TransferForm>(emptyTransfer);
-  const [reconcileMode, setReconcileMode] = useState<string>('');
-  const [ledgerDatePreset, setLedgerDatePreset] = useState<DatePreset>('month');
-  const [ledgerCustomFrom, setLedgerCustomFrom] = useState('');
-  const [ledgerCustomTo, setLedgerCustomTo] = useState('');
-  const [reconcileAmount, setReconcileAmount] = useState('');
+  const [activeMode, setActiveMode] = usePersistentState<string>('cashbank.activeMode', 'all');
+  const [showTransfer, setShowTransfer] = usePersistentState('cashbank.showTransfer', false);
+  const [transferForm, setTransferForm] = usePersistentState<TransferForm>('cashbank.transferForm', emptyTransfer);
+  const [reconcileMode, setReconcileMode] = usePersistentState<string>('cashbank.reconcileMode', '');
+  const [ledgerDatePreset, setLedgerDatePreset] = usePersistentState<DatePreset>('cashbank.ledgerDatePreset', 'month');
+  const [ledgerCustomFrom, setLedgerCustomFrom] = usePersistentState('cashbank.ledgerCustomFrom', '');
+  const [ledgerCustomTo, setLedgerCustomTo] = usePersistentState('cashbank.ledgerCustomTo', '');
+  const [reconcileAmount, setReconcileAmount] = usePersistentState('cashbank.reconcileAmount', '');
   const [showLedger, setShowLedger] = useState(false);
-  const [showOpeningBalance, setShowOpeningBalance] = useState(false);
-  const [openingMode, setOpeningMode] = useState('cash');
-  const [openingAmount, setOpeningAmount] = useState('');
-  const [openingDate, setOpeningDate] = useState(todayStr());
+  const [showOpeningBalance, setShowOpeningBalance] = usePersistentState('cashbank.showOpeningBalance', false);
+  const [openingMode, setOpeningMode] = usePersistentState('cashbank.openingMode', 'cash');
+  const [openingAmount, setOpeningAmount] = usePersistentState('cashbank.openingAmount', '');
+  const [openingDate, setOpeningDate] = usePersistentState('cashbank.openingDate', todayStr());
 
   useEffect(() => {
     fetchData();
@@ -287,9 +289,13 @@ export default function CashBank() {
         </button>
       </div>
 
-      {/* Opening Balance Modal */}
+      {/* Opening Balance Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showOpeningBalance && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-6">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowOpeningBalance(false); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-slate-800">Set Opening Balance</h3>
             <button onClick={() => setShowOpeningBalance(false)} className="p-1 hover:bg-slate-100 rounded">
@@ -311,6 +317,7 @@ export default function CashBank() {
                     const existing = transactions.find((t) => t.transaction_id === openingBalanceTxnId(m));
                     setOpeningAmount(existing ? String(existing.amount) : '');
                   }}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 >
                   <option value="cash">Cash</option>
@@ -320,11 +327,11 @@ export default function CashBank() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Amount</label>
-                <input type="number" value={openingAmount} onChange={(e) => setOpeningAmount(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
+                <input type="number" value={openingAmount} onChange={(e) => setOpeningAmount(e.target.value)} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Date</label>
-                <input type="date" value={openingDate} onChange={(e) => setOpeningDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
+                <input type="date" value={openingDate} onChange={(e) => setOpeningDate(e.target.value)} onKeyDown={(e) => handleFormKeyNav(e, handleSetOpeningBalance)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
               </div>
             </div>
             <div className="flex gap-3">
@@ -337,11 +344,16 @@ export default function CashBank() {
             </div>
           </div>
         </div>
+        </div>
       )}
 
-      {/* Transfer Modal */}
+      {/* Transfer Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showTransfer && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-6">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowTransfer(false); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-slate-800">Fund Transfer</h3>
             <button onClick={() => setShowTransfer(false)} className="p-1 hover:bg-slate-100 rounded">
@@ -352,11 +364,11 @@ export default function CashBank() {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Date</label>
-                <input type="date" value={transferForm.date} onChange={(e) => setTransferForm({ ...transferForm, date: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
+                <input type="date" value={transferForm.date} onChange={(e) => setTransferForm({ ...transferForm, date: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">From</label>
-                <select value={transferForm.fromMode} onChange={(e) => setTransferForm({ ...transferForm, fromMode: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
+                <select value={transferForm.fromMode} onChange={(e) => setTransferForm({ ...transferForm, fromMode: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
                   <option value="cash">Cash</option>
                   <option value="mpesa">Mpesa</option>
                   <option value="paybill">Paybill</option>
@@ -364,7 +376,7 @@ export default function CashBank() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">To</label>
-                <select value={transferForm.toMode} onChange={(e) => setTransferForm({ ...transferForm, toMode: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
+                <select value={transferForm.toMode} onChange={(e) => setTransferForm({ ...transferForm, toMode: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
                   <option value="cash">Cash</option>
                   <option value="mpesa">Mpesa</option>
                   <option value="paybill">Paybill</option>
@@ -372,7 +384,7 @@ export default function CashBank() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Amount</label>
-                <input type="number" value={transferForm.amount} onChange={(e) => setTransferForm({ ...transferForm, amount: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
+                <input type="number" value={transferForm.amount} onChange={(e) => setTransferForm({ ...transferForm, amount: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
               </div>
             </div>
             <div>
@@ -388,6 +400,7 @@ export default function CashBank() {
               </button>
             </div>
           </div>
+        </div>
         </div>
       )}
 

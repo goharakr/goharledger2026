@@ -12,17 +12,18 @@ import {
   Trash2,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, todayStr } from '../utils/format';
+import { formatKES, formatDate, formatTime, todayStr } from '../utils/format';
 import { adjustCustomerCredit, adjustCustomerAdvance, applySettlementSource, undoSettlementForTransaction } from '../utils/balances';
 import { syncCommissionExpense } from '../utils/commissionExpense';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
+import { usePersistentState } from '../context/PageStateContext';
+import { handleFormKeyNav } from '../utils/formKeyNav';
 import { useAuth } from '../context/AuthContext';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
-import { sortCustomersByBalance } from '../utils/sortEntities';
 import SettlementModeFields, {
   emptySettlementAmounts,
   computeSettlementAvailable,
@@ -100,22 +101,23 @@ export default function Customers() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [shareRules, setShareRules] = useState<ShareRule[]>([]);
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = usePersistentState<Customer | null>('customers.selectedCustomer', null);
   const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(false);
-  const [showPayment, setShowPayment] = useState(false);
-  const [showEdit, setShowEdit] = useState(false);
-  const [form, setForm] = useState<CustomerForm>(emptyCustomer);
-  const [paymentForm, setPaymentForm] = useState<PaymentForm>(emptyPayment);
-  const [search, setSearch] = useState('');
+  const [showAdd, setShowAdd] = usePersistentState('customers.showAdd', false);
+  const [showPayment, setShowPayment] = usePersistentState('customers.showPayment', false);
+  const [showEdit, setShowEdit] = usePersistentState('customers.showEdit', false);
+  const [form, setForm] = usePersistentState<CustomerForm>('customers.form', emptyCustomer);
+  const [paymentForm, setPaymentForm] = usePersistentState<PaymentForm>('customers.paymentForm', emptyPayment);
+  const [search, setSearch] = usePersistentState('customers.search', '');
+  const [listSort, setListSort] = usePersistentState<'balance' | 'name'>('customers.listSort', 'balance');
   const [showLedger, setShowLedger] = useState(false);
-  const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
-  const [saleEditForm, setSaleEditForm] = useState<SaleEditForm>(emptySaleEdit);
-  const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
-  const [paymentEditForm, setPaymentEditForm] = useState({ amount: '', notes: '' });
-  const [txnDatePreset, setTxnDatePreset] = useState<DatePreset>('month');
-  const [txnCustomFrom, setTxnCustomFrom] = useState('');
-  const [txnCustomTo, setTxnCustomTo] = useState('');
+  const [editingSaleId, setEditingSaleId] = usePersistentState<string | null>('customers.editingSaleId', null);
+  const [saleEditForm, setSaleEditForm] = usePersistentState<SaleEditForm>('customers.saleEditForm', emptySaleEdit);
+  const [editingPaymentId, setEditingPaymentId] = usePersistentState<string | null>('customers.editingPaymentId', null);
+  const [paymentEditForm, setPaymentEditForm] = usePersistentState('customers.paymentEditForm', { amount: '', notes: '' });
+  const [txnDatePreset, setTxnDatePreset] = usePersistentState<DatePreset>('customers.txnDatePreset', 'month');
+  const [txnCustomFrom, setTxnCustomFrom] = usePersistentState('customers.txnCustomFrom', '');
+  const [txnCustomTo, setTxnCustomTo] = usePersistentState('customers.txnCustomTo', '');
 
   useEffect(() => {
     fetchData();
@@ -559,43 +561,77 @@ export default function Customers() {
     refreshCustomerData();
   }
 
-  const filteredCustomers = sortCustomersByBalance(customers.filter((c) =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    (c.phone || '').includes(search)
-  ));
+  const filteredCustomers = customers
+    .filter((c) => c.name.toLowerCase().includes(search.toLowerCase()) || (c.phone || '').includes(search))
+    .slice()
+    .sort((a, b) =>
+      listSort === 'balance'
+        ? (Math.abs(b.credit_balance || 0) + Math.abs(b.advance_balance || 0)) -
+          (Math.abs(a.credit_balance || 0) + Math.abs(a.advance_balance || 0))
+        : a.name.localeCompare(b.name)
+    );
+
+  const totalCustomersOweMe = customers.reduce((sum, c) => sum + Math.max(c.credit_balance || 0, 0), 0);
+  const totalIOweCustomers = customers.reduce((sum, c) => sum + Math.max(c.advance_balance || 0, 0), 0);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          onClick={() => { setShowAdd(true); setForm(emptyCustomer); }}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
-        >
-          <Plus size={16} /> Add Customer
-        </button>
-        <button
-          onClick={() => setShowLedger(true)}
-          className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
-        >
-          <BookOpen size={16} /> View Ledger
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => { setShowAdd(true); setForm(emptyCustomer); }}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Plus size={16} /> Add Customer
+          </button>
+          <button
+            onClick={() => setShowLedger(true)}
+            className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <BookOpen size={16} /> View Ledger
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <div className="bg-red-50 border border-red-100 rounded-lg px-3 py-2 text-sm">
+            <span className="text-red-600">Customers Owe Me: </span>
+            <span className="font-semibold text-red-700">KES {formatKES(totalCustomersOweMe)}</span>
+          </div>
+          <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 text-sm">
+            <span className="text-emerald-600">I Owe Customers: </span>
+            <span className="font-semibold text-emerald-700">KES {formatKES(totalIOweCustomers)}</span>
+          </div>
+        </div>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input
-          type="text"
-          placeholder="Search customers..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-        />
+      {/* Search + Sort */}
+      <div className="flex flex-wrap gap-2">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Search customers..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+          />
+        </div>
+        <select
+          value={listSort}
+          onChange={(e) => setListSort(e.target.value as 'balance' | 'name')}
+          className="border border-slate-300 rounded-lg text-sm px-2 py-2 focus:ring-2 focus:ring-emerald-500 outline-none"
+        >
+          <option value="balance">Highest Balance First</option>
+          <option value="name">Name (A-Z)</option>
+        </select>
       </div>
 
-      {/* Add Customer Modal */}
+      {/* Add Customer Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showAdd && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowAdd(false); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-slate-800 text-sm">Add Customer</h3>
             <button onClick={() => setShowAdd(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
@@ -606,6 +642,7 @@ export default function Customers() {
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Name"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -613,6 +650,7 @@ export default function Customers() {
                 type="text"
                 value={form.phone}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Phone"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -622,6 +660,7 @@ export default function Customers() {
                 type="number"
                 value={form.creditLimit}
                 onChange={(e) => setForm({ ...form, creditLimit: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Credit Limit"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -629,6 +668,7 @@ export default function Customers() {
                 type="number"
                 value={form.openingCredit}
                 onChange={(e) => setForm({ ...form, openingCredit: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Opening Balance Owed"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -636,6 +676,7 @@ export default function Customers() {
                 type="number"
                 value={form.advanceBalance}
                 onChange={(e) => setForm({ ...form, advanceBalance: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Opening Advance"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -644,7 +685,7 @@ export default function Customers() {
               type="text"
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSaveCustomer(); }}}
+              onKeyDown={(e) => handleFormKeyNav(e, handleSaveCustomer)}
               placeholder="Notes (optional)"
               className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
             />
@@ -666,11 +707,16 @@ export default function Customers() {
             </div>
           </div>
         </div>
+        </div>
       )}
 
-      {/* Edit Customer Modal */}
+      {/* Edit Customer Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
       {showEdit && selectedCustomer && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4">
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onKeyDown={(e) => { if (e.key === 'Escape') setShowEdit(false); }}
+        >
+        <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-2xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-slate-800 text-sm">Edit Customer</h3>
             <button onClick={() => setShowEdit(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
@@ -681,6 +727,7 @@ export default function Customers() {
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Name"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -688,6 +735,7 @@ export default function Customers() {
                 type="text"
                 value={form.phone}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Phone"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -697,6 +745,7 @@ export default function Customers() {
                 type="number"
                 value={form.creditLimit}
                 onChange={(e) => setForm({ ...form, creditLimit: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Credit Limit"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -704,6 +753,7 @@ export default function Customers() {
                 type="number"
                 value={form.openingCredit}
                 onChange={(e) => setForm({ ...form, openingCredit: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Opening Balance Owed"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -711,6 +761,7 @@ export default function Customers() {
                 type="number"
                 value={form.advanceBalance}
                 onChange={(e) => setForm({ ...form, advanceBalance: e.target.value })}
+                onKeyDown={(e) => handleFormKeyNav(e)}
                 placeholder="Opening Advance"
                 className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
@@ -719,7 +770,7 @@ export default function Customers() {
               type="text"
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleUpdateCustomer(); }}}
+              onKeyDown={(e) => handleFormKeyNav(e, handleUpdateCustomer)}
               placeholder="Notes (optional)"
               className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
             />
@@ -740,6 +791,7 @@ export default function Customers() {
               <button onClick={() => setShowEdit(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
             </div>
           </div>
+        </div>
         </div>
       )}
 
@@ -909,7 +961,10 @@ export default function Customers() {
                       getCustomerTransactions(selectedCustomer.id).map((t) => (
                         <Fragment key={t.id}>
                         <tr className="hover:bg-slate-50 transition-colors">
-                          <td className="px-3 py-2 text-slate-600">{formatDate(t.date)}</td>
+                          <td className="px-3 py-2 text-slate-600">
+                            {formatDate(t.date)}
+                            <span className="block text-xs text-slate-400">{formatTime(t.created_at)}</span>
+                          </td>
                           <td className="px-3 py-2">
                             <span className={`text-xs px-2 py-0.5 rounded-full ${
                               t.type === 'sale' && t.primary_mode === 'credit' ? 'bg-red-100 text-red-700' :
@@ -1074,8 +1129,8 @@ export default function Customers() {
 
       {/* Payment Modal */}
       {showPayment && selectedCustomer && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-md">
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onKeyDown={(e) => { if (e.key === 'Escape') setShowPayment(false); }}>
+          <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-md" data-form-nav>
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-semibold text-slate-800 text-sm">Payment - {selectedCustomer.name}</h3>
               <button onClick={() => setShowPayment(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
@@ -1086,13 +1141,14 @@ export default function Customers() {
                   type="number"
                   value={paymentForm.amount}
                   onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (document.querySelector('#paymentDate') as HTMLElement)?.focus(); }}}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   placeholder="Amount"
                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 />
                 <select
                   value={paymentForm.paymentType}
                   onChange={(e) => setPaymentForm({ ...paymentForm, paymentType: e.target.value as 'credit' | 'advance' })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 >
                   <option value="credit">Pay Credit</option>
@@ -1105,11 +1161,13 @@ export default function Customers() {
                   type="date"
                   value={paymentForm.date}
                   onChange={(e) => setPaymentForm({ ...paymentForm, date: e.target.value })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 />
                 <select
                   value={paymentForm.mode}
                   onChange={(e) => setPaymentForm({ ...paymentForm, mode: e.target.value })}
+                  onKeyDown={(e) => handleFormKeyNav(e)}
                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 >
                   <option value="cash">Cash</option>
@@ -1136,7 +1194,7 @@ export default function Customers() {
                 type="text"
                 value={paymentForm.notes}
                 onChange={(e) => setPaymentForm({ ...paymentForm, notes: e.target.value })}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); paymentForm.paymentType === 'credit' ? handlePayment() : handleAddAdvance(); }}}
+                onKeyDown={(e) => handleFormKeyNav(e, () => (paymentForm.paymentType === 'credit' ? handlePayment() : handleAddAdvance()))}
                 placeholder="Notes (optional)"
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
