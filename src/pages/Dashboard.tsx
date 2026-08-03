@@ -605,21 +605,21 @@ export default function Dashboard() {
 
       {/* Supplier Total Owed - MOVED UP */}
       <button onClick={() => navigate('/suppliers')} className="w-full text-left">
-        <div className="rounded-xl border shadow-sm p-5 transition-colors bg-emerald-50 border-emerald-200 hover:bg-emerald-100">
+        <div className="rounded-xl border shadow-sm p-5 transition-colors bg-red-50 border-red-200 hover:bg-red-100">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <AlertCircle size={24} className="text-emerald-500" />
+              <AlertCircle size={24} className="text-red-500" />
               <div>
-                <p className="text-sm text-emerald-600">Suppliers Owe You</p>
-                <p className="text-2xl font-bold text-emerald-700">
-                  KES {formatKES(stats?.suppliersOweShop || 0)}
+                <p className="text-sm text-red-600">You Owe Suppliers</p>
+                <p className="text-2xl font-bold text-red-700">
+                  KES {formatKES(stats?.shopOwesSuppliers || 0)}
                 </p>
-                {(stats?.shopOwesSuppliers || 0) > 0 && (
-                  <p className="text-xs text-red-600 mt-1">You owe suppliers: KES {formatKES(stats?.shopOwesSuppliers || 0)}</p>
+                {(stats?.suppliersOweShop || 0) > 0 && (
+                  <p className="text-xs text-emerald-600 mt-1">Suppliers owe you: KES {formatKES(stats?.suppliersOweShop || 0)}</p>
                 )}
               </div>
             </div>
-            <span className="text-sm text-emerald-600">Click to view suppliers</span>
+            <span className="text-sm text-red-600">Click to view suppliers</span>
           </div>
         </div>
       </button>
