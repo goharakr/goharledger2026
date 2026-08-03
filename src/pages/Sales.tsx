@@ -18,7 +18,7 @@ import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr, saleProfit, isSaleIncomplete } from '../utils/format';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
-import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance } from '../utils/balances';
+import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance, applySettlementSource, undoSettlementForTransaction } from '../utils/balances';
 import { syncCommissionExpense, voidCommissionExpense } from '../utils/commissionExpense';
 import { parseSmartEntryText, parsePayments, detectCommission, parseExcelSmartEntryText, detectPercentCommission } from '../utils/smartEntryParser';
 import { findBestMatch } from '../utils/fuzzyMatch';
@@ -28,8 +28,17 @@ import { usePersistentState } from '../context/PageStateContext';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
+import SettlementModeFields, {
+  emptySettlementAmounts,
+  computeSettlementAvailable,
+  settlementAmountsTotal,
+  findSettlementOverflows,
+  SETTLEMENT_MODE_KEYS,
+  SettlementAmounts,
+} from '../components/SettlementModeFields';
+import type { ShareRule } from '../utils/shareDue';
 import { sortCustomersByBalance, sortSuppliersByBalance } from '../utils/sortEntities';
-import type { Transaction, Customer, Supplier } from '../types';
+import type { Transaction, Customer, Supplier, HistoricalProfit } from '../types';
 
 type SaleMode = 'cash' | 'mpesa' | 'paybill' | 'split' | 'credit' | 'advance' | 'supplier';
 
@@ -63,6 +72,7 @@ interface CostSupplierRow {
   supplierId: string;
   amount: string;
   mode: string;
+  settlement: SettlementAmounts;
 }
 
 interface SmartPreviewRow {
@@ -110,6 +120,9 @@ export default function Sales() {
   const [splits, setSplits] = useState<{ transaction_id: string; mode: string; amount: number }[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
+  const [shareRules, setShareRules] = useState<ShareRule[]>([]);
+  const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = usePersistentState('sales.showAdd', false);
   const [showBulk, setShowBulk] = usePersistentState('sales.showBulk', false);
@@ -155,18 +168,28 @@ export default function Sales() {
 
   async function fetchData() {
     setLoading(true);
-    const [{ data: txns }, { data: splitData }, { data: cust }, { data: supp }] = await Promise.all([
+    const [{ data: txns }, { data: splitData }, { data: cust }, { data: supp }, { data: fullTxns }, { data: rules }, { data: hist }] = await Promise.all([
       fetchAllRows<Transaction>((from, to) =>
         supabase.from('transactions').select('*').eq('type', 'sale').order('date', { ascending: false }).order('created_at', { ascending: false }).range(from, to)
       ),
       supabase.from('transaction_splits').select('*'),
       supabase.from('customers').select('*').eq('is_active', true).order('name'),
       supabase.from('suppliers').select('*').eq('is_active', true).order('name'),
+      // Needed for the linked-partner settlement calc (Home Expenses Owed /
+      // Profit Share Not Taken) - those scan ALL transaction types, not just sales.
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').eq('is_void', false).order('date', { ascending: false }).range(from, to)
+      ),
+      supabase.from('share_rules').select('*').eq('is_active', true),
+      supabase.from('historical_profit').select('*'),
     ]);
     setSales(txns || []);
     setSplits(splitData || []);
     setCustomers(cust || []);
     setSuppliers(supp || []);
+    setAllTransactions(fullTxns || []);
+    setShareRules(rules || []);
+    setHistoricalProfit(hist || []);
     setLoading(false);
   }
 
@@ -463,6 +486,17 @@ export default function Sales() {
         const costAmt = parseFloat(cs.amount || '0');
         if (!cs.supplierId || costAmt <= 0) continue;
 
+        const csSupplier = suppliers.find((s) => s.id === cs.supplierId);
+        if (csSupplier?.linked_partner_id) {
+          const settlementTotal = settlementAmountsTotal(cs.settlement);
+          if (settlementTotal > 0) {
+            const csLinkedCustomer = customers.find((c) => c.linked_partner_id === csSupplier.linked_partner_id);
+            const available = computeSettlementAvailable(allTransactions, shareRules, historicalProfit, csSupplier.linked_partner_id, csLinkedCustomer?.credit_balance || 0);
+            const warnings = findSettlementOverflows(cs.settlement, available, "Mohamedi's Customer Balance");
+            if (warnings.length > 0 && !confirm(warnings.join('\n\n') + '\n\nContinue?')) continue;
+          }
+        }
+
         const invPrefix = 'INV-' + form.date.replace(/-/g, '');
         const { data: invTxn, error: invError } = await insertTransactionWithId(invPrefix, (transactionId) => ({
           transaction_id: transactionId,
@@ -481,12 +515,18 @@ export default function Sales() {
         }
         await adjustSupplierBalance(cs.supplierId, costAmt);
 
+        const supplier = suppliers.find((s) => s.id === cs.supplierId);
+        const linkedPartnerId = supplier?.linked_partner_id;
+        const linkedCustomer = linkedPartnerId ? customers.find((c) => c.linked_partner_id === linkedPartnerId) : undefined;
+        const settlementTotal = linkedPartnerId ? settlementAmountsTotal(cs.settlement) : 0;
+        const cashAmt = costAmt - settlementTotal;
+
         const payPrefix = 'SUP-' + form.date.replace(/-/g, '');
         const { data: payTxn, error: payError } = await insertTransactionWithId(payPrefix, (transactionId) => ({
           transaction_id: transactionId,
           date: form.date,
           type: 'supplier_payment',
-          primary_mode: cs.mode,
+          primary_mode: cashAmt > 0 ? cs.mode : null,
           amount: costAmt,
           supplier_id: cs.supplierId,
           description: 'Cost price paid on sale ' + txnId,
@@ -497,6 +537,28 @@ export default function Sales() {
           alert('Sale saved, and a supplier cost was recorded, but paying it back failed: ' + (payError?.message || 'unknown error'));
         } else {
           await adjustSupplierBalance(cs.supplierId, -costAmt);
+
+          const splitRows: { transaction_id: string; mode: string; amount: number }[] = [];
+          if (cashAmt > 0) splitRows.push({ transaction_id: payTxn.transaction_id, mode: cs.mode, amount: cashAmt });
+          if (linkedPartnerId && settlementTotal > 0 && supplier) {
+            const ctx = {
+              partnerId: linkedPartnerId,
+              date: form.date,
+              createdBy: user?.username || null,
+              refLabel: supplier.name,
+              primaryTransactionId: payTxn.transaction_id,
+              crossPartyId: linkedCustomer?.id || null,
+              crossPartyRole: 'customer' as const,
+            };
+            for (const { key, mode } of SETTLEMENT_MODE_KEYS) {
+              const srcAmount = parseFloat(cs.settlement[key] || '0') || 0;
+              if (srcAmount > 0) {
+                splitRows.push({ transaction_id: payTxn.transaction_id, mode, amount: srcAmount });
+                await applySettlementSource(mode, srcAmount, ctx);
+              }
+            }
+          }
+          if (splitRows.length > 0) await supabase.from('transaction_splits').insert(splitRows);
         }
       }
     }
@@ -624,18 +686,48 @@ export default function Sales() {
           if (invError || !invTxn) { console.error(invError); continue; }
           await adjustSupplierBalance(cs.supplierId, costAmt);
 
+          const supplier = suppliers.find((s) => s.id === cs.supplierId);
+          const linkedPartnerId = supplier?.linked_partner_id;
+          const linkedCustomer = linkedPartnerId ? customers.find((c) => c.linked_partner_id === linkedPartnerId) : undefined;
+          const settlementTotal = linkedPartnerId ? settlementAmountsTotal(cs.settlement) : 0;
+          const cashAmt = costAmt - settlementTotal;
+
           const payPrefix = 'SUP-' + f.date.replace(/-/g, '');
           const { data: payTxn, error: payError } = await insertTransactionWithId(payPrefix, (transactionId) => ({
             transaction_id: transactionId,
             date: f.date,
             type: 'supplier_payment',
-            primary_mode: cs.mode,
+            primary_mode: cashAmt > 0 ? cs.mode : null,
             amount: costAmt,
             supplier_id: cs.supplierId,
             description: 'Cost price paid on sale ' + txnId,
             created_by: user?.username || null,
           }));
-          if (!payError && payTxn) await adjustSupplierBalance(cs.supplierId, -costAmt);
+          if (!payError && payTxn) {
+            await adjustSupplierBalance(cs.supplierId, -costAmt);
+
+            const splitRows: { transaction_id: string; mode: string; amount: number }[] = [];
+            if (cashAmt > 0) splitRows.push({ transaction_id: payTxn.transaction_id, mode: cs.mode, amount: cashAmt });
+            if (linkedPartnerId && settlementTotal > 0 && supplier) {
+              const ctx = {
+                partnerId: linkedPartnerId,
+                date: f.date,
+                createdBy: user?.username || null,
+                refLabel: supplier.name,
+                primaryTransactionId: payTxn.transaction_id,
+                crossPartyId: linkedCustomer?.id || null,
+                crossPartyRole: 'customer' as const,
+              };
+              for (const { key, mode } of SETTLEMENT_MODE_KEYS) {
+                const srcAmount = parseFloat(cs.settlement[key] || '0') || 0;
+                if (srcAmount > 0) {
+                  splitRows.push({ transaction_id: payTxn.transaction_id, mode, amount: srcAmount });
+                  await applySettlementSource(mode, srcAmount, ctx);
+                }
+              }
+            }
+            if (splitRows.length > 0) await supabase.from('transaction_splits').insert(splitRows);
+          }
         }
       }
     }
@@ -875,6 +967,7 @@ export default function Sales() {
           await adjustSupplierBalance(lt.supplier_id, -(lt.amount || 0));
         } else if (lt.type === 'supplier_payment' && lt.supplier_id) {
           await adjustSupplierBalance(lt.supplier_id, lt.amount || 0);
+          await undoSettlementForTransaction(lt.transaction_id, lt.supplier_id, null);
         }
       }
       const { error: linkedError } = await supabase
@@ -1030,6 +1123,7 @@ export default function Sales() {
             await adjustSupplierBalance(lt.supplier_id, -(lt.amount || 0));
           } else if (lt.type === 'supplier_payment' && lt.supplier_id) {
             await adjustSupplierBalance(lt.supplier_id, lt.amount || 0);
+            await undoSettlementForTransaction(lt.transaction_id, lt.supplier_id, null);
           }
         }
         await supabase
@@ -1312,6 +1406,9 @@ export default function Sales() {
             setForm={setForm}
             customers={customers}
             suppliers={suppliers}
+            allTransactions={allTransactions}
+            shareRules={shareRules}
+            historicalProfit={historicalProfit}
             onSave={editingId ? handleUpdate : handleSave}
             onCancel={() => { setShowAdd(false); setEditingId(null); }}
             saveLabel={editingId ? 'Update' : 'Save'}
@@ -1486,6 +1583,9 @@ export default function Sales() {
                   }}
                   customers={customers}
                   suppliers={suppliers}
+                  allTransactions={allTransactions}
+                  shareRules={shareRules}
+                  historicalProfit={historicalProfit}
                   onSave={() => {}}
                   onCancel={() => {}}
                   saveLabel=""
@@ -1880,6 +1980,9 @@ function SaleFormFields({
   onQuickAddCostSupplier,
   isEditing,
   onKeyDown,
+  allTransactions,
+  shareRules,
+  historicalProfit,
 }: {
   form: SaleForm;
   setForm: React.Dispatch<React.SetStateAction<SaleForm>>;
@@ -1907,6 +2010,9 @@ function SaleFormFields({
   onQuickAddCostSupplier?: (subIndex: number) => void;
   isEditing?: boolean;
   onKeyDown?: (e: React.KeyboardEvent, field: keyof SaleForm) => void;
+  allTransactions: Transaction[];
+  shareRules: ShareRule[];
+  historicalProfit: HistoricalProfit[];
 }) {
   const profit = parseFloat(form.profit || '0');
 
@@ -1922,8 +2028,16 @@ function SaleFormFields({
     });
   };
 
+  const updateCostSupplierSettlement = (idx: number, next: SettlementAmounts) => {
+    setForm((prev) => {
+      const costSuppliers = [...prev.costSuppliers];
+      costSuppliers[idx] = { ...costSuppliers[idx], settlement: next };
+      return { ...prev, costSuppliers };
+    });
+  };
+
   const addCostSupplierRow = () => {
-    setForm((prev) => ({ ...prev, costSuppliers: [...prev.costSuppliers, { supplierId: '', amount: '', mode: 'cash' }] }));
+    setForm((prev) => ({ ...prev, costSuppliers: [...prev.costSuppliers, { supplierId: '', amount: '', mode: 'cash', settlement: emptySettlementAmounts }] }));
   };
 
   const removeCostSupplierRow = (idx: number) => {
@@ -2175,7 +2289,7 @@ function SaleFormFields({
                 ...prev,
                 payCostToSupplier: e.target.checked,
                 costSuppliers: e.target.checked && prev.costSuppliers.length === 0
-                  ? [{ supplierId: '', amount: prev.costPrice, mode: 'cash' }]
+                  ? [{ supplierId: '', amount: prev.costPrice, mode: 'cash', settlement: emptySettlementAmounts }]
                   : prev.costSuppliers,
               }))}
               onKeyDown={(e) => handleKeyDown(e, 'payCostToSupplier')}
@@ -2230,6 +2344,21 @@ function SaleFormFields({
                       </button>
                     ) : <div />}
                   </div>
+                  {cs.supplierId && suppliers.find((s) => s.id === cs.supplierId)?.linked_partner_id && (
+                    <SettlementModeFields
+                      partnerLabel={suppliers.find((s) => s.id === cs.supplierId)?.linked_partner_id === 'abdulqadir' ? 'Abdulqadir' : 'Taher'}
+                      crossLabel="Mohamedi's Customer Balance"
+                      available={computeSettlementAvailable(
+                        allTransactions,
+                        shareRules,
+                        historicalProfit,
+                        suppliers.find((s) => s.id === cs.supplierId)!.linked_partner_id!,
+                        customers.find((c) => c.linked_partner_id === suppliers.find((s) => s.id === cs.supplierId)?.linked_partner_id)?.credit_balance || 0
+                      )}
+                      amounts={cs.settlement}
+                      onChange={(next) => updateCostSupplierSettlement(idx, next)}
+                    />
+                  )}
                   {costSupplierQuickAddIndex === idx && quickCostSupplier && setQuickCostSupplier && (
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-emerald-50 border border-emerald-200 rounded p-2">
                       <input
