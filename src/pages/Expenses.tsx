@@ -111,6 +111,7 @@ interface BulkSupplierPaymentRow {
   clearsOn: string;
   transactionFee: string;
   smartFlags?: string[];
+  settlement: SettlementAmounts;
 }
 
 const emptyBulkSupplierRow: BulkSupplierPaymentRow = {
@@ -122,6 +123,7 @@ const emptyBulkSupplierRow: BulkSupplierPaymentRow = {
   isPostDated: false,
   clearsOn: '',
   transactionFee: '',
+  settlement: emptySettlementAmounts,
 };
 
 // A row parsed from a Smart Entry paste, before it's handed off to whichever
@@ -690,11 +692,17 @@ export default function Expenses() {
         const supplier = suppliers.find((s) => s.id === f.supplierId);
         if (!supplier) { failedRows.push(originalIndex + 1); continue; }
 
+        const linkedPartnerId = supplier.linked_partner_id;
+        const linkedCustomer = linkedPartnerId ? customersForLink.find((c) => c.linked_partner_id === linkedPartnerId) : undefined;
+        const settlementTotal = linkedPartnerId ? settlementAmountsTotal(f.settlement) : 0;
+        const cashAmt = amt - settlementTotal;
+        if (settlementTotal > amt) { failedRows.push(originalIndex + 1); continue; }
+
         const { data: newTxn, error } = await insertTransactionWithId('SUP-' + f.date.replace(/-/g, ''), (txnId) => ({
           transaction_id: txnId,
           date: f.date,
           type: 'supplier_payment',
-          primary_mode: f.mode,
+          primary_mode: cashAmt > 0 ? f.mode : null,
           amount: amt,
           supplier_id: f.supplierId,
           description: `Payment to ${supplier.name}`,
@@ -705,7 +713,30 @@ export default function Expenses() {
         if (error || !newTxn) { console.error(error); failedRows.push(originalIndex + 1); continue; }
         savedDates.add(f.date);
         await adjustSupplierBalance(f.supplierId, -amt);
-        await insertTransactionFee(f.date, f.mode, f.transactionFee, supplier.name);
+
+        const splitRows: { transaction_id: string; mode: string; amount: number }[] = [];
+        if (cashAmt > 0) splitRows.push({ transaction_id: newTxn.transaction_id, mode: f.mode, amount: cashAmt });
+        if (linkedPartnerId && settlementTotal > 0) {
+          const ctx = {
+            partnerId: linkedPartnerId,
+            date: f.date,
+            createdBy: user?.username || null,
+            refLabel: supplier.name,
+            primaryTransactionId: newTxn.transaction_id,
+            crossPartyId: linkedCustomer?.id || null,
+            crossPartyRole: 'customer' as const,
+          };
+          for (const { key, mode } of SETTLEMENT_MODE_KEYS) {
+            const srcAmount = parseFloat(f.settlement[key] || '0') || 0;
+            if (srcAmount > 0) {
+              splitRows.push({ transaction_id: newTxn.transaction_id, mode, amount: srcAmount });
+              await applySettlementSource(mode, srcAmount, ctx);
+            }
+          }
+        }
+        if (splitRows.length > 0) await supabase.from('transaction_splits').insert(splitRows);
+
+        if (cashAmt > 0) await insertTransactionFee(f.date, f.mode, f.transactionFee, supplier.name);
       }
 
       setBulkSupplierForms(Array.from({ length: 10 }, () => ({ ...emptyBulkSupplierRow, date: todayStr() })));
@@ -1790,6 +1821,28 @@ export default function Expenses() {
                   placeholder="Notes (optional)"
                   className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none mb-2"
                 />
+
+                {f.supplierId && suppliers.find((s) => s.id === f.supplierId)?.linked_partner_id && (
+                  <div className="mb-2">
+                    <SettlementModeFields
+                      partnerLabel={suppliers.find((s) => s.id === f.supplierId)?.linked_partner_id === 'abdulqadir' ? 'Abdulqadir' : 'Taher'}
+                      crossLabel="Mohamedi's Customer Balance"
+                      available={computeSettlementAvailable(
+                        allTransactions,
+                        shareRules,
+                        historicalProfit,
+                        suppliers.find((s) => s.id === f.supplierId)!.linked_partner_id!,
+                        customersForLink.find((c) => c.linked_partner_id === suppliers.find((s) => s.id === f.supplierId)?.linked_partner_id)?.credit_balance || 0
+                      )}
+                      amounts={f.settlement}
+                      onChange={(next) => {
+                        const newForms = [...bulkSupplierForms];
+                        newForms[i] = { ...newForms[i], settlement: next };
+                        setBulkSupplierForms(newForms);
+                      }}
+                    />
+                  </div>
+                )}
 
                 {/* Transaction fee (Mpesa/Paybill only lose money to network fees) */}
                 {(f.mode === 'mpesa' || f.mode === 'paybill') && (
