@@ -22,6 +22,7 @@ import { handleFormKeyNav } from '../utils/formKeyNav';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
+import { calculateShareDue, ShareRule } from '../utils/shareDue';
 import type { CapitalEntry, LoanTracker, HistoricalProfit, Transaction } from '../types';
 
 interface CapitalForm {
@@ -54,6 +55,8 @@ export default function Capital() {
   const { user } = useAuth();
   const [capitalEntries, setCapitalEntries] = useState<CapitalEntry[]>([]);
   const [capitalTxns, setCapitalTxns] = useState<Transaction[]>([]);
+  const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
+  const [shareRules, setShareRules] = useState<ShareRule[]>([]);
   const [loans, setLoans] = useState<LoanTracker[]>([]);
   const [loanPayments, setLoanPayments] = useState<Transaction[]>([]);
   const [historyDatePreset, setHistoryDatePreset] = usePersistentState<DatePreset>('capital.historyDatePreset', 'month');
@@ -104,7 +107,7 @@ export default function Capital() {
 
   async function fetchData() {
     setLoading(true);
-    const [{ data: cap }, { data: loanData }, { data: paymentData }, { data: hist }, { data: capTxnData }] = await Promise.all([
+    const [{ data: cap }, { data: loanData }, { data: paymentData }, { data: hist }, { data: capTxnData }, { data: fullTxns }, { data: rules }] = await Promise.all([
       supabase.from('capital_entries').select('*').order('date', { ascending: false }),
       supabase.from('loan_trackers').select('*'),
       fetchAllRows<Transaction>((from, to) =>
@@ -112,12 +115,20 @@ export default function Capital() {
       ),
       supabase.from('historical_profit').select('*').order('month', { ascending: false }),
       supabase.from('transactions').select('*').eq('type', 'capital_entry').eq('is_void', false),
+      // Needed for the "profit not yet taken" note under each partner's Capital
+      // total - Share Due scans ALL transaction types, not just capital ones.
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').eq('is_void', false).order('date', { ascending: false }).range(from, to)
+      ),
+      supabase.from('share_rules').select('*').eq('is_active', true),
     ]);
     setCapitalEntries(cap || []);
     setLoans(loanData || []);
     setLoanPayments(paymentData || []);
     setHistoricalProfit(hist || []);
     setCapitalTxns(capTxnData || []);
+    setAllTransactions(fullTxns || []);
+    setShareRules(rules || []);
     setLoading(false);
   }
 
@@ -427,6 +438,14 @@ export default function Capital() {
     .reduce((s, c) => s + c.amount, 0);
   const totalCapital = taherCapital + abdulqadirCapital;
 
+  // Live Share Due per partner - shown as a small note under their Capital
+  // total so it's visible how much profit is still un-taken. This is NOT part
+  // of Capital (kept separate on purpose, see Steps 3-4 earlier) - it just
+  // recalculates on its own each time, so once fully taken it drops to 0 and
+  // the note disappears, with no manual upkeep needed.
+  const taherShareDue = calculateShareDue(allTransactions, shareRules, historicalProfit, 'taher');
+  const abdulqadirShareDue = calculateShareDue(allTransactions, shareRules, historicalProfit, 'abdulqadir');
+
   // Capital History table only - the summary totals above always use the
   // full history, regardless of this filter.
   const { from: historyFrom, to: historyTo } = getDatePresetRange(historyDatePreset, historyCustomFrom, historyCustomTo);
@@ -625,6 +644,9 @@ export default function Capital() {
             <h3 className="font-semibold text-slate-800">Taher Capital</h3>
           </div>
           <p className="text-2xl font-bold text-emerald-600">KES {formatKES(taherCapital)}</p>
+          {taherShareDue > 0 && (
+            <p className="text-xs text-slate-400 mt-1">KES {formatKES(taherShareDue)} profit not yet taken (2024-Jul 2026)</p>
+          )}
         </div>
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
           <div className="flex items-center gap-2 mb-2">
@@ -632,6 +654,9 @@ export default function Capital() {
             <h3 className="font-semibold text-slate-800">Abdulqadir Capital</h3>
           </div>
           <p className="text-2xl font-bold text-blue-600">KES {formatKES(abdulqadirCapital)}</p>
+          {abdulqadirShareDue > 0 && (
+            <p className="text-xs text-slate-400 mt-1">KES {formatKES(abdulqadirShareDue)} profit not yet taken (2024-Jul 2026)</p>
+          )}
         </div>
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
           <div className="flex items-center gap-2 mb-2">
