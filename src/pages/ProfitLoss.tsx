@@ -1,9 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  TrendingUp,
-  TrendingDown,
   Save,
-  AlertTriangle,
   BookOpen,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';

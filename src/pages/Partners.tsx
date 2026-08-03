@@ -5,7 +5,6 @@ import { getDatePresetRange, DatePreset, DATE_PRESET_OPTIONS } from '../utils/da
 import {
   TrendingUp,
   TrendingDown,
-  Plus,
   X,
   Save,
   ArrowDownCircle,

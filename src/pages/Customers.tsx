@@ -3,8 +3,6 @@ import {
   Plus,
   Search,
   X,
-  Save,
-  Phone,
   CreditCard,
   Wallet,
   BookOpen,
@@ -114,7 +112,7 @@ export default function Customers() {
   const [editingSaleId, setEditingSaleId] = usePersistentState<string | null>('customers.editingSaleId', null);
   const [saleEditForm, setSaleEditForm] = usePersistentState<SaleEditForm>('customers.saleEditForm', emptySaleEdit);
   const [editingPaymentId, setEditingPaymentId] = usePersistentState<string | null>('customers.editingPaymentId', null);
-  const [paymentEditForm, setPaymentEditForm] = usePersistentState('customers.paymentEditForm', { amount: '', notes: '' });
+  const [paymentEditForm, setPaymentEditForm] = usePersistentState('customers.paymentEditForm', { amount: '', date: '', mode: 'cash', notes: '' });
   const [netChecked, setNetChecked] = useState(false);
   const [txnDatePreset, setTxnDatePreset] = usePersistentState<DatePreset>('customers.txnDatePreset', 'month');
   const [txnCustomFrom, setTxnCustomFrom] = usePersistentState('customers.txnCustomFrom', '');
@@ -574,7 +572,7 @@ export default function Customers() {
 
   function startEditPayment(t: Transaction) {
     setEditingPaymentId(t.id);
-    setPaymentEditForm({ amount: String(t.amount || ''), notes: t.notes || '' });
+    setPaymentEditForm({ amount: String(t.amount || ''), date: t.date, mode: t.primary_mode || 'cash', notes: t.notes || '' });
   }
 
   async function handleUpdatePayment() {
@@ -589,9 +587,9 @@ export default function Customers() {
     }
     const delta = newAmount - (txn.amount || 0);
 
-    const result = await adjustPaymentAmount(txn, newAmount);
+    const result = await adjustPaymentAmount(txn, newAmount, paymentEditForm.mode);
     if (!result.ok) { alert(result.error); return; }
-    await supabase.from('transactions').update({ notes: paymentEditForm.notes || null }).eq('id', editingPaymentId);
+    await supabase.from('transactions').update({ date: paymentEditForm.date, notes: paymentEditForm.notes || null }).eq('id', editingPaymentId);
 
     if (delta !== 0) {
       if (isAdvanceDeposit(txn)) await adjustCustomerAdvance(txn.customer_id, delta);
@@ -599,7 +597,7 @@ export default function Customers() {
     }
 
     setEditingPaymentId(null);
-    setPaymentEditForm({ amount: '', notes: '' });
+    setPaymentEditForm({ amount: '', date: '', mode: 'cash', notes: '' });
     refreshCustomerData();
   }
 
@@ -616,6 +614,15 @@ export default function Customers() {
     }
 
     const { error } = await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', t.id);
+    if (error) { alert('Failed to void: ' + error.message); return; }
+    refreshCustomerData();
+  }
+
+  async function handleVoidOpeningBalance(t: Transaction) {
+    if (!t.customer_id) return;
+    if (!confirm('Void this opening balance?')) return;
+    await adjustCustomerCredit(t.customer_id, -(t.amount || 0));
+    const { error } = await supabase.from('transactions').update({ is_void: true }).eq('id', t.id);
     if (error) { alert('Failed to void: ' + error.message); return; }
     refreshCustomerData();
   }
@@ -1114,13 +1121,24 @@ export default function Customers() {
                                   </button>
                                 </>
                               )}
+                              {t.type === 'opening_balance' && (
+                                <button onClick={() => handleVoidOpeningBalance(t)} className="p-1 hover:bg-red-100 rounded">
+                                  <Trash2 size={14} className="text-red-500" />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
                         {editingPaymentId === t.id && (
                           <tr>
                             <td colSpan={6} className="px-3 py-3 bg-slate-50">
-                              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                <input
+                                  type="date"
+                                  value={paymentEditForm.date}
+                                  onChange={(e) => setPaymentEditForm({ ...paymentEditForm, date: e.target.value })}
+                                  className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
                                 <input
                                   type="number"
                                   min="0"
@@ -1129,17 +1147,27 @@ export default function Customers() {
                                   placeholder="Amount"
                                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                                 />
+                                <select
+                                  value={paymentEditForm.mode}
+                                  onChange={(e) => setPaymentEditForm({ ...paymentEditForm, mode: e.target.value })}
+                                  className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                >
+                                  <option value="cash">Cash</option>
+                                  <option value="mpesa">Mpesa</option>
+                                  <option value="paybill">Paybill</option>
+                                </select>
                                 <input
                                   type="text"
                                   value={paymentEditForm.notes}
                                   onChange={(e) => setPaymentEditForm({ ...paymentEditForm, notes: e.target.value })}
                                   placeholder="Notes"
-                                  className="col-span-2 md:col-span-2 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                  className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                                 />
                               </div>
+                              <p className="text-xs text-slate-500 mt-1">Mode only changes the cash portion - any Home Expense/Share/Mohamedi's balance used stays as it was.</p>
                               <div className="flex gap-2 mt-2">
                                 <button onClick={handleUpdatePayment} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">Save</button>
-                                <button onClick={() => { setEditingPaymentId(null); setPaymentEditForm({ amount: '', notes: '' }); }} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
+                                <button onClick={() => { setEditingPaymentId(null); setPaymentEditForm({ amount: '', date: '', mode: 'cash', notes: '' }); }} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
                               </div>
                             </td>
                           </tr>

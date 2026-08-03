@@ -3,7 +3,6 @@ import {
   Plus,
   Search,
   X,
-  Save,
   Trash2,
   Edit2,
   ChevronDown,

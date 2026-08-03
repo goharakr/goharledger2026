@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
   ArrowLeftRight,
-  Plus,
   X,
   Save,
   Wallet,

@@ -4,7 +4,6 @@ import {
   LayoutDashboard,
   ShoppingCart,
   Receipt,
-  Wallet,
   Users,
   UserCircle,
   Landmark,
@@ -18,7 +17,6 @@ import {
   BookOpen,
   FileText,
   Bell,
-  Plus,
   Save,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';

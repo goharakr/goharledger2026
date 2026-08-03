@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import {
   Plus,
   X,
-  Save,
   Landmark,
   TrendingUp,
   Wallet,

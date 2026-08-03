@@ -160,7 +160,8 @@ const CASH_SPLIT_MODES = ['cash', 'mpesa', 'paybill'];
 // should tell the user to void and re-enter instead.
 export async function adjustPaymentAmount(
   txn: { id: string; transaction_id: string; primary_mode: string | null },
-  newAmount: number
+  newAmount: number,
+  overrideMode?: string
 ): Promise<{ ok: boolean; error?: string }> {
   const { data: splits, error: splitsError } = await supabase
     .from('transaction_splits')
@@ -181,10 +182,10 @@ export async function adjustPaymentAmount(
       };
     }
     const cashSplit = (splits || []).find((s) => CASH_SPLIT_MODES.includes(s.mode));
-    const newMode = cashSplit?.mode || txn.primary_mode || 'cash';
+    const newMode = overrideMode || cashSplit?.mode || txn.primary_mode || 'cash';
     if (cashSplit) {
       if (newCashAmount > 0) {
-        await supabase.from('transaction_splits').update({ amount: newCashAmount }).eq('id', cashSplit.id);
+        await supabase.from('transaction_splits').update({ amount: newCashAmount, mode: newMode }).eq('id', cashSplit.id);
       } else {
         await supabase.from('transaction_splits').delete().eq('id', cashSplit.id);
       }
@@ -202,6 +203,7 @@ export async function adjustPaymentAmount(
 
   const { error } = await supabase.from('transactions').update({
     amount: newAmount,
+    ...(overrideMode ? { primary_mode: overrideMode } : {}),
     edited_at: new Date().toISOString(),
   }).eq('id', txn.id);
   if (error) return { ok: false, error: error.message };

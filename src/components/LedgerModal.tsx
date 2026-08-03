@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { X, Filter, Download, Trash2, Edit2, Save } from 'lucide-react';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, isSaleIncomplete, todayStr, localDateStr } from '../utils/format';
+import { formatKES, formatDate, isSaleIncomplete, todayStr } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
 import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance, adjustLoanBalance, undoSettlementForTransaction } from '../utils/balances';
+import DateFilterBar from './DateFilterBar';
+import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
 import type { Transaction, Customer, Supplier } from '../types';
 
 interface LedgerModalProps {
@@ -16,8 +18,6 @@ interface LedgerModalProps {
   filterPartnerId?: string;
   filterLoanId?: string;
 }
-
-type DateFilterType = 'today' | 'yesterday' | 'last7days' | 'thismonth' | 'lastmonth' | 'custom';
 
 export default function LedgerModal({
   open,
@@ -35,17 +35,21 @@ export default function LedgerModal({
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(false);
-  const [dateFilter, setDateFilter] = useState<DateFilterType>('today');
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [datePreset, setDatePreset] = useState<DatePreset>('today');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [editingEntry, setEditingEntry] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ date: '', amount: '', notes: '' });
 
+  const { from: fromDate, to: toDate } = getDatePresetRange(datePreset, customFrom, customTo);
+
   useEffect(() => {
     if (open) {
-      updateDateRange('today');
+      setDatePreset('today');
+      setCustomFrom('');
+      setCustomTo('');
       setTypeFilter('all');
       setCategoryFilter('all');
     }
@@ -55,37 +59,7 @@ export default function LedgerModal({
     if (open && fromDate && toDate) {
       fetchEntries();
     }
-  }, [open, dateFilter, fromDate, toDate, refreshKey]);
-
-  function updateDateRange(filter: DateFilterType) {
-    const today = new Date();
-    const todayDateStr = todayStr();
-
-    if (filter === 'today') {
-      setFromDate(todayDateStr);
-      setToDate(todayDateStr);
-    } else if (filter === 'yesterday') {
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = localDateStr(yesterday);
-      setFromDate(yesterdayStr);
-      setToDate(yesterdayStr);
-    } else if (filter === 'last7days') {
-      const weekAgo = new Date(today);
-      weekAgo.setDate(weekAgo.getDate() - 6);
-      setFromDate(localDateStr(weekAgo));
-      setToDate(todayDateStr);
-    } else if (filter === 'thismonth') {
-      const monthStart = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
-      setFromDate(monthStart);
-      setToDate(todayDateStr);
-    } else if (filter === 'lastmonth') {
-      const firstDayLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-      const lastDayLastMonth = new Date(today.getFullYear(), today.getMonth(), 0);
-      setFromDate(localDateStr(firstDayLastMonth));
-      setToDate(localDateStr(lastDayLastMonth));
-    }
-  }
+  }, [open, datePreset, fromDate, toDate, refreshKey]);
 
   async function fetchEntries() {
     setLoading(true);
@@ -339,48 +313,13 @@ export default function LedgerModal({
         <div className="p-4 border-b border-slate-100 flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
             <Filter size={14} className="text-slate-400" />
-            <select
-              value={dateFilter}
-              onChange={(e) => {
-                const val = e.target.value as DateFilterType;
-                setDateFilter(val);
-                if (val !== 'custom') {
-                  updateDateRange(val);
-                }
-              }}
-              className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-            >
-              <option value="today">Today</option>
-              <option value="yesterday">Yesterday</option>
-              <option value="last7days">Last 7 Days</option>
-              <option value="thismonth">This Month</option>
-              <option value="lastmonth">Last Month</option>
-              <option value="custom">Custom Range</option>
-            </select>
+            <DateFilterBar
+              preset={datePreset}
+              customFrom={customFrom}
+              customTo={customTo}
+              onChange={(p, cf, ct) => { setDatePreset(p); setCustomFrom(cf); setCustomTo(ct); }}
+            />
           </div>
-          {dateFilter === 'custom' && (
-            <>
-              <input
-                type="date"
-                value={fromDate}
-                onChange={(e) => setFromDate(e.target.value)}
-                className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm"
-              />
-              <span className="text-slate-400">to</span>
-              <input
-                type="date"
-                value={toDate}
-                onChange={(e) => setToDate(e.target.value)}
-                className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm"
-              />
-            </>
-          )}
-          <button
-            onClick={fetchEntries}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-sm"
-          >
-            Apply
-          </button>
           <select
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}

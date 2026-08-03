@@ -11,7 +11,6 @@ import {
   Receipt,
   Home,
   Bell,
-  CheckCircle,
   X,
   Plus,
   Calendar,

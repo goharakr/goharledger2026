@@ -3,9 +3,6 @@ import {
   Plus,
   Search,
   X,
-  Save,
-  ArrowRight,
-  Trash2,
   Edit2,
   BookOpen,
 } from 'lucide-react';
@@ -140,8 +137,9 @@ export default function Suppliers() {
   const [txnCustomFrom, setTxnCustomFrom] = usePersistentState('suppliers.txnCustomFrom', '');
   const [txnCustomTo, setTxnCustomTo] = usePersistentState('suppliers.txnCustomTo', '');
   const [editingPaymentId, setEditingPaymentId] = usePersistentState<string | null>('suppliers.editingPaymentId', null);
-  const [paymentEditForm, setPaymentEditForm] = usePersistentState('suppliers.paymentEditForm', { amount: '', notes: '' });
+  const [paymentEditForm, setPaymentEditForm] = usePersistentState('suppliers.paymentEditForm', { amount: '', date: '', mode: 'cash', notes: '' });
   const [netChecked, setNetChecked] = useState(false);
+  const [editingInvoiceId, setEditingInvoiceId] = usePersistentState<string | null>('suppliers.editingInvoiceId', null);
 
   useEffect(() => {
     fetchData();
@@ -285,10 +283,43 @@ export default function Suppliers() {
     triggerRefresh();
   }
 
+  function startEditInvoice(t: Transaction) {
+    setEditingInvoiceId(t.id);
+    setInvoiceForm({
+      date: t.date,
+      dueDate: t.due_date || '',
+      amount: String(t.amount || ''),
+      notes: t.notes || '',
+      setReminder: false,
+      reminderDate: '',
+    });
+    setShowInvoice(true);
+  }
+
   async function handleAddInvoice() {
     if (!selectedSupplier || !invoiceForm.amount || parseFloat(invoiceForm.amount) <= 0) return;
 
     const amt = parseFloat(invoiceForm.amount);
+
+    if (editingInvoiceId) {
+      const oldTxn = transactions.find((t) => t.id === editingInvoiceId);
+      if (!oldTxn) return;
+      const delta = amt - (oldTxn.amount || 0);
+      const { error } = await supabase.from('transactions').update({
+        date: invoiceForm.date,
+        amount: amt,
+        due_date: invoiceForm.dueDate || null,
+        notes: invoiceForm.notes || null,
+        edited_at: new Date().toISOString(),
+      }).eq('id', editingInvoiceId);
+      if (error) { alert('Failed to save invoice: ' + error.message); return; }
+      if (delta !== 0) await adjustSupplierBalance(selectedSupplier.id, delta);
+      setEditingInvoiceId(null);
+      setInvoiceForm(emptyInvoice);
+      setShowInvoice(false);
+      refreshSupplierData();
+      return;
+    }
 
     // Create supplier_invoice transaction (NOT expense - separate from shop expenses)
     const { data: newTxn, error, transactionId: txnId } = await insertTransactionWithId('INV-' + invoiceForm.date.replace(/-/g, ''), (transactionId) => ({
@@ -527,7 +558,7 @@ export default function Suppliers() {
 
   function startEditPayment(t: Transaction) {
     setEditingPaymentId(t.id);
-    setPaymentEditForm({ amount: String(t.amount || ''), notes: t.notes || '' });
+    setPaymentEditForm({ amount: String(t.amount || ''), date: t.date, mode: t.primary_mode || 'cash', notes: t.notes || '' });
   }
 
   async function handleUpdatePayment() {
@@ -542,14 +573,14 @@ export default function Suppliers() {
     }
     const delta = newAmount - (txn.amount || 0);
 
-    const result = await adjustPaymentAmount(txn, newAmount);
+    const result = await adjustPaymentAmount(txn, newAmount, paymentEditForm.mode);
     if (!result.ok) { alert(result.error); return; }
-    await supabase.from('transactions').update({ notes: paymentEditForm.notes || null }).eq('id', editingPaymentId);
+    await supabase.from('transactions').update({ date: paymentEditForm.date, notes: paymentEditForm.notes || null }).eq('id', editingPaymentId);
 
     if (delta !== 0) await adjustSupplierBalance(txn.supplier_id, -delta);
 
     setEditingPaymentId(null);
-    setPaymentEditForm({ amount: '', notes: '' });
+    setPaymentEditForm({ amount: '', date: '', mode: 'cash', notes: '' });
     refreshSupplierData();
     triggerRefresh();
   }
@@ -979,7 +1010,7 @@ export default function Suppliers() {
                   <button onClick={() => startEdit(selectedSupplier)} className="p-1.5 hover:bg-slate-100 rounded">
                     <Edit2 size={14} className="text-slate-500" />
                   </button>
-                  <button onClick={() => { setShowInvoice(true); setInvoiceForm({ ...emptyInvoice, date: todayStr() }); }} className="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium">Add Invoice</button>
+                  <button onClick={() => { setShowInvoice(true); setEditingInvoiceId(null); setInvoiceForm({ ...emptyInvoice, date: todayStr() }); }} className="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium">Add Invoice</button>
                   <button onClick={() => { setShowPayment(true); setPaymentForm({ ...emptyPayment, date: todayStr() }); }} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium">Pay Supplier</button>
                 </div>
               </div>
@@ -1126,6 +1157,11 @@ export default function Suppliers() {
                                   <Edit2 size={14} className="text-slate-500" />
                                 </button>
                               )}
+                              {t.type === 'supplier_invoice' && (
+                                <button onClick={() => startEditInvoice(t)} className="p-1 hover:bg-slate-200 rounded">
+                                  <Edit2 size={14} className="text-slate-500" />
+                                </button>
+                              )}
                               <button
                                 onClick={() => {
                                   if (confirm('Void this transaction?')) handleVoidTransaction(t.id);
@@ -1140,7 +1176,13 @@ export default function Suppliers() {
                         {editingPaymentId === t.id && (
                           <tr>
                             <td colSpan={6} className="px-3 py-3 bg-slate-50">
-                              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                <input
+                                  type="date"
+                                  value={paymentEditForm.date}
+                                  onChange={(e) => setPaymentEditForm({ ...paymentEditForm, date: e.target.value })}
+                                  className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
                                 <input
                                   type="number"
                                   min="0"
@@ -1149,17 +1191,27 @@ export default function Suppliers() {
                                   placeholder="Amount"
                                   className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                                 />
+                                <select
+                                  value={paymentEditForm.mode}
+                                  onChange={(e) => setPaymentEditForm({ ...paymentEditForm, mode: e.target.value })}
+                                  className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                >
+                                  <option value="cash">Cash</option>
+                                  <option value="mpesa">Mpesa</option>
+                                  <option value="paybill">Paybill</option>
+                                </select>
                                 <input
                                   type="text"
                                   value={paymentEditForm.notes}
                                   onChange={(e) => setPaymentEditForm({ ...paymentEditForm, notes: e.target.value })}
                                   placeholder="Notes"
-                                  className="col-span-2 md:col-span-2 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                  className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                                 />
                               </div>
+                              <p className="text-xs text-slate-500 mt-1">Mode only changes the cash portion - any Home Expense/Share/Mohamedi's balance used stays as it was.</p>
                               <div className="flex gap-2 mt-2">
                                 <button onClick={handleUpdatePayment} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">Save</button>
-                                <button onClick={() => { setEditingPaymentId(null); setPaymentEditForm({ amount: '', notes: '' }); }} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
+                                <button onClick={() => { setEditingPaymentId(null); setPaymentEditForm({ amount: '', date: '', mode: 'cash', notes: '' }); }} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
                               </div>
                             </td>
                           </tr>
@@ -1180,11 +1232,11 @@ export default function Suppliers() {
 
       {/* Invoice Modal */}
       {showInvoice && selectedSupplier && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onKeyDown={(e) => { if (e.key === 'Escape') setShowInvoice(false); }}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onKeyDown={(e) => { if (e.key === 'Escape') { setShowInvoice(false); setEditingInvoiceId(null); } }}>
           <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-md" data-form-nav>
             <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-slate-800 text-sm">Invoice - {selectedSupplier.name}</h3>
-              <button onClick={() => setShowInvoice(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
+              <h3 className="font-semibold text-slate-800 text-sm">{editingInvoiceId ? 'Edit Invoice' : 'Invoice'} - {selectedSupplier.name}</h3>
+              <button onClick={() => { setShowInvoice(false); setEditingInvoiceId(null); }} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
             </div>
             <div className="space-y-2">
               <div className="grid grid-cols-2 gap-2">
@@ -1220,28 +1272,30 @@ export default function Suppliers() {
                 placeholder="Notes (optional)"
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="setReminder"
-                  checked={invoiceForm.setReminder}
-                  onChange={(e) => setInvoiceForm({ ...invoiceForm, setReminder: e.target.checked })}
-                  onKeyDown={(e) => handleFormKeyNav(e)}
-                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                />
-                <label htmlFor="setReminder" className="text-xs text-slate-600">Set reminder</label>
-                {invoiceForm.setReminder && (
+              {!editingInvoiceId && (
+                <div className="flex items-center gap-2">
                   <input
-                    type="date"
-                    value={invoiceForm.reminderDate}
-                    onChange={(e) => setInvoiceForm({ ...invoiceForm, reminderDate: e.target.value })}
-                    onKeyDown={(e) => handleFormKeyNav(e, handleAddInvoice)}
-                    className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
-                    placeholder="Reminder date"
+                    type="checkbox"
+                    id="setReminder"
+                    checked={invoiceForm.setReminder}
+                    onChange={(e) => setInvoiceForm({ ...invoiceForm, setReminder: e.target.checked })}
+                    onKeyDown={(e) => handleFormKeyNav(e)}
+                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                   />
-                )}
-              </div>
-              <button onClick={handleAddInvoice} className="w-full bg-amber-600 hover:bg-amber-700 text-white py-1.5 rounded text-sm font-medium">Add Invoice</button>
+                  <label htmlFor="setReminder" className="text-xs text-slate-600">Set reminder</label>
+                  {invoiceForm.setReminder && (
+                    <input
+                      type="date"
+                      value={invoiceForm.reminderDate}
+                      onChange={(e) => setInvoiceForm({ ...invoiceForm, reminderDate: e.target.value })}
+                      onKeyDown={(e) => handleFormKeyNav(e, handleAddInvoice)}
+                      className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
+                      placeholder="Reminder date"
+                    />
+                  )}
+                </div>
+              )}
+              <button onClick={handleAddInvoice} className="w-full bg-amber-600 hover:bg-amber-700 text-white py-1.5 rounded text-sm font-medium">{editingInvoiceId ? 'Save Invoice' : 'Add Invoice'}</button>
             </div>
           </div>
         </div>

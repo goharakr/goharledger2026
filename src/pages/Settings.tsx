@@ -8,7 +8,6 @@ import {
   FileText,
   AlertTriangle,
   Save,
-  Trash2,
   Download,
   X,
   Wallet,
