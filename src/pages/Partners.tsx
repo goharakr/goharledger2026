@@ -316,6 +316,7 @@ export default function Partners() {
 
   return (
     <div className="space-y-6">
+      {loading && <p className="text-xs text-slate-400">Loading...</p>}
       {doubleCountedMonths.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />

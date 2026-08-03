@@ -471,6 +471,7 @@ export default function Capital() {
         <button onClick={() => setShowLedger(true)} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
           <BookOpen size={16} /> View Ledger
         </button>
+        {loading && <span className="text-xs text-slate-400">Loading...</span>}
       </div>
 
       {/* Capital Entry Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}

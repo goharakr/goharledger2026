@@ -184,6 +184,7 @@ export default function ProfitLoss() {
             <option key={m} value={m}>{getMonthLabel(m)}</option>
           ))}
         </select>
+        {loading && <span className="text-xs text-slate-400">Loading...</span>}
       </div>
 
       {/* KPI Cards */}

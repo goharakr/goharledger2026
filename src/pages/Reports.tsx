@@ -23,7 +23,7 @@ import { useDataRefresh } from '../context/DataContext';
 import { usePersistentState } from '../context/PageStateContext';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
-import type { Transaction, Customer, Supplier, ExpenseCategory, LoanTracker, HistoricalProfit } from '../types';
+import type { Transaction, Customer, Supplier, LoanTracker, HistoricalProfit } from '../types';
 
 type ReportKey = 'sales' | 'expenses' | 'home_expenses' | 'partners' | 'suppliers' | 'customers' | 'loans' | 'cash_reconciliation' | 'monthly_profit';
 
@@ -275,7 +275,6 @@ function ExpensesReport() {
   const { refreshKey } = useDataRefresh();
   const [filter, setFilter] = usePersistentState<DateModeFilter>('reports.expenses.filter', defaultDateModeFilter);
   const [expenses, setExpenses] = useState<Transaction[]>([]);
-  const [categories, setCategories] = useState<ExpenseCategory[]>([]);
   const [loading, setLoading] = useState(true);
 
   const { from: dateFrom, to: dateTo } = getDatePresetRange(filter.datePreset, filter.customFrom, filter.customTo);
@@ -286,12 +285,8 @@ function ExpensesReport() {
     setLoading(true);
     let query = supabase.from('transactions').select('*').eq('type', 'expense').neq('category', 'home_expense').eq('is_void', false).gte('date', dateFrom).lte('date', dateTo);
     if (filter.mode) query = query.eq('primary_mode', filter.mode);
-    const [{ data: txns }, { data: cats }] = await Promise.all([
-      query.order('date', { ascending: false }),
-      supabase.from('expense_categories').select('*'),
-    ]);
+    const { data: txns } = await query.order('date', { ascending: false });
     setExpenses(txns || []);
-    setCategories(cats || []);
     setLoading(false);
   }
 

@@ -51,6 +51,7 @@ interface SaleEditForm {
   commissionMode: string;
   settlementMode: string;
   notes: string;
+  isUnclassified: boolean;
 }
 
 interface PaymentForm {
@@ -80,6 +81,7 @@ const emptySaleEdit: SaleEditForm = {
   commissionMode: 'cash',
   settlementMode: 'cash',
   notes: '',
+  isUnclassified: false,
 };
 
 const emptyPayment: PaymentForm = {
@@ -511,6 +513,7 @@ export default function Customers() {
       commissionMode: t.commission_mode || 'cash',
       settlementMode: t.settlement_mode || 'cash',
       notes: t.notes || '',
+      isUnclassified: t.is_unclassified || false,
     });
   }
 
@@ -547,6 +550,7 @@ export default function Customers() {
       notes: isAdvance
         ? `Advance payment via ${saleEditForm.settlementMode}${saleEditForm.notes ? ' | ' + saleEditForm.notes : ''}`
         : (saleEditForm.notes || null),
+      is_unclassified: saleEditForm.isUnclassified,
       edited_at: new Date().toISOString(),
     }).eq('id', editingSaleId);
 
@@ -1232,6 +1236,15 @@ export default function Customers() {
                                   className="col-span-2 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                                 />
                               </div>
+                              <label className="flex items-center gap-2 mt-2 text-xs text-slate-600">
+                                <input
+                                  type="checkbox"
+                                  checked={saleEditForm.isUnclassified}
+                                  onChange={(e) => setSaleEditForm({ ...saleEditForm, isUnclassified: e.target.checked })}
+                                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                                />
+                                Mark as unclassified (needs review)
+                              </label>
                               <div className="flex gap-2 mt-2">
                                 <button onClick={handleUpdateSale} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">Save</button>
                                 <button onClick={() => { setEditingSaleId(null); setSaleEditForm(emptySaleEdit); }} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
