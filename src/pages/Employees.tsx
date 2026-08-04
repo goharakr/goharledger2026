@@ -71,7 +71,7 @@ export default function Employees() {
   const [txnCustomFrom, setTxnCustomFrom] = usePersistentState('employees.txnCustomFrom', '');
   const [txnCustomTo, setTxnCustomTo] = usePersistentState('employees.txnCustomTo', '');
   const [editingTxnId, setEditingTxnId] = usePersistentState<string | null>('employees.editingTxnId', null);
-  const [txnEditForm, setTxnEditForm] = usePersistentState('employees.txnEditForm', { date: '', amount: '', notes: '' });
+  const [txnEditForm, setTxnEditForm] = usePersistentState('employees.txnEditForm', { date: '', amount: '', mode: 'cash', notes: '' });
 
   useEffect(() => {
     fetchData();
@@ -222,16 +222,28 @@ export default function Employees() {
 
   function startEditTxn(t: Transaction) {
     setEditingTxnId(t.id);
-    setTxnEditForm({ date: t.date, amount: String(t.amount || ''), notes: t.notes || '' });
+    setTxnEditForm({ date: t.date, amount: String(t.amount || ''), mode: t.primary_mode || 'cash', notes: t.notes || '' });
   }
 
   async function handleUpdateTxn() {
     if (!editingTxnId) return;
+    const txn = transactions.find((t) => t.id === editingTxnId);
+    if (!txn) return;
     const newAmount = parseFloat(txnEditForm.amount);
     if (!txnEditForm.amount || isNaN(newAmount) || newAmount <= 0) { alert('Enter a valid amount greater than 0'); return; }
     const { error } = await supabase.from('transactions').update({
       date: txnEditForm.date,
       amount: newAmount,
+      // For a salary payment, primary_mode is derived from whether the net
+      // amount is positive (see saveEmployeeSalaryPayment) - editing the
+      // amount here must re-derive it the same way, or a payment that was
+      // originally fully absorbed by a loan/advance deduction (net 0,
+      // primary_mode null) would silently never touch the wallet once
+      // corrected to a real positive amount. A loan/advance's mode is a
+      // one-time choice made when it was given (or deliberately null for a
+      // historical "don't touch wallet" entry) - editing its amount later
+      // must not change that choice.
+      ...(txn.type === 'employee_salary' ? { primary_mode: newAmount > 0 ? txnEditForm.mode : null } : {}),
       notes: txnEditForm.notes || null,
       edited_at: new Date().toISOString(),
     }).eq('id', editingTxnId);
@@ -467,9 +479,16 @@ export default function Employees() {
                         {editingTxnId === t.id && (
                           <tr>
                             <td colSpan={5} className="px-3 py-3 bg-slate-50">
-                              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                                 <input type="date" value={txnEditForm.date} onChange={(e) => setTxnEditForm({ ...txnEditForm, date: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
                                 <input type="number" min="0" value={txnEditForm.amount} onChange={(e) => setTxnEditForm({ ...txnEditForm, amount: e.target.value })} placeholder="Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                                {t.type === 'employee_salary' && (
+                                  <select value={txnEditForm.mode} onChange={(e) => setTxnEditForm({ ...txnEditForm, mode: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm">
+                                    <option value="cash">Cash</option>
+                                    <option value="mpesa">Mpesa</option>
+                                    <option value="paybill">Paybill</option>
+                                  </select>
+                                )}
                                 <input type="text" value={txnEditForm.notes} onChange={(e) => setTxnEditForm({ ...txnEditForm, notes: e.target.value })} placeholder="Notes" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
                               </div>
                               <div className="flex gap-2 mt-2">
