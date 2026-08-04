@@ -38,6 +38,7 @@ import { findBestMatch } from '../utils/fuzzyMatch';
 import { parseExpenseSheetText } from '../utils/expenseSmartEntryParser';
 import type { Transaction, Supplier, LoanTracker, ExpenseCategory, Customer, HistoricalProfit, Employee } from '../types';
 import EmployeeSalaryFields, { emptySalaryForm, salaryTotal, SalaryForm } from '../components/EmployeeSalaryFields';
+import BulkSalaryModal from '../components/BulkSalaryModal';
 import { calculateEmployeeLoans, calculateEmployeeAdvances, saveEmployeeSalaryPayment, voidEmployeeTransaction } from '../utils/employeePay';
 
 interface ExpenseForm {
@@ -193,6 +194,7 @@ export default function Expenses() {
   const [smartEntryMonth, setSmartEntryMonth] = usePersistentState('expenses.smartEntryMonth', () => todayStr().slice(0, 7));
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showAddSalary, setShowAddSalary] = usePersistentState('expenses.showAddSalary', false);
+  const [showBulkSalary, setShowBulkSalary] = useState(false);
   const [salaryForm, setSalaryForm] = usePersistentState<SalaryForm>('expenses.salaryForm', () => emptySalaryForm(todayStr()));
   const [savingSalary, setSavingSalary] = useState(false);
   const [editingSalaryId, setEditingSalaryId] = usePersistentState<string | null>('expenses.editingSalaryId', null);
@@ -1032,6 +1034,9 @@ export default function Expenses() {
             >
               <Plus size={16} /> Pay Salary
             </button>
+            <button onClick={() => setShowBulkSalary(true)} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
+              <Plus size={16} /> Bulk Pay Salaries
+            </button>
             <button onClick={() => navigate('/employees')} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
               Manage Employees / Loans / Advances
             </button>
@@ -1283,6 +1288,16 @@ export default function Expenses() {
             </button>
           </div>
         </div>
+      )}
+
+      {showBulkSalary && (
+        <BulkSalaryModal
+          employees={employees}
+          transactions={allTransactions}
+          createdBy={user?.username || null}
+          onClose={() => setShowBulkSalary(false)}
+          onSaved={() => { setShowBulkSalary(false); fetchData(); triggerRefresh(); }}
+        />
       )}
 
       {showAdd && (

@@ -13,6 +13,7 @@ import {
   voidEmployeeTransaction,
 } from '../utils/employeePay';
 import EmployeeSalaryFields, { emptySalaryForm, salaryTotal, SalaryForm } from '../components/EmployeeSalaryFields';
+import BulkSalaryModal from '../components/BulkSalaryModal';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { usePersistentState } from '../context/PageStateContext';
@@ -53,6 +54,7 @@ export default function Employees() {
   const [showAdd, setShowAdd] = usePersistentState('employees.showAdd', false);
   const [form, setForm] = usePersistentState<EmployeeForm>('employees.form', emptyEmployee);
   const [showSalary, setShowSalary] = usePersistentState('employees.showSalary', false);
+  const [showBulkSalary, setShowBulkSalary] = useState(false);
   const [salaryForm, setSalaryForm] = usePersistentState<SalaryForm>('employees.salaryForm', () => emptySalaryForm(todayStr()));
   const [savingSalary, setSavingSalary] = useState(false);
   const [showLoan, setShowLoan] = usePersistentState('employees.showLoan', false);
@@ -254,6 +256,9 @@ export default function Employees() {
         <div className="flex gap-2">
           <button onClick={() => { setShowAdd(true); setEditingId(null); setForm(emptyEmployee); }} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
             <Plus size={16} /> Add Employee
+          </button>
+          <button onClick={() => setShowBulkSalary(true)} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
+            <Plus size={16} /> Bulk Pay Salaries
           </button>
           <button onClick={() => setShowLedger(true)} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
             <BookOpen size={16} /> View Ledger
@@ -560,6 +565,16 @@ export default function Employees() {
             </button>
           </div>
         </div>
+      )}
+
+      {showBulkSalary && (
+        <BulkSalaryModal
+          employees={employees}
+          transactions={transactions}
+          createdBy={user?.username || null}
+          onClose={() => setShowBulkSalary(false)}
+          onSaved={() => { setShowBulkSalary(false); fetchData(); triggerRefresh(); }}
+        />
       )}
 
       <LedgerModal
