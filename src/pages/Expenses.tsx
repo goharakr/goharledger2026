@@ -2060,6 +2060,29 @@ export default function Expenses() {
         </div>
       )}
 
+      {/* Employees summary - adds up every employee's payments in the
+          current date range, not just one person's */}
+      {activeTab === 'employees' && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="rounded-lg p-3 border bg-slate-50 border-slate-200">
+            <p className="text-xs text-slate-500">Total Salary Given</p>
+            <p className="text-lg font-bold text-slate-700">KES {formatKES(filtered.reduce((s, t) => s + (t.amount || 0), 0))}</p>
+          </div>
+          <div className="rounded-lg p-3 border bg-slate-50 border-slate-200">
+            <p className="text-xs text-slate-500">Total Commission</p>
+            <p className="text-lg font-bold text-slate-700">KES {formatKES(filtered.reduce((s, t) => s + (t.commission || 0), 0))}</p>
+          </div>
+          <div className="rounded-lg p-3 border bg-amber-50 border-amber-100">
+            <p className="text-xs text-amber-600">Total Loan Deducted</p>
+            <p className="text-lg font-bold text-amber-700">KES {formatKES(filtered.reduce((s, t) => s + (t.employee_loan_deduction || 0), 0))}</p>
+          </div>
+          <div className="rounded-lg p-3 border bg-blue-50 border-blue-100">
+            <p className="text-xs text-blue-600">Total Advance Deducted</p>
+            <p className="text-lg font-bold text-blue-700">KES {formatKES(filtered.reduce((s, t) => s + (t.employee_advance_deduction || 0), 0))}</p>
+          </div>
+        </div>
+      )}
+
       {/* Employees List - self-contained, not sharing the Expense-category
           row template below (that one assumes fields employee_salary rows
           don't have, like a shop category) */}
