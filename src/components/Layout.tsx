@@ -25,6 +25,7 @@ import { supabase } from '../utils/supabase';
 import { formatKES, formatDate } from '../utils/format';
 import { sortCustomersByBalance, sortSuppliersByBalance } from '../utils/sortEntities';
 import { useDataRefresh } from '../context/DataContext';
+import HelpChat from './HelpChat';
 import type { Supplier, Customer, Reminder } from '../types';
 
 const navItems = [
@@ -387,6 +388,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+      <HelpChat />
     </div>
   );
 }
