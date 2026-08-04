@@ -22,6 +22,7 @@ import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
 import { calculateShareDue, ShareRule } from '../utils/shareDue';
+import { useSaveGuard } from '../utils/useSaveGuard';
 import type { CapitalEntry, LoanTracker, HistoricalProfit, Transaction } from '../types';
 
 interface CapitalForm {
@@ -63,6 +64,11 @@ export default function Capital() {
   const [historyCustomTo, setHistoryCustomTo] = usePersistentState('capital.historyCustomTo', '');
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
   const [loading, setLoading] = useState(true);
+  const { saving: savingCapital, guard: guardCapital } = useSaveGuard();
+  const { saving: savingLoanPayment, guard: guardLoanPayment } = useSaveGuard();
+  const { saving: savingNewLoan, guard: guardNewLoan } = useSaveGuard();
+  const { saving: savingLoanEdit, guard: guardLoanEdit } = useSaveGuard();
+  const { saving: savingHistorical, guard: guardHistorical } = useSaveGuard();
   const [showCapital, setShowCapital] = usePersistentState('capital.showCapital', false);
   const [showLoanPayment, setShowLoanPayment] = usePersistentState('capital.showLoanPayment', false);
   const [showAddLoan, setShowAddLoan] = usePersistentState('capital.showAddLoan', false);
@@ -509,7 +515,7 @@ export default function Capital() {
             </div>
             <input type="text" value={capitalForm.description} onChange={(e) => setCapitalForm({ ...capitalForm, description: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, () => (editingCapitalId ? handleUpdateCapital : handleSaveCapital)())} placeholder="Description (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
             <div className="flex gap-2 pt-2 border-t border-slate-200">
-              <button onClick={editingCapitalId ? handleUpdateCapital : handleSaveCapital} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium">{editingCapitalId ? 'Update' : 'Save'}</button>
+              <button onClick={guardCapital(editingCapitalId ? handleUpdateCapital : handleSaveCapital)} disabled={savingCapital} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium">{savingCapital ? 'Saving...' : editingCapitalId ? 'Update' : 'Save'}</button>
               <button onClick={() => { setShowCapital(false); setEditingCapitalId(null); }} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
             </div>
           </div>
@@ -543,7 +549,7 @@ export default function Capital() {
               </select>
             </div>
             <input type="text" value={loanPaymentForm.notes} onChange={(e) => setLoanPaymentForm({ ...loanPaymentForm, notes: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, handleLoanPayment)} placeholder="Notes (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
-            <button onClick={handleLoanPayment} className="w-full bg-amber-600 hover:bg-amber-700 text-white py-1.5 rounded text-sm font-medium">Pay Loan</button>
+            <button onClick={guardLoanPayment(handleLoanPayment)} disabled={savingLoanPayment} className="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white py-1.5 rounded text-sm font-medium">{savingLoanPayment ? 'Saving...' : 'Pay Loan'}</button>
           </div>
         </div>
         </div>
@@ -571,7 +577,7 @@ export default function Capital() {
               <input type="date" value={newLoanForm.startDate} onChange={(e) => setNewLoanForm({ ...newLoanForm, startDate: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
             </div>
             <input type="text" value={newLoanForm.notes} onChange={(e) => setNewLoanForm({ ...newLoanForm, notes: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, handleAddLoan)} placeholder="Notes (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
-            <button onClick={handleAddLoan} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded text-sm font-medium">Add Loan</button>
+            <button onClick={guardNewLoan(handleAddLoan)} disabled={savingNewLoan} className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white py-1.5 rounded text-sm font-medium">{savingNewLoan ? 'Saving...' : 'Add Loan'}</button>
           </div>
         </div>
         </div>
@@ -597,7 +603,7 @@ export default function Capital() {
               </div>
               <input type="text" value={editLoanForm.notes} onChange={(e) => setEditLoanForm({ ...editLoanForm, notes: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, handleEditLoan)} placeholder="Notes" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
               <div className="flex gap-2 pt-2 border-t border-slate-200">
-                <button onClick={handleEditLoan} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium">Update</button>
+                <button onClick={guardLoanEdit(handleEditLoan)} disabled={savingLoanEdit} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium">{savingLoanEdit ? 'Saving...' : 'Update'}</button>
                 <button onClick={() => setShowEditLoan(null)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
               </div>
             </div>
@@ -630,7 +636,7 @@ export default function Capital() {
               <input type="number" value={historicalForm.abdulqadirTaken} onChange={(e) => setHistoricalForm({ ...historicalForm, abdulqadirTaken: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e)} placeholder="Abdul Taken" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
             </div>
             <input type="text" value={historicalForm.notes} onChange={(e) => setHistoricalForm({ ...historicalForm, notes: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, () => (editingHistoricalId ? handleUpdateHistorical : handleSaveHistorical)())} placeholder="Notes (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
-            <button onClick={editingHistoricalId ? handleUpdateHistorical : handleSaveHistorical} className="w-full bg-purple-600 hover:bg-purple-700 text-white py-1.5 rounded text-sm font-medium">{editingHistoricalId ? 'Update' : 'Save'}</button>
+            <button onClick={guardHistorical(editingHistoricalId ? handleUpdateHistorical : handleSaveHistorical)} disabled={savingHistorical} className="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white py-1.5 rounded text-sm font-medium">{savingHistorical ? 'Saving...' : editingHistoricalId ? 'Update' : 'Save'}</button>
           </div>
         </div>
         </div>

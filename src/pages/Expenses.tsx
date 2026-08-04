@@ -40,6 +40,7 @@ import type { Transaction, Supplier, LoanTracker, ExpenseCategory, Customer, His
 import EmployeeSalaryFields, { emptySalaryForm, salaryTotal, SalaryForm } from '../components/EmployeeSalaryFields';
 import BulkSalaryModal from '../components/BulkSalaryModal';
 import { calculateEmployeeLoans, calculateEmployeeAdvances, saveEmployeeSalaryPayment, voidEmployeeTransaction } from '../utils/employeePay';
+import { useSaveGuard } from '../utils/useSaveGuard';
 
 interface ExpenseForm {
   date: string;
@@ -193,6 +194,7 @@ export default function Expenses() {
   // pasting an older sheet after the month has moved on doesn't misdate everything.
   const [smartEntryMonth, setSmartEntryMonth] = usePersistentState('expenses.smartEntryMonth', () => todayStr().slice(0, 7));
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const { saving: savingExpense, guard: guardExpense } = useSaveGuard();
   const [showAddSalary, setShowAddSalary] = usePersistentState('expenses.showAddSalary', false);
   const [showBulkSalary, setShowBulkSalary] = useState(false);
   const [salaryForm, setSalaryForm] = usePersistentState<SalaryForm>('expenses.salaryForm', () => emptySalaryForm(todayStr()));
@@ -1545,10 +1547,11 @@ export default function Expenses() {
             {/* Actions */}
             <div className="flex gap-2 pt-2 border-t border-slate-200">
               <button
-                onClick={editingId ? handleUpdate : handleSave}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium"
+                onClick={guardExpense(editingId ? handleUpdate : handleSave)}
+                disabled={savingExpense}
+                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium"
               >
-                {editingId ? 'Update' : 'Save'}
+                {savingExpense ? 'Saving...' : editingId ? 'Update' : 'Save'}
               </button>
               <button
                 onClick={() => { setShowAdd(false); setEditingId(null); }}

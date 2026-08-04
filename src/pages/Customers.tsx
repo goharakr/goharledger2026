@@ -31,6 +31,7 @@ import SettlementModeFields, {
   SettlementAmounts,
 } from '../components/SettlementModeFields';
 import type { ShareRule } from '../utils/shareDue';
+import { useSaveGuard } from '../utils/useSaveGuard';
 import type { Customer, Transaction, Supplier, HistoricalProfit } from '../types';
 
 interface CustomerForm {
@@ -103,6 +104,9 @@ export default function Customers() {
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
   const [selectedCustomer, setSelectedCustomer] = usePersistentState<Customer | null>('customers.selectedCustomer', null);
   const [loading, setLoading] = useState(true);
+  const { saving: savingCustomer, guard: guardCustomer } = useSaveGuard();
+  const { saving: savingCustomerEdit, guard: guardCustomerEdit } = useSaveGuard();
+  const { saving: savingPayment, guard: guardPayment } = useSaveGuard();
   const [showAdd, setShowAdd] = usePersistentState('customers.showAdd', false);
   const [showPayment, setShowPayment] = usePersistentState('customers.showPayment', false);
   const [showEdit, setShowEdit] = usePersistentState('customers.showEdit', false);
@@ -772,7 +776,7 @@ export default function Customers() {
               </select>
             </label>
             <div className="flex gap-2 pt-2 border-t border-slate-200">
-              <button onClick={handleSaveCustomer} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium">Save</button>
+              <button onClick={guardCustomer(handleSaveCustomer)} disabled={savingCustomer} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium">{savingCustomer ? 'Saving...' : 'Save'}</button>
               <button onClick={() => setShowAdd(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
             </div>
           </div>
@@ -857,7 +861,7 @@ export default function Customers() {
               </select>
             </label>
             <div className="flex gap-2 pt-2 border-t border-slate-200">
-              <button onClick={handleUpdateCustomer} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium">Update</button>
+              <button onClick={guardCustomerEdit(handleUpdateCustomer)} disabled={savingCustomerEdit} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium">{savingCustomerEdit ? 'Saving...' : 'Update'}</button>
               <button onClick={() => setShowEdit(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
             </div>
           </div>
@@ -1332,13 +1336,13 @@ export default function Customers() {
                 type="text"
                 value={paymentForm.notes}
                 onChange={(e) => setPaymentForm({ ...paymentForm, notes: e.target.value })}
-                onKeyDown={(e) => handleFormKeyNav(e, () => (paymentForm.paymentType === 'credit' ? handlePayment() : handleAddAdvance()))}
+                onKeyDown={(e) => handleFormKeyNav(e, guardPayment(paymentForm.paymentType === 'credit' ? handlePayment : handleAddAdvance))}
                 placeholder="Notes (optional)"
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
               <div className="flex gap-2 pt-2 border-t border-slate-200">
-                <button onClick={paymentForm.paymentType === 'credit' ? handlePayment : handleAddAdvance} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-1.5 rounded text-sm font-medium">
-                  {paymentForm.paymentType === 'credit' ? 'Record Payment' : 'Add Advance'}
+                <button onClick={guardPayment(paymentForm.paymentType === 'credit' ? handlePayment : handleAddAdvance)} disabled={savingPayment} className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white py-1.5 rounded text-sm font-medium">
+                  {savingPayment ? 'Saving...' : paymentForm.paymentType === 'credit' ? 'Record Payment' : 'Add Advance'}
                 </button>
               </div>
             </div>

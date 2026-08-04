@@ -4,6 +4,7 @@ import { AuthProvider } from './context/AuthContext';
 import { DataProvider } from './context/DataContext';
 import { PageStateProvider } from './context/PageStateContext';
 import ProtectedRoute from './components/ProtectedRoute';
+import ErrorBoundary from './components/ErrorBoundary';
 import Login from './pages/Login';
 import ResetPassword from './pages/ResetPassword';
 
@@ -34,6 +35,7 @@ function App() {
       <DataProvider>
         <PageStateProvider>
         <BrowserRouter basename={import.meta.env.BASE_URL}>
+          <ErrorBoundary>
           <Suspense fallback={<PageLoading />}>
             <Routes>
               <Route path="/login" element={<Login />} />
@@ -53,6 +55,7 @@ function App() {
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
+          </ErrorBoundary>
         </BrowserRouter>
         </PageStateProvider>
       </DataProvider>

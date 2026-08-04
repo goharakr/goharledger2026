@@ -28,6 +28,7 @@ import SettlementModeFields, {
   SettlementAmounts,
 } from '../components/SettlementModeFields';
 import type { ShareRule } from '../utils/shareDue';
+import { useSaveGuard } from '../utils/useSaveGuard';
 import type { Supplier, Transaction, Customer, HistoricalProfit } from '../types';
 
 interface SupplierForm {
@@ -120,6 +121,9 @@ export default function Suppliers() {
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
   const [selectedSupplier, setSelectedSupplier] = usePersistentState<Supplier | null>('suppliers.selectedSupplier', null);
   const [loading, setLoading] = useState(true);
+  const { saving: savingSupplier, guard: guardSupplier } = useSaveGuard();
+  const { saving: savingInvoice, guard: guardInvoice } = useSaveGuard();
+  const { saving: savingPayment, guard: guardPayment } = useSaveGuard();
   const [showAdd, setShowAdd] = usePersistentState('suppliers.showAdd', false);
   const [showInvoice, setShowInvoice] = usePersistentState('suppliers.showInvoice', false);
   const [showPayment, setShowPayment] = usePersistentState('suppliers.showPayment', false);
@@ -777,7 +781,7 @@ export default function Suppliers() {
               </select>
             </label>
             <div className="flex gap-2 pt-2 border-t border-slate-200">
-              <button onClick={handleSaveSupplier} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded text-sm font-medium">Save</button>
+              <button onClick={guardSupplier(handleSaveSupplier)} disabled={savingSupplier} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm font-medium">{savingSupplier ? 'Saving...' : 'Save'}</button>
               <button onClick={() => { setShowAdd(false); setEditingId(null); }} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
             </div>
           </div>
@@ -1295,7 +1299,7 @@ export default function Suppliers() {
                   )}
                 </div>
               )}
-              <button onClick={handleAddInvoice} className="w-full bg-amber-600 hover:bg-amber-700 text-white py-1.5 rounded text-sm font-medium">{editingInvoiceId ? 'Save Invoice' : 'Add Invoice'}</button>
+              <button onClick={guardInvoice(handleAddInvoice)} disabled={savingInvoice} className="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white py-1.5 rounded text-sm font-medium">{savingInvoice ? 'Saving...' : editingInvoiceId ? 'Save Invoice' : 'Add Invoice'}</button>
             </div>
           </div>
         </div>
@@ -1393,7 +1397,7 @@ export default function Suppliers() {
                 placeholder="Notes (optional)"
                 className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
               />
-              <button onClick={handlePayment} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-1.5 rounded text-sm font-medium">Pay Supplier</button>
+              <button onClick={guardPayment(handlePayment)} disabled={savingPayment} className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white py-1.5 rounded text-sm font-medium">{savingPayment ? 'Saving...' : 'Pay Supplier'}</button>
             </div>
           </div>
         </div>

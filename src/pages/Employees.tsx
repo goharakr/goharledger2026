@@ -17,6 +17,7 @@ import BulkSalaryModal from '../components/BulkSalaryModal';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { usePersistentState } from '../context/PageStateContext';
+import { useSaveGuard } from '../utils/useSaveGuard';
 import { handleFormKeyNav } from '../utils/formKeyNav';
 import LedgerModal from '../components/LedgerModal';
 import DateFilterBar from '../components/DateFilterBar';
@@ -49,6 +50,9 @@ export default function Employees() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
+  const { saving: savingEmployee, guard: guardEmployee } = useSaveGuard();
+  const { saving: savingLoan, guard: guardLoan } = useSaveGuard();
+  const { saving: savingAdvance, guard: guardAdvance } = useSaveGuard();
   const [search, setSearch] = usePersistentState('employees.search', '');
   const [selectedEmployee, setSelectedEmployee] = usePersistentState<Employee | null>('employees.selectedEmployee', null);
   const [editingId, setEditingId] = usePersistentState<string | null>('employees.editingId', null);
@@ -505,7 +509,7 @@ export default function Employees() {
               </div>
               <input type="text" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, handleSaveEmployee)} placeholder="Notes (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
               <div className="flex gap-2">
-                <button onClick={handleSaveEmployee} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-1.5 rounded text-sm font-medium">Save</button>
+                <button onClick={guardEmployee(handleSaveEmployee)} disabled={savingEmployee} className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white py-1.5 rounded text-sm font-medium">{savingEmployee ? 'Saving...' : 'Save'}</button>
                 <button onClick={() => { setShowAdd(false); setEditingId(null); }} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
               </div>
             </div>
@@ -536,7 +540,7 @@ export default function Employees() {
                 <input type="checkbox" checked={loanForm.noRealCash} onChange={(e) => setLoanForm({ ...loanForm, noRealCash: e.target.checked })} onKeyDown={(e) => handleFormKeyNav(e)} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
                 This already happened before (e.g. an old loan) - don't deduct from wallet balance
               </label>
-              <button onClick={handleGiveLoan} className="w-full bg-amber-600 hover:bg-amber-700 text-white py-1.5 rounded text-sm font-medium">Save Loan</button>
+              <button onClick={guardLoan(handleGiveLoan)} disabled={savingLoan} className="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white py-1.5 rounded text-sm font-medium">{savingLoan ? 'Saving...' : 'Save Loan'}</button>
             </div>
           </div>
         </div>
@@ -565,7 +569,7 @@ export default function Employees() {
                 <input type="checkbox" checked={advanceForm.noRealCash} onChange={(e) => setAdvanceForm({ ...advanceForm, noRealCash: e.target.checked })} onKeyDown={(e) => handleFormKeyNav(e)} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
                 This already happened before (e.g. an old advance) - don't deduct from wallet balance
               </label>
-              <button onClick={handleGiveAdvance} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded text-sm font-medium">Save Advance</button>
+              <button onClick={guardAdvance(handleGiveAdvance)} disabled={savingAdvance} className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white py-1.5 rounded text-sm font-medium">{savingAdvance ? 'Saving...' : 'Save Advance'}</button>
             </div>
           </div>
         </div>
