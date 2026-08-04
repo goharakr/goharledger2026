@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { HelpCircle, X, Send } from 'lucide-react';
+import { HelpCircle, X, Send, Trash2 } from 'lucide-react';
 import { HELP_CONTENT, HELP_CATEGORIES, searchHelp, HelpEntry, ScoredHelpEntry } from '../data/helpContent';
 
 type Message =
@@ -79,9 +79,14 @@ export default function HelpChat() {
             <h3 className="font-semibold text-slate-800 text-sm flex items-center gap-2">
               <HelpCircle size={16} className="text-emerald-600" /> Help
             </h3>
-            <button onClick={() => setOpen(false)} className="p-1 hover:bg-slate-100 rounded">
-              <X size={16} />
-            </button>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setMessages([{ from: 'app', kind: 'welcome' }])} className="p-1 hover:bg-slate-100 rounded" title="Clear chat">
+                <Trash2 size={14} className="text-slate-500" />
+              </button>
+              <button onClick={() => setOpen(false)} className="p-1 hover:bg-slate-100 rounded">
+                <X size={16} />
+              </button>
+            </div>
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3">
