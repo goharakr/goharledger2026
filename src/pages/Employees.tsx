@@ -289,7 +289,9 @@ export default function Employees() {
             ) : filteredEmployees.length === 0 ? (
               <div className="p-8 text-center text-slate-400">No employees found</div>
             ) : (
-              filteredEmployees.map((emp) => (
+              filteredEmployees.map((emp) => {
+                const totals = calculateEmployeeTotals(transactions, emp.id);
+                return (
                 <button
                   key={emp.id}
                   onClick={() => setSelectedEmployee(emp)}
@@ -304,8 +306,17 @@ export default function Employees() {
                     <p className="text-sm font-medium text-slate-800 truncate">{emp.name}</p>
                     <p className="text-xs text-slate-500">{emp.phone || 'No phone'}</p>
                   </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    {totals.totalLoanOutstanding > 0 && (
+                      <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">Loan: {formatKES(totals.totalLoanOutstanding)}</span>
+                    )}
+                    {totals.totalAdvanceOutstanding > 0 && (
+                      <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Adv: {formatKES(totals.totalAdvanceOutstanding)}</span>
+                    )}
+                  </div>
                 </button>
-              ))
+                );
+              })
             )}
           </div>
         </div>
