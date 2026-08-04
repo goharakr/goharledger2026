@@ -97,6 +97,11 @@ export default function BulkSalaryModal({ employees, transactions, createdBy, on
             })}
           </div>
         )}
+        {employees.length > 0 && (
+          <p className="text-sm font-medium text-slate-700 mt-3 pt-3 border-t border-slate-200">
+            Total to pay (all employees): <span className="text-emerald-600">KES {formatKES(rows.reduce((sum, row) => sum + salaryTotal(row), 0))}</span>
+          </p>
+        )}
         <div className="flex gap-2 mt-4">
           <button onClick={handleSaveAll} disabled={saving || employees.length === 0} className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white py-1.5 rounded text-sm font-medium">
             {saving ? 'Saving...' : 'Save All'}
