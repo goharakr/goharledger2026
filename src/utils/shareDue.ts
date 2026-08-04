@@ -44,6 +44,12 @@ export function buildMonthlyFigures(transactions: Transaction[] | null | undefin
       }
     } else if (t.type === 'loan_payment') {
       touchMonth(key).loanPayments += t.amount;
+    } else if (t.type === 'employee_salary') {
+      // The net cash paid, plus whatever went to loan/advance deductions,
+      // is the real cost of that salary to the shop this month - a
+      // deduction just changes how the money was withheld, not that it
+      // was earned/spent as pay.
+      touchMonth(key).shopExpenses += t.amount + (t.employee_loan_deduction || 0) + (t.employee_advance_deduction || 0);
     }
   });
   return monthly;

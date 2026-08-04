@@ -197,6 +197,12 @@ export default function Dashboard() {
         else if (t.primary_mode === 'mpesa') mpesaExpenses += t.amount || 0;
         else if (t.primary_mode === 'paybill') paybillExpenses += t.amount || 0;
       }
+      if (t.type === 'employee_salary' || t.type === 'employee_loan' || t.type === 'employee_advance') {
+        totalExpenses += t.amount || 0;
+        if (t.primary_mode === 'cash') cashExpenses += t.amount || 0;
+        else if (t.primary_mode === 'mpesa') mpesaExpenses += t.amount || 0;
+        else if (t.primary_mode === 'paybill') paybillExpenses += t.amount || 0;
+      }
     });
 
     setDailySalesBreakdown({ totalSales, cashAmount, mpesaAmount, paybillAmount, creditAmount, advanceAmount, supplierAmount, profit, commission, totalExpenses, cashExpenses, mpesaExpenses, paybillExpenses });

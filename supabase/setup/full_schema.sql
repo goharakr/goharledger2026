@@ -896,3 +896,48 @@ migrations - this adds it so a fresh install matches the live database.
 */
 
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS clears_on date;
+
+-- ===== 20260804120000_add_employees.sql =====
+/*
+# Employees: salaries, commission, loans, advances
+
+New `employees` master table, plus `employee_id`/`employee_loan_ref`/
+`employee_loan_deduction`/`employee_advance_ref`/`employee_advance_deduction`/
+`days_worked` on `transactions`. Loans/advances have no separate tables -
+their remaining balances are derived live from transactions (same reasoning
+as every other live-derived balance in this app), using
+`employee_loan_ref`/`employee_advance_ref` to self-reference the
+`transaction_id` of the original `employee_loan`/`employee_advance` row
+that gave the money, the same way `refunded_of` already does for refunds.
+*/
+
+CREATE TABLE IF NOT EXISTS employees (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  phone text,
+  monthly_salary decimal(12,2),
+  weekly_salary decimal(12,2),
+  notes text,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+
+ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "select_employees" ON employees;
+CREATE POLICY "select_employees" ON employees FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "insert_employees" ON employees;
+CREATE POLICY "insert_employees" ON employees FOR INSERT TO authenticated WITH CHECK (true);
+DROP POLICY IF EXISTS "update_employees" ON employees;
+CREATE POLICY "update_employees" ON employees FOR UPDATE TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "delete_employees" ON employees;
+CREATE POLICY "delete_employees" ON employees FOR DELETE TO authenticated USING (true);
+
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS employee_id uuid REFERENCES employees(id) ON DELETE SET NULL;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS employee_loan_ref text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS employee_loan_deduction decimal(12,2);
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS employee_advance_ref text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS employee_advance_deduction decimal(12,2);
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS days_worked integer;
+
+CREATE INDEX IF NOT EXISTS idx_transactions_employee ON transactions(employee_id);

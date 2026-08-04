@@ -106,6 +106,12 @@ export default function ProfitLoss() {
       .filter((t) => t.type === 'expense' && t.category !== 'home_expense' && t.category !== 'stock' && t.category !== 'supplier_payment' && t.category !== 'commission')
       .reduce((s, t) => s + t.amount, 0);
 
+    // The real cost of a salary is what was earned (net paid + any loan/advance
+    // deduction), not just what actually left the wallet that day.
+    const salaries = monthTxns
+      .filter((t) => t.type === 'employee_salary')
+      .reduce((s, t) => s + t.amount + (t.employee_loan_deduction || 0) + (t.employee_advance_deduction || 0), 0);
+
     const homeExpensesFromShop = monthTxns
       .filter((t) => t.type === 'expense' && t.category === 'home_expense' && t.notes?.includes('From Shop'))
       .reduce((s, t) => s + t.amount, 0);
@@ -114,7 +120,7 @@ export default function ProfitLoss() {
       .filter((t) => t.type === 'loan_payment')
       .reduce((s, t) => s + t.amount, 0);
 
-    const netProfit = grossProfit - totalCommission - shopExpenses - homeExpensesFromShop - loanPayments;
+    const netProfit = grossProfit - totalCommission - shopExpenses - salaries - homeExpensesFromShop - loanPayments;
 
     // Get active rules for this month
     const activeRule = shareRules.find((r) => r.partner_id === 'taher' && r.is_active);
@@ -140,6 +146,7 @@ export default function ProfitLoss() {
       totalCommission,
       grossProfit,
       shopExpenses,
+      salaries,
       homeExpensesFromShop,
       loanPayments,
       netProfit,
@@ -216,6 +223,7 @@ export default function ProfitLoss() {
           <WaterfallRow label="Commissions" value={-data.totalCommission} indent={1} negative />
           <WaterfallRow label="= Gross Profit" value={data.grossProfit} indent={0} bold highlight />
           <WaterfallRow label="Shop Expenses" value={-data.shopExpenses} indent={1} negative />
+          <WaterfallRow label="Salaries" value={-data.salaries} indent={1} negative />
           <WaterfallRow label="Home Expenses (from Shop)" value={-data.homeExpensesFromShop} indent={1} negative />
           <WaterfallRow label="Loan Repayments" value={-data.loanPayments} indent={1} negative />
           <WaterfallRow label="= Net Profit" value={data.netProfit} indent={0} bold highlight />

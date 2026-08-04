@@ -112,6 +112,13 @@ export function computeWalletBalance(
       if (t.primary_mode === 'mpesa') mpesa += t.amount;
       else if (t.primary_mode === 'cash') cash += t.amount;
       else if (t.primary_mode === 'paybill') bank += t.amount;
+    } else if (t.type === 'employee_salary' || t.type === 'employee_loan' || t.type === 'employee_advance') {
+      // employee_salary's amount is already the NET cash paid out (after any
+      // loan/advance deduction) - the deduction amounts recorded alongside it
+      // are for the breakdown only, not a second cash movement.
+      if (t.primary_mode === 'mpesa') mpesa -= t.amount;
+      else if (t.primary_mode === 'cash') cash -= t.amount;
+      else if (t.primary_mode === 'paybill') bank -= t.amount;
     }
   });
 

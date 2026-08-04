@@ -27,7 +27,10 @@ export type TransactionType =
   | 'supplier_invoice'
   | 'capital_entry'
   | 'loan_payment'
-  | 'opening_balance';
+  | 'opening_balance'
+  | 'employee_salary'
+  | 'employee_loan'
+  | 'employee_advance';
 
 export type PartnerId = 'taher' | 'abdulqadir';
 
@@ -59,6 +62,12 @@ export interface Transaction {
   created_at: string;
   edited_at: string | null;
   refunded_of: string | null;
+  employee_id: string | null;
+  employee_loan_ref: string | null;
+  employee_loan_deduction: number | null;
+  employee_advance_ref: string | null;
+  employee_advance_deduction: number | null;
+  days_worked: number | null;
 }
 
 export interface TransactionSplit {
@@ -89,6 +98,16 @@ export interface Supplier {
   is_dual_party: boolean;
   is_active: boolean;
   linked_partner_id: string | null;
+}
+
+export interface Employee {
+  id: string;
+  name: string;
+  phone: string | null;
+  monthly_salary: number | null;
+  weekly_salary: number | null;
+  notes: string | null;
+  is_active: boolean;
 }
 
 export interface LoanTracker {

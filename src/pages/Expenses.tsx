@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Fragment } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -35,7 +36,9 @@ import SettlementModeFields, {
 import type { ShareRule } from '../utils/shareDue';
 import { findBestMatch } from '../utils/fuzzyMatch';
 import { parseExpenseSheetText } from '../utils/expenseSmartEntryParser';
-import type { Transaction, Supplier, LoanTracker, ExpenseCategory, Customer, HistoricalProfit } from '../types';
+import type { Transaction, Supplier, LoanTracker, ExpenseCategory, Customer, HistoricalProfit, Employee } from '../types';
+import EmployeeSalaryFields, { emptySalaryForm, salaryTotal, SalaryForm } from '../components/EmployeeSalaryFields';
+import { calculateEmployeeLoans, calculateEmployeeAdvances, saveEmployeeSalaryPayment, voidEmployeeTransaction } from '../utils/employeePay';
 
 interface ExpenseForm {
   date: string;
@@ -145,8 +148,10 @@ interface ExpenseSmartPreviewRow {
 export default function Expenses() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = usePersistentState<'shop' | 'home' | 'partners' | 'loans' | 'suppliers'>('expenses.activeTab', 'shop');
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = usePersistentState<'shop' | 'home' | 'partners' | 'loans' | 'suppliers' | 'employees'>('expenses.activeTab', 'shop');
   const [expenses, setExpenses] = useState<Transaction[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loans, setLoans] = useState<LoanTracker[]>([]);
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
@@ -187,6 +192,11 @@ export default function Expenses() {
   // pasting an older sheet after the month has moved on doesn't misdate everything.
   const [smartEntryMonth, setSmartEntryMonth] = usePersistentState('expenses.smartEntryMonth', () => todayStr().slice(0, 7));
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showAddSalary, setShowAddSalary] = usePersistentState('expenses.showAddSalary', false);
+  const [salaryForm, setSalaryForm] = usePersistentState<SalaryForm>('expenses.salaryForm', () => emptySalaryForm(todayStr()));
+  const [savingSalary, setSavingSalary] = useState(false);
+  const [editingSalaryId, setEditingSalaryId] = usePersistentState<string | null>('expenses.editingSalaryId', null);
+  const [salaryEditForm, setSalaryEditForm] = usePersistentState('expenses.salaryEditForm', { date: '', amount: '', commission: '', daysWorked: '', mode: 'cash', notes: '' });
 
   useEffect(() => {
     fetchData();
@@ -195,7 +205,7 @@ export default function Expenses() {
 
   async function fetchData() {
     setLoading(true);
-    const [{ data: txns }, { data: suppData }, { data: loanData }, { data: catData }, { data: suppPayments }, { data: loanPayments }, { data: partnerDraws }, { data: fullTxns }, { data: custData }, { data: rules }, { data: hist }, { data: splitData }] = await Promise.all([
+    const [{ data: txns }, { data: suppData }, { data: loanData }, { data: catData }, { data: suppPayments }, { data: loanPayments }, { data: partnerDraws }, { data: fullTxns }, { data: custData }, { data: rules }, { data: hist }, { data: splitData }, { data: empData }] = await Promise.all([
       fetchAllRows<Transaction>((from, to) =>
         supabase.from('transactions').select('*').eq('type', 'expense').order('date', { ascending: false }).range(from, to)
       ),
@@ -221,8 +231,10 @@ export default function Expenses() {
       supabase.from('share_rules').select('*').eq('is_active', true),
       supabase.from('historical_profit').select('*'),
       supabase.from('transaction_splits').select('*'),
+      supabase.from('employees').select('*').eq('is_active', true).order('name'),
     ]);
     setAllTransactions(fullTxns || []);
+    setEmployees(empData || []);
     setCustomersForLink(custData || []);
     setShareRules(rules || []);
     setHistoricalProfit(hist || []);
@@ -244,6 +256,8 @@ export default function Expenses() {
       filtered = suppPayments || [];
     } else if (activeTab === 'partners') {
       filtered = partnerDraws || [];
+    } else if (activeTab === 'employees') {
+      filtered = (fullTxns || []).filter((t) => t.type === 'employee_salary');
     }
 
     setExpenses(filtered);
@@ -995,7 +1009,7 @@ export default function Expenses() {
     <div className="space-y-4">
       {/* Tabs */}
       <div className="flex gap-1 bg-slate-100 p-1 rounded-lg w-fit flex-wrap">
-        {(['shop', 'home', 'partners', 'suppliers', 'loans'] as const).map((tab) => (
+        {(['shop', 'home', 'partners', 'suppliers', 'loans', 'employees'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => { setActiveTab(tab); setShowAdd(false); setEditingId(null); setShowBulk(false); }}
@@ -1003,19 +1017,33 @@ export default function Expenses() {
               activeTab === tab ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
-            {tab === 'shop' ? 'Shop Expenses' : tab === 'home' ? 'Home Expenses' : tab === 'partners' ? 'Partners' : tab === 'suppliers' ? 'Supplier Payments' : 'Loans'}
+            {tab === 'shop' ? 'Shop Expenses' : tab === 'home' ? 'Home Expenses' : tab === 'partners' ? 'Partners' : tab === 'suppliers' ? 'Supplier Payments' : tab === 'loans' ? 'Loans' : 'Employees'}
           </button>
         ))}
       </div>
 
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-3">
-        <button
-          onClick={() => { setShowAdd(true); setEditingId(null); setForm({ ...emptyForm, date: todayStr(), partnerId: user?.username === 'taher' ? 'taher' : user?.username === 'abdulqadir' ? 'abdulqadir' : '' }); }}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
-        >
-          <Plus size={16} /> Add {activeTab === 'shop' ? 'Expense' : activeTab === 'home' ? 'Home Expense' : activeTab === 'partners' ? 'Partner Draw' : activeTab === 'suppliers' ? 'Supplier Payment' : 'Loan Payment'}
-        </button>
+        {activeTab === 'employees' ? (
+          <>
+            <button
+              onClick={() => { setShowAddSalary(true); setSalaryForm(emptySalaryForm(todayStr())); }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+            >
+              <Plus size={16} /> Pay Salary
+            </button>
+            <button onClick={() => navigate('/employees')} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
+              Manage Employees / Loans / Advances
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => { setShowAdd(true); setEditingId(null); setForm({ ...emptyForm, date: todayStr(), partnerId: user?.username === 'taher' ? 'taher' : user?.username === 'abdulqadir' ? 'abdulqadir' : '' }); }}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+          >
+            <Plus size={16} /> Add {activeTab === 'shop' ? 'Expense' : activeTab === 'home' ? 'Home Expense' : activeTab === 'partners' ? 'Partner Draw' : activeTab === 'suppliers' ? 'Supplier Payment' : 'Loan Payment'}
+          </button>
+        )}
         {(activeTab === 'shop' || activeTab === 'home') && (
           <button
             onClick={() => { setShowBulk(true); setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyBulkRow, date: todayStr() }))); }}
@@ -1204,6 +1232,59 @@ export default function Expenses() {
       )}
 
       {/* Add/Edit Modal - a real popup, so it's visible no matter how far down the page you've scrolled */}
+      {showAddSalary && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onKeyDown={(e) => { if (e.key === 'Escape') setShowAddSalary(false); }}>
+          <div className="bg-white rounded-xl shadow-lg p-4 w-full max-w-md max-h-[90vh] overflow-y-auto" data-form-nav>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-slate-800 text-sm">Pay Salary</h3>
+              <button onClick={() => setShowAddSalary(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
+            </div>
+            <EmployeeSalaryFields employees={employees} transactions={allTransactions} form={salaryForm} onChange={setSalaryForm} showEmployeePicker />
+            <button
+              onClick={async () => {
+                if (savingSalary) return;
+                const emp = employees.find((e) => e.id === salaryForm.employeeId);
+                if (!emp) { alert('Pick an employee'); return; }
+                const total = salaryTotal(salaryForm);
+                if (total < 0) { alert('Loan/advance deductions add up to more than the salary and commission.'); return; }
+                setSavingSalary(true);
+                try {
+                  const activeLoan = calculateEmployeeLoans(allTransactions, emp.id).find((l) => l.remaining > 0);
+                  const activeAdvance = calculateEmployeeAdvances(allTransactions, emp.id).find((a) => a.remaining > 0);
+                  const result = await saveEmployeeSalaryPayment({
+                    employeeId: emp.id,
+                    date: salaryForm.date,
+                    salaryAmount: parseFloat(salaryForm.amount || '0') || 0,
+                    commission: parseFloat(salaryForm.commission || '0') || 0,
+                    loanDeduction: parseFloat(salaryForm.loanDeduction || '0') || 0,
+                    loanOutstanding: activeLoan?.remaining || 0,
+                    loanActiveRef: activeLoan?.transactionId || null,
+                    advanceDeduction: parseFloat(salaryForm.advanceDeduction || '0') || 0,
+                    advanceOutstanding: activeAdvance?.remaining || 0,
+                    advanceActiveRef: activeAdvance?.transactionId || null,
+                    daysWorked: salaryForm.daysWorked ? parseInt(salaryForm.daysWorked, 10) : null,
+                    mode: salaryForm.mode,
+                    notes: salaryForm.notes || null,
+                    createdBy: user?.username || null,
+                  });
+                  if (!result.ok) { alert(result.error); return; }
+                  setSalaryForm(emptySalaryForm(todayStr()));
+                  setShowAddSalary(false);
+                  fetchData();
+                  triggerRefresh();
+                } finally {
+                  setSavingSalary(false);
+                }
+              }}
+              disabled={savingSalary}
+              className="mt-3 w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white py-1.5 rounded text-sm font-medium"
+            >
+              {savingSalary ? 'Saving...' : 'Save Payment'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {showAdd && (
         <div
           className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
@@ -1964,7 +2045,121 @@ export default function Expenses() {
         </div>
       )}
 
+      {/* Employees List - self-contained, not sharing the Expense-category
+          row template below (that one assumes fields employee_salary rows
+          don't have, like a shop category) */}
+      {activeTab === 'employees' && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
+          {loading ? (
+            <div className="p-8 text-center text-slate-400">Loading...</div>
+          ) : filtered.length === 0 ? (
+            <div className="p-8 text-center text-slate-400">No salary payments found</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-slate-500 border-b border-slate-200 bg-slate-50">
+                  <th className="px-3 py-2">Date</th>
+                  <th className="px-3 py-2">Employee</th>
+                  <th className="px-3 py-2">Details</th>
+                  <th className="px-3 py-2 text-right">Amount</th>
+                  <th className="px-3 py-2 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map((t) => {
+                  const emp = employees.find((e) => e.id === t.employee_id);
+                  return (
+                    <Fragment key={t.id}>
+                    <tr className="hover:bg-slate-50 transition-colors">
+                      <td className="px-3 py-2 text-slate-600">{formatDate(t.date)}</td>
+                      <td className="px-3 py-2 text-slate-700">{emp?.name || '-'}</td>
+                      <td className="px-3 py-2 text-slate-600 text-xs">
+                        {t.commission ? `Commission KES ${formatKES(t.commission)}. ` : ''}
+                        {t.employee_loan_deduction ? `Loan deducted KES ${formatKES(t.employee_loan_deduction)}. ` : ''}
+                        {t.employee_advance_deduction ? `Advance deducted KES ${formatKES(t.employee_advance_deduction)}. ` : ''}
+                        {t.days_worked ? `${t.days_worked} days worked. ` : ''}
+                        {t.notes}
+                        {t.edited_at && <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">Edited</span>}
+                      </td>
+                      <td className="px-3 py-2 text-right font-medium text-slate-800">KES {formatKES(t.amount)}</td>
+                      <td className="px-3 py-2 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => { setEditingSalaryId(t.id); setSalaryEditForm({ date: t.date, amount: String(t.amount || ''), commission: String(t.commission || ''), daysWorked: String(t.days_worked || ''), mode: t.primary_mode || 'cash', notes: t.notes || '' }); }} className="p-1 hover:bg-slate-200 rounded">
+                            <Edit2 size={14} className="text-slate-500" />
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (!confirm('Void this salary payment?')) return;
+                              const result = await voidEmployeeTransaction(t.id);
+                              if (!result.ok) { alert(result.error); return; }
+                              fetchData();
+                              triggerRefresh();
+                            }}
+                            className="p-1 hover:bg-red-100 rounded"
+                          >
+                            <Trash2 size={14} className="text-red-500" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {editingSalaryId === t.id && (
+                      <tr>
+                        <td colSpan={5} className="px-3 py-3 bg-slate-50">
+                          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                            <input type="date" value={salaryEditForm.date} onChange={(e) => setSalaryEditForm({ ...salaryEditForm, date: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                            <input type="number" min="0" value={salaryEditForm.amount} onChange={(e) => setSalaryEditForm({ ...salaryEditForm, amount: e.target.value })} placeholder="Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                            <input type="number" min="0" value={salaryEditForm.commission} onChange={(e) => setSalaryEditForm({ ...salaryEditForm, commission: e.target.value })} placeholder="Commission" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                            <select value={salaryEditForm.mode} onChange={(e) => setSalaryEditForm({ ...salaryEditForm, mode: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm">
+                              <option value="cash">Cash</option>
+                              <option value="mpesa">Mpesa</option>
+                              <option value="paybill">Paybill</option>
+                            </select>
+                            <input type="number" min="0" value={salaryEditForm.daysWorked} onChange={(e) => setSalaryEditForm({ ...salaryEditForm, daysWorked: e.target.value })} placeholder="Days worked" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                            <input type="text" value={salaryEditForm.notes} onChange={(e) => setSalaryEditForm({ ...salaryEditForm, notes: e.target.value })} placeholder="Notes" className="col-span-2 md:col-span-3 border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                          </div>
+                          {(t.employee_loan_deduction || t.employee_advance_deduction) ? (
+                            <p className="text-xs text-slate-500 mt-1">This payment includes a loan/advance deduction - void and re-enter it instead if that part needs to change.</p>
+                          ) : null}
+                          <div className="flex gap-2 mt-2">
+                            <button
+                              onClick={async () => {
+                                const newAmount = parseFloat(salaryEditForm.amount);
+                                if (!salaryEditForm.amount || isNaN(newAmount) || newAmount < 0) { alert('Enter a valid amount'); return; }
+                                const { error } = await supabase.from('transactions').update({
+                                  date: salaryEditForm.date,
+                                  amount: newAmount,
+                                  primary_mode: newAmount > 0 ? salaryEditForm.mode : null,
+                                  commission: salaryEditForm.commission ? parseFloat(salaryEditForm.commission) : null,
+                                  commission_mode: salaryEditForm.commission ? salaryEditForm.mode : null,
+                                  days_worked: salaryEditForm.daysWorked ? parseInt(salaryEditForm.daysWorked, 10) : null,
+                                  notes: salaryEditForm.notes || null,
+                                  edited_at: new Date().toISOString(),
+                                }).eq('id', editingSalaryId);
+                                if (error) { alert('Failed to save: ' + error.message); return; }
+                                setEditingSalaryId(null);
+                                fetchData();
+                                triggerRefresh();
+                              }}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium"
+                            >
+                              Save
+                            </button>
+                            <button onClick={() => setEditingSalaryId(null)} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
       {/* Expenses List */}
+      {activeTab !== 'employees' && (
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
         {loading ? (
           <div className="p-8 text-center text-slate-400">Loading...</div>
@@ -2099,17 +2294,20 @@ export default function Expenses() {
           </div>
         )}
       </div>
+      )}
 
       <LedgerModal
         open={showLedger}
         onClose={() => setShowLedger(false)}
         title={
+          activeTab === 'employees' ? 'Employees Ledger' :
           activeTab === 'suppliers' ? 'Supplier Payments Ledger' :
           activeTab === 'partners' ? 'Partner Draws Ledger' :
           activeTab === 'loans' ? 'Loan Payments Ledger' :
           'Expenses Ledger'
         }
         filterTypes={
+          activeTab === 'employees' ? ['employee_salary', 'employee_loan', 'employee_advance'] :
           activeTab === 'suppliers' ? ['supplier_invoice', 'supplier_payment'] :
           activeTab === 'partners' ? ['partner_draw'] :
           activeTab === 'loans' ? ['loan_payment'] :

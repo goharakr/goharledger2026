@@ -13,6 +13,7 @@ import {
   Landmark,
   Scale,
   TrendingUp,
+  Contact,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, getMonthLabel, saleProfit, todayStr } from '../utils/format';
@@ -23,9 +24,9 @@ import { useDataRefresh } from '../context/DataContext';
 import { usePersistentState } from '../context/PageStateContext';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
-import type { Transaction, Customer, Supplier, LoanTracker, HistoricalProfit } from '../types';
+import type { Transaction, Customer, Supplier, LoanTracker, HistoricalProfit, Employee } from '../types';
 
-type ReportKey = 'sales' | 'expenses' | 'home_expenses' | 'partners' | 'suppliers' | 'customers' | 'loans' | 'cash_reconciliation' | 'monthly_profit';
+type ReportKey = 'sales' | 'expenses' | 'home_expenses' | 'partners' | 'suppliers' | 'customers' | 'loans' | 'employees' | 'cash_reconciliation' | 'monthly_profit';
 
 const REPORT_LIST: { key: ReportKey; label: string; icon: typeof ShoppingCart }[] = [
   { key: 'sales', label: 'Sales', icon: ShoppingCart },
@@ -35,6 +36,7 @@ const REPORT_LIST: { key: ReportKey; label: string; icon: typeof ShoppingCart }[
   { key: 'suppliers', label: 'Suppliers', icon: Truck },
   { key: 'customers', label: 'Customers', icon: User },
   { key: 'loans', label: 'Loans', icon: Landmark },
+  { key: 'employees', label: 'Employees', icon: Contact },
   { key: 'cash_reconciliation', label: 'Cash Reconciliation', icon: Scale },
   { key: 'monthly_profit', label: 'Monthly Profit Summary', icon: TrendingUp },
 ];
@@ -1046,6 +1048,111 @@ function MonthlyProfitReport() {
   );
 }
 
+// ==================== Employees ====================
+
+function EmployeesReport() {
+  const { refreshKey } = useDataRefresh();
+  const [filter, setFilter] = usePersistentState<{ datePreset: DatePreset; customFrom: string; customTo: string; employeeId: string; txnType: string }>(
+    'reports.employees.filter',
+    { datePreset: 'month', customFrom: '', customTo: '', employeeId: '', txnType: '' }
+  );
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const { from: dateFrom, to: dateTo } = getDatePresetRange(filter.datePreset, filter.customFrom, filter.customTo);
+
+  useEffect(() => { fetchData(); }, [filter.datePreset, filter.customFrom, filter.customTo, refreshKey]);
+
+  async function fetchData() {
+    setLoading(true);
+    const [{ data: txns }, { data: emps }] = await Promise.all([
+      fetchAllRows<Transaction>((from, to) =>
+        supabase.from('transactions').select('*').in('type', ['employee_salary', 'employee_loan', 'employee_advance']).eq('is_void', false).gte('date', dateFrom).lte('date', dateTo).order('date', { ascending: false }).range(from, to)
+      ),
+      supabase.from('employees').select('*'),
+    ]);
+    setTransactions(txns || []);
+    setEmployees(emps || []);
+    setLoading(false);
+  }
+
+  const filtered = transactions.filter((t) =>
+    (!filter.employeeId || t.employee_id === filter.employeeId) &&
+    (!filter.txnType || t.type === filter.txnType)
+  );
+
+  const typeLabel: Record<string, string> = { employee_salary: 'Salary', employee_loan: 'Loan given', employee_advance: 'Advance given' };
+  function employeeName(id: string | null) {
+    return employees.find((e) => e.id === id)?.name || '-';
+  }
+
+  const summary = useMemo(() => {
+    let salary = 0, commission = 0, loanGiven = 0, loanDeducted = 0, advanceGiven = 0, advanceDeducted = 0;
+    filtered.forEach((t) => {
+      if (t.type === 'employee_salary') {
+        salary += t.amount || 0;
+        commission += t.commission || 0;
+        loanDeducted += t.employee_loan_deduction || 0;
+        advanceDeducted += t.employee_advance_deduction || 0;
+      } else if (t.type === 'employee_loan') {
+        loanGiven += t.amount || 0;
+      } else if (t.type === 'employee_advance') {
+        advanceGiven += t.amount || 0;
+      }
+    });
+    return { salary, commission, loanGiven, loanDeducted, advanceGiven, advanceDeducted };
+  }, [filtered]);
+
+  const tableHeaders = ['Date', 'Employee', 'Type', 'Amount', 'Commission', 'Loan Deducted', 'Advance Deducted', 'Days Worked', 'Notes'];
+  function buildRows(forExport: boolean) {
+    return filtered.map((t) => [
+      forExport ? t.date : formatDate(t.date),
+      employeeName(t.employee_id),
+      typeLabel[t.type] || t.type,
+      forExport ? t.amount : formatKES(t.amount),
+      t.commission ? (forExport ? t.commission : formatKES(t.commission)) : '-',
+      t.employee_loan_deduction ? (forExport ? t.employee_loan_deduction : formatKES(t.employee_loan_deduction)) : '-',
+      t.employee_advance_deduction ? (forExport ? t.employee_advance_deduction : formatKES(t.employee_advance_deduction)) : '-',
+      t.days_worked ?? '-',
+      t.notes || '-',
+    ]);
+  }
+
+  return (
+    <div className="space-y-4">
+      <ReportHeader
+        title="Employees Report"
+        onCSV={() => exportCSVReport(tableHeaders, buildRows(true), `employees-report-${dateFrom}-to-${dateTo}.csv`)}
+        onExcel={() => exportExcelReport('Employees Report', [], tableHeaders, buildRows(true), `employees-report-${dateFrom}-to-${dateTo}.xlsx`)}
+        onPDF={() => exportPDFReport('Employees Report', [], tableHeaders, buildRows(false), `employees-report-${dateFrom}-to-${dateTo}.pdf`)}
+      />
+      <FilterBar>
+        <DateFilterBar preset={filter.datePreset} customFrom={filter.customFrom} customTo={filter.customTo} onChange={(p, f, t) => setFilter({ ...filter, datePreset: p, customFrom: f, customTo: t })} />
+        <select value={filter.employeeId} onChange={(e) => setFilter({ ...filter, employeeId: e.target.value })} className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
+          <option value="">All Employees</option>
+          {employees.map((emp) => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
+        </select>
+        <select value={filter.txnType} onChange={(e) => setFilter({ ...filter, txnType: e.target.value })} className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none">
+          <option value="">All Types</option>
+          <option value="employee_salary">Salary</option>
+          <option value="employee_loan">Loan given</option>
+          <option value="employee_advance">Advance given</option>
+        </select>
+      </FilterBar>
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <SummaryCard title="Salary Paid" amount={summary.salary} color="text-slate-700" />
+        <SummaryCard title="Commission" amount={summary.commission} color="text-slate-700" />
+        <SummaryCard title="Loan Given" amount={summary.loanGiven} color="text-amber-600" />
+        <SummaryCard title="Loan Deducted" amount={summary.loanDeducted} color="text-amber-600" />
+        <SummaryCard title="Advance Given" amount={summary.advanceGiven} color="text-blue-600" />
+        <SummaryCard title="Advance Deducted" amount={summary.advanceDeducted} color="text-blue-600" />
+      </div>
+      <ReportTable loading={loading} empty={filtered.length === 0} headers={tableHeaders} rows={buildRows(false)} />
+    </div>
+  );
+}
+
 // ==================== Main page ====================
 
 export default function Reports() {
@@ -1086,6 +1193,7 @@ export default function Reports() {
           {activeReport === 'suppliers' && <SuppliersReport />}
           {activeReport === 'customers' && <CustomersReport />}
           {activeReport === 'loans' && <LoansReport />}
+          {activeReport === 'employees' && <EmployeesReport />}
           {activeReport === 'cash_reconciliation' && <CashReconciliationReport />}
           {activeReport === 'monthly_profit' && <MonthlyProfitReport />}
         </div>

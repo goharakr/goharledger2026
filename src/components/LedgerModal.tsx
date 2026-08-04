@@ -6,7 +6,7 @@ import { useDataRefresh } from '../context/DataContext';
 import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance, adjustLoanBalance, undoSettlementForTransaction } from '../utils/balances';
 import DateFilterBar from './DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
-import type { Transaction, Customer, Supplier } from '../types';
+import type { Transaction, Customer, Supplier, Employee } from '../types';
 
 interface LedgerModalProps {
   open: boolean;
@@ -17,6 +17,7 @@ interface LedgerModalProps {
   filterSupplierId?: string;
   filterPartnerId?: string;
   filterLoanId?: string;
+  filterEmployeeId?: string;
 }
 
 export default function LedgerModal({
@@ -28,12 +29,14 @@ export default function LedgerModal({
   filterSupplierId,
   filterPartnerId,
   filterLoanId,
+  filterEmployeeId,
 }: LedgerModalProps) {
   const { refreshKey, triggerRefresh } = useDataRefresh();
   const [entries, setEntries] = useState<Transaction[]>([]);
   const [splits, setSplits] = useState<{ transaction_id: string; mode: string; amount: number }[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(false);
   const [datePreset, setDatePreset] = useState<DatePreset>('today');
   const [customFrom, setCustomFrom] = useState('');
@@ -81,18 +84,21 @@ export default function LedgerModal({
     if (filterSupplierId) query = query.eq('supplier_id', filterSupplierId);
     if (filterPartnerId) query = query.eq('partner_id', filterPartnerId);
     if (filterLoanId) query = query.eq('loan_id', filterLoanId);
+    if (filterEmployeeId) query = query.eq('employee_id', filterEmployeeId);
 
-    const [{ data: txns }, { data: splitData }, { data: custData }, { data: suppData }] = await Promise.all([
+    const [{ data: txns }, { data: splitData }, { data: custData }, { data: suppData }, { data: empData }] = await Promise.all([
       query,
       supabase.from('transaction_splits').select('*'),
       supabase.from('customers').select('*'),
       supabase.from('suppliers').select('*'),
+      supabase.from('employees').select('*'),
     ]);
 
     setEntries(txns || []);
     setSplits(splitData || []);
     setCustomers(custData || []);
     setSuppliers(suppData || []);
+    setEmployees(empData || []);
     setLoading(false);
   }
 
@@ -114,6 +120,10 @@ export default function LedgerModal({
     if (txn.supplier_id) {
       const supp = suppliers.find((s) => s.id === txn.supplier_id);
       return supp ? `Supplier: ${supp.name}` : '';
+    }
+    if (txn.employee_id) {
+      const emp = employees.find((e) => e.id === txn.employee_id);
+      return emp ? `Employee: ${emp.name}` : '';
     }
     return '';
   }

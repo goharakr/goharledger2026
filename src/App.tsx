@@ -15,6 +15,7 @@ const Partners = lazy(() => import('./pages/Partners'));
 const ProfitLoss = lazy(() => import('./pages/ProfitLoss'));
 const Customers = lazy(() => import('./pages/Customers'));
 const Suppliers = lazy(() => import('./pages/Suppliers'));
+const Employees = lazy(() => import('./pages/Employees'));
 const Capital = lazy(() => import('./pages/Capital'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Reports = lazy(() => import('./pages/Reports'));
@@ -45,6 +46,7 @@ function App() {
               <Route path="/profit-loss" element={<ProtectedRoute><ProfitLoss /></ProtectedRoute>} />
               <Route path="/customers" element={<ProtectedRoute><Customers /></ProtectedRoute>} />
               <Route path="/suppliers" element={<ProtectedRoute><Suppliers /></ProtectedRoute>} />
+              <Route path="/employees" element={<ProtectedRoute><Employees /></ProtectedRoute>} />
               <Route path="/capital" element={<ProtectedRoute><Capital /></ProtectedRoute>} />
               <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
               <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
