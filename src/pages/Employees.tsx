@@ -38,9 +38,10 @@ interface LoanAdvanceForm {
   amount: string;
   mode: string;
   notes: string;
+  noRealCash: boolean;
 }
 
-const emptyLoanAdvance = (): LoanAdvanceForm => ({ date: todayStr(), amount: '', mode: 'cash', notes: '' });
+const emptyLoanAdvance = (): LoanAdvanceForm => ({ date: todayStr(), amount: '', mode: 'cash', notes: '', noRealCash: false });
 
 export default function Employees() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
@@ -189,7 +190,7 @@ export default function Employees() {
 
   async function handleGiveLoan() {
     if (!selectedEmployee || !loanForm.amount || parseFloat(loanForm.amount) <= 0) return;
-    const { error } = await giveEmployeeLoan(selectedEmployee.id, loanForm.date, parseFloat(loanForm.amount), loanForm.mode, loanForm.notes || null, user?.username || null);
+    const { error } = await giveEmployeeLoan(selectedEmployee.id, loanForm.date, parseFloat(loanForm.amount), loanForm.mode, loanForm.notes || null, user?.username || null, loanForm.noRealCash);
     if (error) { alert('Failed to save loan: ' + error.message); return; }
     setLoanForm(emptyLoanAdvance());
     setShowLoan(false);
@@ -199,7 +200,7 @@ export default function Employees() {
 
   async function handleGiveAdvance() {
     if (!selectedEmployee || !advanceForm.amount || parseFloat(advanceForm.amount) <= 0) return;
-    const { error } = await giveEmployeeAdvance(selectedEmployee.id, advanceForm.date, parseFloat(advanceForm.amount), advanceForm.mode, advanceForm.notes || null, user?.username || null);
+    const { error } = await giveEmployeeAdvance(selectedEmployee.id, advanceForm.date, parseFloat(advanceForm.amount), advanceForm.mode, advanceForm.notes || null, user?.username || null, advanceForm.noRealCash);
     if (error) { alert('Failed to save advance: ' + error.message); return; }
     setAdvanceForm(emptyLoanAdvance());
     setShowAdvance(false);
@@ -520,6 +521,10 @@ export default function Employees() {
                 <option value="paybill">Paybill</option>
               </select>
               <input type="text" value={loanForm.notes} onChange={(e) => setLoanForm({ ...loanForm, notes: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, handleGiveLoan)} placeholder="Reason / notes (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input type="checkbox" checked={loanForm.noRealCash} onChange={(e) => setLoanForm({ ...loanForm, noRealCash: e.target.checked })} onKeyDown={(e) => handleFormKeyNav(e)} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                This already happened before (e.g. an old loan) - don't deduct from wallet balance
+              </label>
               <button onClick={handleGiveLoan} className="w-full bg-amber-600 hover:bg-amber-700 text-white py-1.5 rounded text-sm font-medium">Save Loan</button>
             </div>
           </div>
@@ -545,6 +550,10 @@ export default function Employees() {
                 <option value="paybill">Paybill</option>
               </select>
               <input type="text" value={advanceForm.notes} onChange={(e) => setAdvanceForm({ ...advanceForm, notes: e.target.value })} onKeyDown={(e) => handleFormKeyNav(e, handleGiveAdvance)} placeholder="Notes (optional)" className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" />
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input type="checkbox" checked={advanceForm.noRealCash} onChange={(e) => setAdvanceForm({ ...advanceForm, noRealCash: e.target.checked })} onKeyDown={(e) => handleFormKeyNav(e)} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                This already happened before (e.g. an old advance) - don't deduct from wallet balance
+              </label>
               <button onClick={handleGiveAdvance} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded text-sm font-medium">Save Advance</button>
             </div>
           </div>

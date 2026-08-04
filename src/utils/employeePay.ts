@@ -172,29 +172,33 @@ export async function saveEmployeeSalaryPayment(input: SalaryPaymentInput): Prom
   return { ok: true };
 }
 
-export async function giveEmployeeLoan(employeeId: string, date: string, amount: number, mode: string, notes: string | null, createdBy: string | null) {
+// noRealCash: the money already left before this was recorded (e.g. a loan
+// given back in July, entered into the app only now) - primary_mode is left
+// null so walletBalance.ts's mode-based deduction never fires for it, same
+// trick Capital's "No real cash" checkbox uses for historical entries.
+export async function giveEmployeeLoan(employeeId: string, date: string, amount: number, mode: string, notes: string | null, createdBy: string | null, noRealCash?: boolean) {
   return insertTransactionWithId('ELN-' + date.replace(/-/g, ''), (txnId) => ({
     transaction_id: txnId,
     date,
     type: 'employee_loan',
-    primary_mode: mode,
+    primary_mode: noRealCash ? null : mode,
     amount,
     employee_id: employeeId,
-    description: 'Loan given',
+    description: noRealCash ? 'Loan given (already happened - not deducted from wallet)' : 'Loan given',
     notes,
     created_by: createdBy,
   }));
 }
 
-export async function giveEmployeeAdvance(employeeId: string, date: string, amount: number, mode: string, notes: string | null, createdBy: string | null) {
+export async function giveEmployeeAdvance(employeeId: string, date: string, amount: number, mode: string, notes: string | null, createdBy: string | null, noRealCash?: boolean) {
   return insertTransactionWithId('EAD-' + date.replace(/-/g, ''), (txnId) => ({
     transaction_id: txnId,
     date,
     type: 'employee_advance',
-    primary_mode: mode,
+    primary_mode: noRealCash ? null : mode,
     amount,
     employee_id: employeeId,
-    description: 'Advance given',
+    description: noRealCash ? 'Advance given (already happened - not deducted from wallet)' : 'Advance given',
     notes,
     created_by: createdBy,
   }));
