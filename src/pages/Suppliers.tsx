@@ -1,4 +1,5 @@
 import { useEffect, useState, Fragment } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -114,6 +115,7 @@ const emptyBulkPaymentRow: BulkPaymentRow = {
 export default function Suppliers() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -1163,6 +1165,16 @@ export default function Suppliers() {
                               )}
                               {t.type === 'supplier_invoice' && (
                                 <button onClick={() => startEditInvoice(t)} className="p-1 hover:bg-slate-200 rounded">
+                                  <Edit2 size={14} className="text-slate-500" />
+                                </button>
+                              )}
+                              {t.type === 'sale' && (
+                                <button onClick={() => navigate(`/sales?edit=${t.id}`)} className="p-1 hover:bg-slate-200 rounded" title="Edit on Sales page">
+                                  <Edit2 size={14} className="text-slate-500" />
+                                </button>
+                              )}
+                              {t.type === 'expense' && (
+                                <button onClick={() => navigate(`/expenses?edit=${t.id}`)} className="p-1 hover:bg-slate-200 rounded" title="Edit on Expenses page">
                                   <Edit2 size={14} className="text-slate-500" />
                                 </button>
                               )}

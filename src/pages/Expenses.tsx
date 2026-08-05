@@ -1,5 +1,5 @@
 import { useEffect, useState, Fragment } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -151,6 +151,7 @@ export default function Expenses() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = usePersistentState<'shop' | 'home' | 'partners' | 'loans' | 'suppliers' | 'employees'>('expenses.activeTab', 'shop');
   const [expenses, setExpenses] = useState<Transaction[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -206,6 +207,16 @@ export default function Expenses() {
     fetchData();
     setSelectedIds(new Set());
   }, [activeTab, refreshKey]);
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId) return;
+    const match = allTransactions.find((t) => t.id === editId && t.type === 'expense');
+    if (match) {
+      startEdit(match);
+      setSearchParams({}, { replace: true });
+    }
+  }, [allTransactions, searchParams]);
 
   async function fetchData() {
     setLoading(true);

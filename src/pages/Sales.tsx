@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -160,9 +161,22 @@ export default function Sales() {
   const [smartEntryPaste, setSmartEntryPaste] = usePersistentState('sales.smartEntryPaste', '');
   const [smartEntryPreview, setSmartEntryPreview] = usePersistentState<SmartPreviewRow[]>('sales.smartEntryPreview', () => []);
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
   useEffect(() => {
     fetchData();
   }, [refreshKey]);
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId) return;
+    const match = sales.find((s) => s.id === editId);
+    if (match) {
+      setExpandedDates((prev) => new Set(prev).add(match.date));
+      startEdit(match);
+      setSearchParams({}, { replace: true });
+    }
+  }, [sales, searchParams]);
 
   async function fetchData() {
     setLoading(true);
