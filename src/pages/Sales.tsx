@@ -16,8 +16,8 @@ import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr, saleProfit, isSaleIncomplete } from '../utils/format';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
-import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance, applySettlementSource, undoSettlementForTransaction } from '../utils/balances';
-import { syncCommissionExpense, voidCommissionExpense } from '../utils/commissionExpense';
+import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance, applySettlementSource, undoSettlementForTransaction, voidSale } from '../utils/balances';
+import { syncCommissionExpense } from '../utils/commissionExpense';
 import { parseSmartEntryText, parsePayments, detectCommission, parseExcelSmartEntryText, detectPercentCommission } from '../utils/smartEntryParser';
 import { findBestMatch } from '../utils/fuzzyMatch';
 import { useDataRefresh } from '../context/DataContext';
@@ -938,46 +938,8 @@ export default function Sales() {
   async function handleVoid(id: string, reason: string) {
     const txn = sales.find((s) => s.id === id);
     if (!txn) return;
-
-    // Reverse customer/supplier balances
-    if (txn.customer_id && (txn.primary_mode === 'credit' || txn.primary_mode === 'advance')) {
-      if (txn.primary_mode === 'credit') {
-        await adjustCustomerCredit(txn.customer_id, -(txn.amount || 0));
-      } else {
-        await adjustCustomerAdvance(txn.customer_id, txn.amount || 0);
-      }
-    }
-    if (txn.supplier_id && txn.primary_mode === 'supplier') {
-      await adjustSupplierBalance(txn.supplier_id, txn.amount || 0);
-    }
-
-    // Reverse a linked "pay cost to supplier now" invoice/payment pair, if any
-    // (created by handleSave when "Pay cost price to a supplier now" is checked)
-    const { data: linked } = await supabase
-      .from('transactions')
-      .select('*')
-      .in('type', ['supplier_invoice', 'supplier_payment'])
-      .eq('is_void', false)
-      .or(`description.eq.Cost price taken on sale ${txn.transaction_id},description.eq.Cost price paid on sale ${txn.transaction_id}`);
-    if (linked && linked.length > 0) {
-      for (const lt of linked) {
-        if (lt.type === 'supplier_invoice' && lt.supplier_id) {
-          await adjustSupplierBalance(lt.supplier_id, -(lt.amount || 0));
-        } else if (lt.type === 'supplier_payment' && lt.supplier_id) {
-          await adjustSupplierBalance(lt.supplier_id, lt.amount || 0);
-          await undoSettlementForTransaction(lt.transaction_id, lt.supplier_id, null);
-        }
-      }
-      const { error: linkedError } = await supabase
-        .from('transactions')
-        .update({ is_void: true, void_reason: reason })
-        .in('id', linked.map((lt) => lt.id));
-      if (linkedError) { alert('Failed to void linked supplier records: ' + linkedError.message); return; }
-    }
-
-    const { error } = await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', id);
-    if (error) { alert('Failed to void: ' + error.message); return; }
-    await voidCommissionExpense(txn.transaction_id, reason);
+    const result = await voidSale(txn, reason);
+    if (!result.ok) { alert(result.error); return; }
     fetchData();
     triggerRefresh();
   }

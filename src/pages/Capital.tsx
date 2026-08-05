@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Fragment } from 'react';
 import {
   Plus,
   X,
@@ -79,6 +79,8 @@ export default function Capital() {
   const [editingHistoricalId, setEditingHistoricalId] = usePersistentState<string | null>('capital.editingHistoricalId', null);
   const [capitalForm, setCapitalForm] = usePersistentState<CapitalForm>('capital.capitalForm', emptyCapital);
   const [loanPaymentForm, setLoanPaymentForm] = usePersistentState<LoanPaymentForm>('capital.loanPaymentForm', { amount: '', date: todayStr(), mode: 'cash', notes: '' });
+  const [editingLoanPaymentId, setEditingLoanPaymentId] = usePersistentState<string | null>('capital.editingLoanPaymentId', null);
+  const [loanPaymentEditForm, setLoanPaymentEditForm] = usePersistentState('capital.loanPaymentEditForm', { date: '', amount: '', mode: 'cash', notes: '' });
   const [newLoanForm, setNewLoanForm] = usePersistentState('capital.newLoanForm', {
     loanName: '',
     totalAmount: '',
@@ -255,6 +257,42 @@ export default function Capital() {
 
     setLoanPaymentForm({ amount: '', date: todayStr(), mode: 'cash', notes: '' });
     setShowLoanPayment(false);
+    fetchData();
+    triggerRefresh();
+  }
+
+  function startEditLoanPayment(p: Transaction) {
+    setEditingLoanPaymentId(p.id);
+    setLoanPaymentEditForm({ date: p.date, amount: String(p.amount || ''), mode: p.primary_mode || 'cash', notes: p.notes || '' });
+  }
+
+  async function handleUpdateLoanPayment() {
+    if (!editingLoanPaymentId) return;
+    const txn = loanPayments.find((p) => p.id === editingLoanPaymentId);
+    if (!txn || !txn.loan_id) return;
+    const newAmount = parseFloat(loanPaymentEditForm.amount);
+    if (!loanPaymentEditForm.amount || isNaN(newAmount) || newAmount <= 0) { alert('Enter a valid amount greater than 0'); return; }
+    const { error } = await supabase.from('transactions').update({
+      date: loanPaymentEditForm.date,
+      amount: newAmount,
+      primary_mode: loanPaymentEditForm.mode,
+      notes: loanPaymentEditForm.notes || null,
+      edited_at: new Date().toISOString(),
+    }).eq('id', editingLoanPaymentId);
+    if (error) { alert('Failed to save: ' + error.message); return; }
+    const delta = newAmount - (txn.amount || 0);
+    if (delta !== 0) await adjustLoanBalance(txn.loan_id, delta);
+    setEditingLoanPaymentId(null);
+    fetchData();
+    triggerRefresh();
+  }
+
+  async function handleVoidLoanPayment(p: Transaction) {
+    if (!p.loan_id) return;
+    if (!confirm('Void this loan payment?')) return;
+    await adjustLoanBalance(p.loan_id, -(p.amount || 0));
+    const { error } = await supabase.from('transactions').update({ is_void: true }).eq('id', p.id);
+    if (error) { alert('Failed to void: ' + error.message); return; }
     fetchData();
     triggerRefresh();
   }
@@ -804,12 +842,36 @@ export default function Capital() {
                         <p className="text-xs text-slate-500 mb-1">Payment History:</p>
                         <div className="space-y-1">
                           {payments.slice(0, 3).map((p) => (
-                            <div key={p.id} className="flex justify-between text-xs">
+                            <Fragment key={p.id}>
+                            <div className="flex justify-between items-center text-xs">
                               <span className="text-slate-500">{formatDate(p.date)}</span>
                               <span className="font-medium">{formatKES(p.amount)}</span>
+                              <div className="flex items-center gap-1">
+                                <button onClick={() => startEditLoanPayment(p)} className="p-0.5 hover:bg-slate-200 rounded"><Edit2 size={11} className="text-slate-500" /></button>
+                                <button onClick={() => handleVoidLoanPayment(p)} className="p-0.5 hover:bg-red-100 rounded"><Trash2 size={11} className="text-red-500" /></button>
+                              </div>
                             </div>
+                            {editingLoanPaymentId === p.id && (
+                              <div className="bg-slate-50 rounded p-2 space-y-1">
+                                <div className="grid grid-cols-2 gap-1">
+                                  <input type="date" value={loanPaymentEditForm.date} onChange={(e) => setLoanPaymentEditForm({ ...loanPaymentEditForm, date: e.target.value })} className="border border-slate-300 rounded px-1.5 py-1 text-xs" />
+                                  <input type="number" min="0" value={loanPaymentEditForm.amount} onChange={(e) => setLoanPaymentEditForm({ ...loanPaymentEditForm, amount: e.target.value })} placeholder="Amount" className="border border-slate-300 rounded px-1.5 py-1 text-xs" />
+                                  <select value={loanPaymentEditForm.mode} onChange={(e) => setLoanPaymentEditForm({ ...loanPaymentEditForm, mode: e.target.value })} className="border border-slate-300 rounded px-1.5 py-1 text-xs">
+                                    <option value="cash">Cash</option>
+                                    <option value="mpesa">Mpesa</option>
+                                    <option value="paybill">Paybill</option>
+                                  </select>
+                                  <input type="text" value={loanPaymentEditForm.notes} onChange={(e) => setLoanPaymentEditForm({ ...loanPaymentEditForm, notes: e.target.value })} placeholder="Notes" className="border border-slate-300 rounded px-1.5 py-1 text-xs" />
+                                </div>
+                                <div className="flex gap-2">
+                                  <button onClick={handleUpdateLoanPayment} className="bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 rounded text-xs font-medium">Save</button>
+                                  <button onClick={() => setEditingLoanPaymentId(null)} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
+                                </div>
+                              </div>
+                            )}
+                            </Fragment>
                           ))}
-                          {payments.length > 3 && <p className="text-xs text-slate-400">+{payments.length - 3} more</p>}
+                          {payments.length > 3 && <p className="text-xs text-slate-400">+{payments.length - 3} more (see View Ledger)</p>}
                         </div>
                       </div>
                     )}

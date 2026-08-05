@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Fragment } from 'react';
 import {
   ArrowLeftRight,
   X,
@@ -7,7 +7,10 @@ import {
   Phone,
   Landmark,
   BookOpen,
+  Edit2,
+  Trash2,
 } from 'lucide-react';
+import { useSaveGuard } from '../utils/useSaveGuard';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr } from '../utils/format';
 import { insertTransactionWithId } from '../utils/transactionId';
@@ -57,6 +60,10 @@ export default function CashBank() {
   const [openingMode, setOpeningMode] = usePersistentState('cashbank.openingMode', 'cash');
   const [openingAmount, setOpeningAmount] = usePersistentState('cashbank.openingAmount', '');
   const [openingDate, setOpeningDate] = usePersistentState('cashbank.openingDate', todayStr());
+  const { saving: savingTransfer, guard: guardTransfer } = useSaveGuard();
+  const { saving: savingOpening, guard: guardOpening } = useSaveGuard();
+  const [editingTransferId, setEditingTransferId] = usePersistentState<string | null>('cashbank.editingTransferId', null);
+  const [transferEditForm, setTransferEditForm] = usePersistentState('cashbank.transferEditForm', { date: '', fromMode: 'cash', toMode: 'mpesa', amount: '', notes: '' });
 
   useEffect(() => {
     fetchData();
@@ -112,6 +119,44 @@ export default function CashBank() {
     triggerRefresh();
   }
 
+  // A transfer doesn't store "from"/"to" as their own columns - "from" is
+  // primary_mode, "to" only lives inside the description text ("cash to
+  // mpesa") that walletBalance.ts matches on, so editing has to keep both in
+  // sync together.
+  function startEditTransfer(t: Transaction) {
+    const desc = (t.description || '').toLowerCase();
+    const [fromMode, toMode] = desc.includes(' to ') ? desc.split(' to ') : [t.primary_mode || 'cash', 'mpesa'];
+    setEditingTransferId(t.id);
+    setTransferEditForm({ date: t.date, fromMode, toMode, amount: String(t.amount || ''), notes: t.notes || '' });
+  }
+
+  async function handleUpdateTransfer() {
+    if (!editingTransferId) return;
+    const newAmount = parseFloat(transferEditForm.amount);
+    if (!transferEditForm.amount || isNaN(newAmount) || newAmount <= 0) { alert('Enter a valid amount greater than 0'); return; }
+    if (transferEditForm.fromMode === transferEditForm.toMode) { alert('From and To must be different'); return; }
+    const { error } = await supabase.from('transactions').update({
+      date: transferEditForm.date,
+      amount: newAmount,
+      primary_mode: transferEditForm.fromMode,
+      description: `${transferEditForm.fromMode} to ${transferEditForm.toMode}`,
+      notes: transferEditForm.notes || null,
+      edited_at: new Date().toISOString(),
+    }).eq('id', editingTransferId);
+    if (error) { alert('Failed to save: ' + error.message); return; }
+    setEditingTransferId(null);
+    fetchData();
+    triggerRefresh();
+  }
+
+  async function handleVoidTransfer(t: Transaction) {
+    if (!confirm('Void this transfer?')) return;
+    const { error } = await supabase.from('transactions').update({ is_void: true }).eq('id', t.id);
+    if (error) { alert('Failed to void: ' + error.message); return; }
+    fetchData();
+    triggerRefresh();
+  }
+
   function openingBalanceTxnId(mode: string) {
     return `OPN-${mode.toUpperCase()}`;
   }
@@ -156,7 +201,7 @@ export default function CashBank() {
   }
 
   function getLedgerEntries(mode: string) {
-    const entries: { date: string; description: string; debit: number; credit: number; balance: number }[] = [];
+    const entries: { id: string; type: string; date: string; description: string; debit: number; credit: number; balance: number }[] = [];
     let balance = 0;
     const splitMap = new Map<string, { mode: string; amount: number }[]>();
     splits.forEach((s) => {
@@ -233,6 +278,8 @@ export default function CashBank() {
       if (debit > 0 || credit > 0) {
         balance += credit - debit;
         entries.push({
+          id: t.id,
+          type: t.type,
           date: t.date,
           description: t.description || t.transaction_id,
           debit,
@@ -334,8 +381,8 @@ export default function CashBank() {
               </div>
             </div>
             <div className="flex gap-3">
-              <button onClick={handleSetOpeningBalance} className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
-                <Save size={16} /> Save
+              <button onClick={guardOpening(handleSetOpeningBalance)} disabled={savingOpening} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
+                <Save size={16} /> {savingOpening ? 'Saving...' : 'Save'}
               </button>
               <button onClick={() => setShowOpeningBalance(false)} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm">
                 Cancel
@@ -391,8 +438,8 @@ export default function CashBank() {
               <textarea value={transferForm.notes} onChange={(e) => setTransferForm({ ...transferForm, notes: e.target.value })} rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
             </div>
             <div className="flex gap-3">
-              <button onClick={handleTransfer} className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
-                <Save size={16} /> Transfer
+              <button onClick={guardTransfer(handleTransfer)} disabled={savingTransfer} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
+                <Save size={16} /> {savingTransfer ? 'Saving...' : 'Transfer'}
               </button>
               <button onClick={() => setShowTransfer(false)} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm">
                 Cancel
@@ -488,18 +535,57 @@ export default function CashBank() {
                   <th className="px-4 py-2 text-right">Debit</th>
                   <th className="px-4 py-2 text-right">Credit</th>
                   <th className="px-4 py-2 text-right">Balance</th>
+                  <th className="px-4 py-2 text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {ledger.map((entry, i) => (
-                  <tr key={i} className="hover:bg-slate-50 transition-colors">
+                {ledger.map((entry, i) => {
+                  const txn = entry.type === 'fund_transfer' ? transactions.find((t) => t.id === entry.id) : undefined;
+                  return (
+                  <Fragment key={i}>
+                  <tr className="hover:bg-slate-50 transition-colors">
                     <td className="px-4 py-2 text-slate-600">{formatDate(entry.date)}</td>
                     <td className="px-4 py-2 text-slate-700">{entry.description}</td>
                     <td className="px-4 py-2 text-right text-red-600">{entry.debit > 0 ? formatKES(entry.debit) : ''}</td>
                     <td className="px-4 py-2 text-right text-emerald-600">{entry.credit > 0 ? formatKES(entry.credit) : ''}</td>
                     <td className="px-4 py-2 text-right font-medium text-slate-800">{formatKES(entry.balance)}</td>
+                    <td className="px-4 py-2 text-center">
+                      {txn && (
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => startEditTransfer(txn)} className="p-1 hover:bg-slate-200 rounded"><Edit2 size={14} className="text-slate-500" /></button>
+                          <button onClick={() => handleVoidTransfer(txn)} className="p-1 hover:bg-red-100 rounded"><Trash2 size={14} className="text-red-500" /></button>
+                        </div>
+                      )}
+                    </td>
                   </tr>
-                ))}
+                  {txn && editingTransferId === txn.id && (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-3 bg-slate-50">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          <input type="date" value={transferEditForm.date} onChange={(e) => setTransferEditForm({ ...transferEditForm, date: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                          <select value={transferEditForm.fromMode} onChange={(e) => setTransferEditForm({ ...transferEditForm, fromMode: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm">
+                            <option value="cash">From: Cash</option>
+                            <option value="mpesa">From: Mpesa</option>
+                            <option value="paybill">From: Paybill</option>
+                          </select>
+                          <select value={transferEditForm.toMode} onChange={(e) => setTransferEditForm({ ...transferEditForm, toMode: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm">
+                            <option value="cash">To: Cash</option>
+                            <option value="mpesa">To: Mpesa</option>
+                            <option value="paybill">To: Paybill</option>
+                          </select>
+                          <input type="number" min="0" value={transferEditForm.amount} onChange={(e) => setTransferEditForm({ ...transferEditForm, amount: e.target.value })} placeholder="Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                        </div>
+                        <input type="text" value={transferEditForm.notes} onChange={(e) => setTransferEditForm({ ...transferEditForm, notes: e.target.value })} placeholder="Notes" className="w-full mt-2 border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                        <div className="flex gap-2 mt-2">
+                          <button onClick={handleUpdateTransfer} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">Save</button>
+                          <button onClick={() => setEditingTransferId(null)} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

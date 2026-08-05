@@ -66,6 +66,9 @@ export default function Partners() {
   const [takenCustomFrom, setTakenCustomFrom] = usePersistentState('partners.takenCustomFrom', '');
   const [takenCustomTo, setTakenCustomTo] = usePersistentState('partners.takenCustomTo', '');
   const [showEditRules, setShowEditRules] = useState(false);
+  const [editingHistId, setEditingHistId] = usePersistentState<string | null>('partners.editingHistId', null);
+  const [histEditForm, setHistEditForm] = usePersistentState('partners.histEditForm', { share: '', taken: '', notes: '' });
+  const { saving: savingHist, guard: guardHist } = useSaveGuard();
   const [ruleForm, setRuleForm] = useState({ type: 'fixed' as 'fixed' | 'percentage', taherValue: '100000', abdulqadirValue: '100000' });
   const { saving: savingDraw, guard: guardDraw } = useSaveGuard();
   const { saving: savingReturn, guard: guardReturn } = useSaveGuard();
@@ -290,6 +293,28 @@ export default function Partners() {
     triggerRefresh();
   }
 
+  function startEditHist(h: HistoricalProfit) {
+    setEditingHistId(h.id);
+    const share = activePartner === 'taher' ? h.taher_share : h.abdulqadir_share;
+    const taken = activePartner === 'taher' ? h.taher_taken : h.abdulqadir_taken;
+    setHistEditForm({ share: String(share ?? ''), taken: String(taken ?? ''), notes: h.notes || '' });
+  }
+
+  async function handleUpdateHist() {
+    if (!editingHistId) return;
+    const shareField = activePartner === 'taher' ? 'taher_share' : 'abdulqadir_share';
+    const takenField = activePartner === 'taher' ? 'taher_taken' : 'abdulqadir_taken';
+    const { error } = await supabase.from('historical_profit').update({
+      [shareField]: histEditForm.share === '' ? null : parseFloat(histEditForm.share),
+      [takenField]: histEditForm.taken === '' ? 0 : parseFloat(histEditForm.taken),
+      notes: histEditForm.notes || null,
+    }).eq('id', editingHistId);
+    if (error) { alert('Failed to save: ' + error.message); return; }
+    setEditingHistId(null);
+    fetchData();
+    triggerRefresh();
+  }
+
   // Draws/Returns have no stored balance to keep in sync - calculatePartnerBalance
   // and calculateShareDue both re-derive everything live from these rows'
   // own amount each time, so editing/voiding here is just updating the row.
@@ -341,6 +366,7 @@ export default function Partners() {
     const taken = activePartner === 'taher' ? (h.taher_taken || 0) : (h.abdulqadir_taken || 0);
     const remaining = earned - taken;
     return {
+      id: h.id,
       month: h.month,
       earned,
       taken,
@@ -666,7 +692,8 @@ export default function Partners() {
                 <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-400">No profit share records</td></tr>
               ) : (
                 profitShares.map((ps) => (
-                  <tr key={ps.month} className="hover:bg-slate-50 transition-colors">
+                  <Fragment key={ps.month}>
+                  <tr className="hover:bg-slate-50 transition-colors">
                     <td className="px-4 py-2 font-medium text-slate-800">{getMonthLabel(ps.month)}</td>
                     <td className="px-4 py-2 text-right">{formatKES(ps.earned)}</td>
                     <td className="px-4 py-2 text-right">{formatKES(ps.taken)}</td>
@@ -681,19 +708,40 @@ export default function Partners() {
                       </span>
                     </td>
                     <td className="px-4 py-2 text-center">
-                      {ps.remaining > 0 && (
-                        <button
-                          onClick={() => {
-                            setShowMarkTaken({ type: 'profit', amount: ps.remaining, id: ps.month });
-                            setMarkForm({ ...emptyDraw, date: todayStr(), amount: String(ps.remaining) });
-                          }}
-                          className="text-xs bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-2 py-1 rounded transition-colors"
-                        >
-                          Mark Taken
-                        </button>
-                      )}
+                      <div className="flex items-center justify-center gap-1">
+                        {ps.remaining > 0 && (
+                          <button
+                            onClick={() => {
+                              setShowMarkTaken({ type: 'profit', amount: ps.remaining, id: ps.month });
+                              setMarkForm({ ...emptyDraw, date: todayStr(), amount: String(ps.remaining) });
+                            }}
+                            className="text-xs bg-emerald-100 text-emerald-700 hover:bg-emerald-200 px-2 py-1 rounded transition-colors"
+                          >
+                            Mark Taken
+                          </button>
+                        )}
+                        <button onClick={() => startEditHist(historicalProfit.find((h) => h.id === ps.id)!)} className="p-1 hover:bg-slate-200 rounded"><Edit2 size={14} className="text-slate-500" /></button>
+                      </div>
                     </td>
                   </tr>
+                  {editingHistId === ps.id && (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-3 bg-slate-50">
+                        <p className="text-xs text-slate-500 mb-1">Editing {activePartner}'s Earned/Taken for {getMonthLabel(ps.month)}</p>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                          <input type="number" value={histEditForm.share} onChange={(e) => setHistEditForm({ ...histEditForm, share: e.target.value })} placeholder="Earned" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                          <input type="number" value={histEditForm.taken} onChange={(e) => setHistEditForm({ ...histEditForm, taken: e.target.value })} placeholder="Taken" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                          <input type="text" value={histEditForm.notes} onChange={(e) => setHistEditForm({ ...histEditForm, notes: e.target.value })} placeholder="Notes" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">This only changes {activePartner}'s side of this month's record - the other partner's Earned/Taken stays as it was.</p>
+                        <div className="flex gap-2 mt-2">
+                          <button onClick={guardHist(handleUpdateHist)} disabled={savingHist} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-3 py-1.5 rounded text-xs font-medium">{savingHist ? 'Saving...' : 'Save'}</button>
+                          <button onClick={() => setEditingHistId(null)} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))
               )}
             </tbody>

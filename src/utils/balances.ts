@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { insertTransactionWithId } from './transactionId';
-import type { SettlementMode } from '../types';
+import { voidCommissionExpense } from './commissionExpense';
+import type { SettlementMode, Transaction } from '../types';
 
 // These always re-read the current value from the database right before
 // writing, instead of trusting a possibly-stale value already held in
@@ -255,4 +256,49 @@ export async function undoSettlementForTransaction(
     }
   }
   return true;
+}
+
+// Voids a sale and reverses everything it did: the customer/supplier balance
+// it moved, any linked "pay cost price to a supplier now" invoice+payment
+// pair, and its commission expense - shared by every page that can void a
+// sale (Sales page itself, and a customer's/supplier's own transaction list)
+// so they can never drift apart on what a sale void is supposed to undo.
+export async function voidSale(txn: Transaction, reason: string): Promise<{ ok: boolean; error?: string }> {
+  if (txn.customer_id && (txn.primary_mode === 'credit' || txn.primary_mode === 'advance')) {
+    if (txn.primary_mode === 'credit') {
+      await adjustCustomerCredit(txn.customer_id, -(txn.amount || 0));
+    } else {
+      await adjustCustomerAdvance(txn.customer_id, txn.amount || 0);
+    }
+  }
+  if (txn.supplier_id && txn.primary_mode === 'supplier') {
+    await adjustSupplierBalance(txn.supplier_id, txn.amount || 0);
+  }
+
+  const { data: linked } = await supabase
+    .from('transactions')
+    .select('*')
+    .in('type', ['supplier_invoice', 'supplier_payment'])
+    .eq('is_void', false)
+    .or(`description.eq.Cost price taken on sale ${txn.transaction_id},description.eq.Cost price paid on sale ${txn.transaction_id}`);
+  if (linked && linked.length > 0) {
+    for (const lt of linked) {
+      if (lt.type === 'supplier_invoice' && lt.supplier_id) {
+        await adjustSupplierBalance(lt.supplier_id, -(lt.amount || 0));
+      } else if (lt.type === 'supplier_payment' && lt.supplier_id) {
+        await adjustSupplierBalance(lt.supplier_id, lt.amount || 0);
+        await undoSettlementForTransaction(lt.transaction_id, lt.supplier_id, null);
+      }
+    }
+    const { error: linkedError } = await supabase
+      .from('transactions')
+      .update({ is_void: true, void_reason: reason })
+      .in('id', linked.map((lt) => lt.id));
+    if (linkedError) return { ok: false, error: 'Failed to void linked supplier records: ' + linkedError.message };
+  }
+
+  const { error } = await supabase.from('transactions').update({ is_void: true, void_reason: reason }).eq('id', txn.id);
+  if (error) return { ok: false, error: 'Failed to void: ' + error.message };
+  await voidCommissionExpense(txn.transaction_id, reason);
+  return { ok: true };
 }

@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, formatTime, todayStr } from '../utils/format';
-import { adjustCustomerCredit, adjustCustomerAdvance, applySettlementSource, undoSettlementForTransaction, adjustPaymentAmount } from '../utils/balances';
+import { adjustCustomerCredit, adjustCustomerAdvance, applySettlementSource, undoSettlementForTransaction, adjustPaymentAmount, voidSale } from '../utils/balances';
 import { syncCommissionExpense } from '../utils/commissionExpense';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
@@ -120,6 +120,8 @@ export default function Customers() {
   const [editingPaymentId, setEditingPaymentId] = usePersistentState<string | null>('customers.editingPaymentId', null);
   const [paymentEditForm, setPaymentEditForm] = usePersistentState('customers.paymentEditForm', { amount: '', date: '', mode: 'cash', notes: '' });
   const [netChecked, setNetChecked] = useState(false);
+  const [editingOpeningId, setEditingOpeningId] = usePersistentState<string | null>('customers.editingOpeningId', null);
+  const [openingEditForm, setOpeningEditForm] = usePersistentState('customers.openingEditForm', { date: '', amount: '', notes: '' });
   const [txnDatePreset, setTxnDatePreset] = usePersistentState<DatePreset>('customers.txnDatePreset', 'month');
   const [txnCustomFrom, setTxnCustomFrom] = usePersistentState('customers.txnCustomFrom', '');
   const [txnCustomTo, setTxnCustomTo] = usePersistentState('customers.txnCustomTo', '');
@@ -571,6 +573,14 @@ export default function Customers() {
     refreshCustomerData();
   }
 
+  async function handleVoidSale(t: Transaction) {
+    const reason = prompt('Enter void reason:');
+    if (!reason) return;
+    const result = await voidSale(t, reason);
+    if (!result.ok) { alert(result.error); return; }
+    refreshCustomerData();
+  }
+
   // A customer_payment row is either money deposited as an advance (adds to
   // advance_balance) or a payment against credit owed (subtracts from
   // credit_balance) - same check LedgerModal uses, kept in sync with it.
@@ -632,6 +642,30 @@ export default function Customers() {
     await adjustCustomerCredit(t.customer_id, -(t.amount || 0));
     const { error } = await supabase.from('transactions').update({ is_void: true }).eq('id', t.id);
     if (error) { alert('Failed to void: ' + error.message); return; }
+    refreshCustomerData();
+  }
+
+  function startEditOpening(t: Transaction) {
+    setEditingOpeningId(t.id);
+    setOpeningEditForm({ date: t.date, amount: String(t.amount || ''), notes: t.notes || '' });
+  }
+
+  async function handleUpdateOpening() {
+    if (!editingOpeningId) return;
+    const txn = transactions.find((t) => t.id === editingOpeningId);
+    if (!txn || !txn.customer_id) return;
+    const newAmount = parseFloat(openingEditForm.amount);
+    if (!openingEditForm.amount || isNaN(newAmount) || newAmount < 0) { alert('Enter a valid amount'); return; }
+    const delta = newAmount - (txn.amount || 0);
+    const { error } = await supabase.from('transactions').update({
+      date: openingEditForm.date,
+      amount: newAmount,
+      notes: openingEditForm.notes || null,
+      edited_at: new Date().toISOString(),
+    }).eq('id', editingOpeningId);
+    if (error) { alert('Failed to save: ' + error.message); return; }
+    if (delta !== 0) await adjustCustomerCredit(txn.customer_id, delta);
+    setEditingOpeningId(null);
     refreshCustomerData();
   }
 
@@ -1115,9 +1149,14 @@ export default function Customers() {
                           <td className="px-3 py-2 text-center">
                             <div className="flex items-center justify-center gap-1">
                               {t.type === 'sale' && (t.primary_mode === 'credit' || t.primary_mode === 'advance') && (
-                                <button onClick={() => startEditSale(t)} className="p-1 hover:bg-slate-200 rounded">
-                                  <Edit2 size={14} className="text-slate-500" />
-                                </button>
+                                <>
+                                  <button onClick={() => startEditSale(t)} className="p-1 hover:bg-slate-200 rounded">
+                                    <Edit2 size={14} className="text-slate-500" />
+                                  </button>
+                                  <button onClick={() => handleVoidSale(t)} className="p-1 hover:bg-red-100 rounded">
+                                    <Trash2 size={14} className="text-red-500" />
+                                  </button>
+                                </>
                               )}
                               {t.type === 'customer_payment' && (
                                 <>
@@ -1130,9 +1169,14 @@ export default function Customers() {
                                 </>
                               )}
                               {t.type === 'opening_balance' && (
-                                <button onClick={() => handleVoidOpeningBalance(t)} className="p-1 hover:bg-red-100 rounded">
-                                  <Trash2 size={14} className="text-red-500" />
-                                </button>
+                                <>
+                                  <button onClick={() => startEditOpening(t)} className="p-1 hover:bg-slate-200 rounded">
+                                    <Edit2 size={14} className="text-slate-500" />
+                                  </button>
+                                  <button onClick={() => handleVoidOpeningBalance(t)} className="p-1 hover:bg-red-100 rounded">
+                                    <Trash2 size={14} className="text-red-500" />
+                                  </button>
+                                </>
                               )}
                             </div>
                           </td>
@@ -1252,6 +1296,21 @@ export default function Customers() {
                               <div className="flex gap-2 mt-2">
                                 <button onClick={handleUpdateSale} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">Save</button>
                                 <button onClick={() => { setEditingSaleId(null); setSaleEditForm(emptySaleEdit); }} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        {editingOpeningId === t.id && (
+                          <tr>
+                            <td colSpan={6} className="px-3 py-3 bg-slate-50">
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                                <input type="date" value={openingEditForm.date} onChange={(e) => setOpeningEditForm({ ...openingEditForm, date: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                <input type="number" min="0" value={openingEditForm.amount} onChange={(e) => setOpeningEditForm({ ...openingEditForm, amount: e.target.value })} placeholder="Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
+                                <input type="text" value={openingEditForm.notes} onChange={(e) => setOpeningEditForm({ ...openingEditForm, notes: e.target.value })} placeholder="Notes" className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
+                              </div>
+                              <div className="flex gap-2 mt-2">
+                                <button onClick={handleUpdateOpening} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">Save</button>
+                                <button onClick={() => setEditingOpeningId(null)} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
                               </div>
                             </td>
                           </tr>
