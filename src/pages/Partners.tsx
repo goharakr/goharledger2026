@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Fragment } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset, DATE_PRESET_OPTIONS } from '../utils/dateFilters';
@@ -11,6 +11,8 @@ import {
   ArrowUpCircle,
   BookOpen,
   AlertTriangle,
+  Edit2,
+  Trash2,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, getMonthLabel, todayStr } from '../utils/format';
@@ -20,6 +22,7 @@ import { buildMonthlyFigures, getDoubleCountedMonths as getDoubleCountedMonthsSh
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { usePersistentState } from '../context/PageStateContext';
+import { useSaveGuard } from '../utils/useSaveGuard';
 import { handleFormKeyNav } from '../utils/formKeyNav';
 import LedgerModal from '../components/LedgerModal';
 import type { Transaction, HistoricalProfit } from '../types';
@@ -64,6 +67,12 @@ export default function Partners() {
   const [takenCustomTo, setTakenCustomTo] = usePersistentState('partners.takenCustomTo', '');
   const [showEditRules, setShowEditRules] = useState(false);
   const [ruleForm, setRuleForm] = useState({ type: 'fixed' as 'fixed' | 'percentage', taherValue: '100000', abdulqadirValue: '100000' });
+  const { saving: savingDraw, guard: guardDraw } = useSaveGuard();
+  const { saving: savingReturn, guard: guardReturn } = useSaveGuard();
+  const { saving: savingMarkTaken, guard: guardMarkTaken } = useSaveGuard();
+  const { saving: savingRules, guard: guardRules } = useSaveGuard();
+  const [editingTxnId, setEditingTxnId] = usePersistentState<string | null>('partners.editingTxnId', null);
+  const [txnEditForm, setTxnEditForm] = usePersistentState('partners.txnEditForm', { date: '', amount: '', mode: 'cash', notes: '' });
 
   useEffect(() => {
     if (partnerParam === 'abdulqadir' || partnerParam === 'taher') {
@@ -281,6 +290,45 @@ export default function Partners() {
     triggerRefresh();
   }
 
+  // Draws/Returns have no stored balance to keep in sync - calculatePartnerBalance
+  // and calculateShareDue both re-derive everything live from these rows'
+  // own amount each time, so editing/voiding here is just updating the row.
+  function getPartnerTransactions(from: string, to: string) {
+    return transactions
+      .filter((t) => (t.type === 'partner_draw' || t.type === 'partner_loan') && t.partner_id === activePartner && !t.is_void && t.date >= from && t.date <= to)
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  }
+
+  function startEditTxn(t: Transaction) {
+    setEditingTxnId(t.id);
+    setTxnEditForm({ date: t.date, amount: String(t.amount || ''), mode: t.primary_mode || 'cash', notes: t.notes || '' });
+  }
+
+  async function handleUpdateTxn() {
+    if (!editingTxnId) return;
+    const newAmount = parseFloat(txnEditForm.amount);
+    if (!txnEditForm.amount || isNaN(newAmount) || newAmount <= 0) { alert('Enter a valid amount greater than 0'); return; }
+    const { error } = await supabase.from('transactions').update({
+      date: txnEditForm.date,
+      amount: newAmount,
+      primary_mode: txnEditForm.mode,
+      notes: txnEditForm.notes || null,
+      edited_at: new Date().toISOString(),
+    }).eq('id', editingTxnId);
+    if (error) { alert('Failed to save: ' + error.message); return; }
+    setEditingTxnId(null);
+    fetchData();
+    triggerRefresh();
+  }
+
+  async function handleVoidTxn(t: Transaction) {
+    if (!confirm('Void this entry?')) return;
+    const { error } = await supabase.from('transactions').update({ is_void: true }).eq('id', t.id);
+    if (error) { alert('Failed to void: ' + error.message); return; }
+    fetchData();
+    triggerRefresh();
+  }
+
   const balance = calculatePartnerBalance(activePartner);
   const isPositive = balance >= 0;
   const shareDue = calculateShareDue(activePartner);
@@ -403,6 +451,80 @@ export default function Partners() {
         </button>
       </div>
 
+      {/* Transaction History - full Edit/Void for Draws and Returns, using
+          the same date range as the "Taken" figure above */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+        <div className="px-4 py-3 border-b border-slate-100">
+          <h4 className="font-semibold text-slate-800 text-sm">Transaction History</h4>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500 border-b border-slate-200 bg-slate-50">
+                <th className="px-3 py-2">Date</th>
+                <th className="px-3 py-2">Type</th>
+                <th className="px-3 py-2">Mode</th>
+                <th className="px-3 py-2">Notes</th>
+                <th className="px-3 py-2 text-right">Amount</th>
+                <th className="px-3 py-2 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {getPartnerTransactions(takenRange.from, takenRange.to).length === 0 ? (
+                <tr><td colSpan={6} className="px-3 py-4 text-center text-slate-400 text-xs">No transactions</td></tr>
+              ) : (
+                getPartnerTransactions(takenRange.from, takenRange.to).map((t) => (
+                  <Fragment key={t.id}>
+                  <tr className="hover:bg-slate-50 transition-colors">
+                    <td className="px-3 py-2 text-slate-600">{formatDate(t.date)}</td>
+                    <td className="px-3 py-2">
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${t.type === 'partner_draw' ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                        {t.type === 'partner_draw' ? 'Draw' : 'Return'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-slate-600 text-xs capitalize">{t.primary_mode || '-'}</td>
+                    <td className="px-3 py-2 text-slate-700 text-xs">
+                      {t.notes || t.description || '-'}
+                      {t.edited_at && <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">Edited</span>}
+                    </td>
+                    <td className={`px-3 py-2 text-right font-medium ${t.type === 'partner_draw' ? 'text-red-600' : 'text-emerald-600'}`}>
+                      {t.type === 'partner_draw' ? '-' : '+'}{formatKES(t.amount)}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={() => startEditTxn(t)} className="p-1 hover:bg-slate-200 rounded"><Edit2 size={14} className="text-slate-500" /></button>
+                        <button onClick={() => handleVoidTxn(t)} className="p-1 hover:bg-red-100 rounded"><Trash2 size={14} className="text-red-500" /></button>
+                      </div>
+                    </td>
+                  </tr>
+                  {editingTxnId === t.id && (
+                    <tr>
+                      <td colSpan={6} className="px-3 py-3 bg-slate-50">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          <input type="date" value={txnEditForm.date} onChange={(e) => setTxnEditForm({ ...txnEditForm, date: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                          <input type="number" min="0" value={txnEditForm.amount} onChange={(e) => setTxnEditForm({ ...txnEditForm, amount: e.target.value })} placeholder="Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                          <select value={txnEditForm.mode} onChange={(e) => setTxnEditForm({ ...txnEditForm, mode: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm">
+                            <option value="cash">Cash</option>
+                            <option value="mpesa">Mpesa</option>
+                            <option value="paybill">Paybill</option>
+                          </select>
+                          <input type="text" value={txnEditForm.notes} onChange={(e) => setTxnEditForm({ ...txnEditForm, notes: e.target.value })} placeholder="Notes" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
+                        </div>
+                        <div className="flex gap-2 mt-2">
+                          <button onClick={handleUpdateTxn} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium">Save</button>
+                          <button onClick={() => setEditingTxnId(null)} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* Edit Share Rule Modal - shortcut so you don't have to go to Profit & Loss */}
       {showEditRules && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
@@ -434,7 +556,7 @@ export default function Partners() {
                 <label className="block text-sm font-medium text-slate-700 mb-1">Abdulqadir {ruleForm.type === 'fixed' ? '(KES)' : '(%)'}</label>
                 <input type="number" value={ruleForm.abdulqadirValue} onChange={(e) => setRuleForm({ ...ruleForm, abdulqadirValue: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" />
               </div>
-              <button onClick={handleSaveRules} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-medium">Save</button>
+              <button onClick={guardRules(handleSaveRules)} disabled={savingRules} className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white py-2 rounded-lg text-sm font-medium">{savingRules ? 'Saving...' : 'Save'}</button>
             </div>
           </div>
         </div>
@@ -459,7 +581,7 @@ export default function Partners() {
             </div>
             <div><label className="block text-sm font-medium text-slate-700 mb-1">Notes</label><textarea value={drawForm.notes} onChange={(e) => setDrawForm({ ...drawForm, notes: e.target.value })} rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
             <div className="flex gap-3">
-              <button onClick={handleDraw} className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2"><Save size={16} /> Save</button>
+              <button onClick={guardDraw(handleDraw)} disabled={savingDraw} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2"><Save size={16} /> {savingDraw ? 'Saving...' : 'Save'}</button>
               <button onClick={() => setShowDraw(false)} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm">Cancel</button>
             </div>
           </div>
@@ -486,7 +608,7 @@ export default function Partners() {
             </div>
             <div><label className="block text-sm font-medium text-slate-700 mb-1">Notes</label><textarea value={returnForm.notes} onChange={(e) => setReturnForm({ ...returnForm, notes: e.target.value })} rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
             <div className="flex gap-3">
-              <button onClick={handleReturn} className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2"><Save size={16} /> Save</button>
+              <button onClick={guardReturn(handleReturn)} disabled={savingReturn} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2"><Save size={16} /> {savingReturn ? 'Saving...' : 'Save'}</button>
               <button onClick={() => setShowReturn(false)} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm">Cancel</button>
             </div>
           </div>
@@ -513,7 +635,7 @@ export default function Partners() {
             </div>
             <div><label className="block text-sm font-medium text-slate-700 mb-1">Notes</label><textarea value={markForm.notes} onChange={(e) => setMarkForm({ ...markForm, notes: e.target.value })} rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none" /></div>
             <div className="flex gap-3">
-              <button onClick={handleMarkTaken} className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2"><Save size={16} /> Mark Taken</button>
+              <button onClick={guardMarkTaken(handleMarkTaken)} disabled={savingMarkTaken} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2"><Save size={16} /> {savingMarkTaken ? 'Saving...' : 'Mark Taken'}</button>
               <button onClick={() => setShowMarkTaken(null)} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm">Cancel</button>
             </div>
           </div>
