@@ -1,4 +1,5 @@
 import { useEffect, useState, Fragment } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   ArrowLeftRight,
   X,
@@ -65,9 +66,28 @@ export default function CashBank() {
   const [editingTransferId, setEditingTransferId] = usePersistentState<string | null>('cashbank.editingTransferId', null);
   const [transferEditForm, setTransferEditForm] = usePersistentState('cashbank.transferEditForm', { date: '', fromMode: 'cash', toMode: 'mpesa', amount: '', notes: '' });
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
   useEffect(() => {
     fetchData();
   }, [refreshKey]);
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId) return;
+    const txn = transactions.find((t) => t.id === editId && (t.type === 'fund_transfer' || t.type === 'opening_balance'));
+    if (!txn) return;
+    if (txn.type === 'fund_transfer') {
+      setActiveMode(txn.primary_mode || 'cash');
+      startEditTransfer(txn);
+    } else {
+      setActiveMode(txn.primary_mode || 'cash');
+      setOpeningMode(txn.primary_mode || 'cash');
+      setOpeningAmount(String(txn.amount || ''));
+      setOpeningDate(txn.date);
+    }
+    setSearchParams({}, { replace: true });
+  }, [transactions, searchParams]);
 
   async function fetchData() {
     setLoading(true);

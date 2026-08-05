@@ -213,6 +213,7 @@ export default function Expenses() {
     if (!editId) return;
     const match = allTransactions.find((t) => t.id === editId && t.type === 'expense');
     if (match) {
+      setDatePreset('all');
       startEdit(match);
       setSearchParams({}, { replace: true });
     }

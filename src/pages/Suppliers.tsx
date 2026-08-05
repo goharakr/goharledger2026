@@ -1,5 +1,5 @@
 import { useEffect, useState, Fragment } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -147,9 +147,25 @@ export default function Suppliers() {
   const [netChecked, setNetChecked] = useState(false);
   const [editingInvoiceId, setEditingInvoiceId] = usePersistentState<string | null>('suppliers.editingInvoiceId', null);
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
   useEffect(() => {
     fetchData();
   }, [refreshKey]);
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId) return;
+    const txn = transactions.find((t) => t.id === editId);
+    if (!txn || !txn.supplier_id) return;
+    const supp = suppliers.find((s) => s.id === txn.supplier_id);
+    if (!supp) return;
+    setSelectedSupplier(supp);
+    setTxnDatePreset('all');
+    if (txn.type === 'supplier_invoice') startEditInvoice(txn);
+    else if (txn.type === 'supplier_payment') startEditPayment(txn);
+    setSearchParams({}, { replace: true });
+  }, [transactions, suppliers, searchParams]);
 
   useEffect(() => {
     if (selectedSupplier) {

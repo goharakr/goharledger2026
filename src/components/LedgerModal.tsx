@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { X, Filter, Download, Trash2, Edit2, Save } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { X, Filter, Download, Trash2, Edit2 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, isSaleIncomplete, todayStr } from '../utils/format';
 import { useDataRefresh } from '../context/DataContext';
@@ -32,6 +33,7 @@ export default function LedgerModal({
   filterEmployeeId,
 }: LedgerModalProps) {
   const { refreshKey, triggerRefresh } = useDataRefresh();
+  const navigate = useNavigate();
   const [entries, setEntries] = useState<Transaction[]>([]);
   const [splits, setSplits] = useState<{ transaction_id: string; mode: string; amount: number }[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -43,8 +45,6 @@ export default function LedgerModal({
   const [customTo, setCustomTo] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
-  const [editingEntry, setEditingEntry] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ date: '', amount: '', notes: '' });
 
   const { from: fromDate, to: toDate } = getDatePresetRange(datePreset, customFrom, customTo);
 
@@ -195,91 +195,36 @@ export default function LedgerModal({
     triggerRefresh();
   }
 
-  function startEdit(txn: Transaction) {
-    setEditingEntry(txn.id);
-    setEditForm({
-      date: txn.date,
-      amount: String(txn.amount || ''),
-      notes: txn.notes || '',
-    });
+  // Every entry type now has a real full-form editor on its own home page
+  // (date/mode/amount/notes and whatever else that type needs) - Edit here
+  // jumps straight there with the form already open, instead of this modal
+  // having its own second, weaker date/amount/notes-only editor that could
+  // drift out of sync with the real one.
+  function getEditRoute(txn: Transaction): string | null {
+    switch (txn.type) {
+      case 'sale': return `/sales?edit=${txn.id}`;
+      case 'expense': return `/expenses?edit=${txn.id}`;
+      case 'customer_payment': return `/customers?edit=${txn.id}`;
+      case 'opening_balance': return txn.customer_id ? `/customers?edit=${txn.id}` : `/cash-bank?edit=${txn.id}`;
+      case 'supplier_invoice':
+      case 'supplier_payment': return `/suppliers?edit=${txn.id}`;
+      case 'loan_payment':
+      case 'capital_entry': return `/capital?edit=${txn.id}`;
+      case 'partner_draw':
+      case 'partner_loan': return `/partners?edit=${txn.id}${txn.partner_id ? `&partner=${txn.partner_id}` : ''}`;
+      case 'fund_transfer': return `/cash-bank?edit=${txn.id}`;
+      case 'employee_loan':
+      case 'employee_advance':
+      case 'employee_salary': return `/employees?edit=${txn.id}`;
+      default: return null;
+    }
   }
 
-  async function handleUpdateEntry() {
-    if (!editingEntry) return;
-    const txn = entries.find((e) => e.id === editingEntry);
-    if (!txn) return;
-
-    const newAmount = parseFloat(editForm.amount);
-    if (!editForm.amount || isNaN(newAmount) || newAmount <= 0) {
-      alert('Enter a valid amount greater than 0');
-      return;
-    }
-    if (!editForm.date) {
-      alert('Pick a date');
-      return;
-    }
-    if (txn.type === 'sale' && txn.primary_mode === 'split') {
-      alert('Split-mode sales can\'t have their amount edited here - void and re-enter it instead.');
-      return;
-    }
-    if ((txn.type === 'supplier_payment' || txn.type === 'customer_payment') && splits.some((sp) => sp.transaction_id === txn.transaction_id)) {
-      alert('This payment was settled using more than one source (cash and/or Home Expenses Owed / Profit Share / other balance) - it can\'t have its amount edited here. Void and re-enter it instead.');
-      return;
-    }
-    const delta = newAmount - (txn.amount || 0);
-
-    const updatePayload: Record<string, unknown> = {
-      date: editForm.date,
-      amount: newAmount,
-      notes: editForm.notes || null,
-      edited_at: new Date().toISOString(),
-    };
-    // Sales totals/profit read selling_price, not amount - keep them in sync
-    if (txn.type === 'sale') {
-      updatePayload.selling_price = newAmount;
-    }
-
-    const { error } = await supabase.from('transactions').update(updatePayload).eq('id', editingEntry);
-    if (error) { alert('Failed to save: ' + error.message); return; }
-
-    // Capital entries are mirrored here from the Capital page - keep the
-    // actual record in sync with whatever was just edited on the mirror
-    if (txn.type === 'capital_entry' && txn.transaction_id.startsWith('CAP-')) {
-      await supabase.from('capital_entries').update({
-        amount: newAmount,
-        description: editForm.notes || null,
-      }).eq('id', txn.transaction_id.slice(4));
-    }
-
-    // Keep any linked balance in sync with the amount change instead of
-    // letting it silently drift out of step with the edited transaction
-    if (delta !== 0) {
-      if (txn.type === 'sale') {
-        if (txn.customer_id && txn.primary_mode === 'credit') await adjustCustomerCredit(txn.customer_id, delta);
-        if (txn.customer_id && txn.primary_mode === 'advance') await adjustCustomerAdvance(txn.customer_id, -delta);
-        if (txn.supplier_id && txn.primary_mode === 'supplier') await adjustSupplierBalance(txn.supplier_id, -delta);
-      } else if (txn.type === 'customer_payment' && txn.customer_id) {
-        if (txn.description?.startsWith('Advance from')) await adjustCustomerAdvance(txn.customer_id, delta);
-        else await adjustCustomerCredit(txn.customer_id, -delta);
-      } else if (txn.type === 'supplier_payment' && txn.supplier_id) {
-        await adjustSupplierBalance(txn.supplier_id, -delta);
-      } else if (txn.type === 'supplier_invoice' && txn.supplier_id) {
-        await adjustSupplierBalance(txn.supplier_id, delta);
-      } else if (txn.type === 'expense') {
-        if (txn.supplier_id && (txn.category === 'supplier_payment' || txn.category === 'stock')) {
-          await adjustSupplierBalance(txn.supplier_id, -delta);
-        }
-        if (txn.loan_id) await adjustLoanBalance(txn.loan_id, delta);
-      } else if (txn.type === 'loan_payment' && txn.loan_id) {
-        await adjustLoanBalance(txn.loan_id, delta);
-      } else if (txn.type === 'opening_balance' && txn.customer_id) {
-        await adjustCustomerCredit(txn.customer_id, delta);
-      }
-    }
-
-    setEditingEntry(null);
-    fetchEntries();
-    triggerRefresh();
+  function goEditEntry(txn: Transaction) {
+    const route = getEditRoute(txn);
+    if (!route) return;
+    onClose();
+    navigate(route);
   }
 
   function exportCSV() {
@@ -381,18 +326,7 @@ export default function LedgerModal({
               <tbody className="divide-y divide-slate-100">
                 {filteredEntries.map((e) => (
                   <tr key={e.id} className={`hover:bg-slate-50 transition-colors ${isSaleIncomplete(e) ? 'bg-green-50' : ''}`} title={isSaleIncomplete(e) ? 'Missing payment mode, cost price, or selling price' : undefined}>
-                    {editingEntry === e.id ? (
-                      <td className="px-3 py-2">
-                        <input
-                          type="date"
-                          value={editForm.date}
-                          onChange={(ev) => setEditForm({ ...editForm, date: ev.target.value })}
-                          className="border border-slate-300 rounded px-2 py-1 text-sm"
-                        />
-                      </td>
-                    ) : (
-                      <td className="px-3 py-2 text-slate-600">{formatDate(e.date)}</td>
-                    )}
+                    <td className="px-3 py-2 text-slate-600">{formatDate(e.date)}</td>
                     <td className="px-3 py-2 text-slate-500 text-xs">{e.transaction_id}</td>
                     <td className="px-3 py-2">
                       <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 capitalize">
@@ -409,56 +343,26 @@ export default function LedgerModal({
                       )}
                     </td>
                     <td className="px-3 py-2 text-slate-600 text-xs">{getModeDisplay(e)}</td>
-                    {editingEntry === e.id ? (
-                      <td className="px-3 py-2">
-                        <input
-                          type="number"
-                          value={editForm.amount}
-                          onChange={(ev) => setEditForm({ ...editForm, amount: ev.target.value })}
-                          className="w-24 border border-slate-300 rounded px-2 py-1 text-sm text-right"
-                        />
-                      </td>
-                    ) : (
-                      <td className="px-3 py-2 text-right font-medium text-slate-800">{formatKES(e.amount)}</td>
-                    )}
+                    <td className="px-3 py-2 text-right font-medium text-slate-800">{formatKES(e.amount)}</td>
                     <td className="px-3 py-2 text-slate-500 text-xs capitalize">{e.created_by || '-'}</td>
                     <td className="px-3 py-2">
                       <div className="flex items-center justify-center gap-1">
-                        {editingEntry === e.id ? (
-                          <>
-                            <button
-                              onClick={handleUpdateEntry}
-                              className="p-1 hover:bg-emerald-100 rounded text-emerald-600"
-                              title="Save"
-                            >
-                              <Save size={14} />
-                            </button>
-                            <button
-                              onClick={() => setEditingEntry(null)}
-                              className="p-1 hover:bg-slate-200 rounded text-slate-600"
-                              title="Cancel"
-                            >
-                              <X size={14} />
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              onClick={() => startEdit(e)}
-                              className="p-1 hover:bg-slate-200 rounded"
-                              title="Edit"
-                            >
-                              <Edit2 size={14} className="text-slate-500" />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(e.id)}
-                              className="p-1 hover:bg-red-100 rounded"
-                              title="Delete/Void"
-                            >
-                              <Trash2 size={14} className="text-red-500" />
-                            </button>
-                          </>
+                        {getEditRoute(e) && (
+                          <button
+                            onClick={() => goEditEntry(e)}
+                            className="p-1 hover:bg-slate-200 rounded"
+                            title="Edit"
+                          >
+                            <Edit2 size={14} className="text-slate-500" />
+                          </button>
                         )}
+                        <button
+                          onClick={() => handleDelete(e.id)}
+                          className="p-1 hover:bg-red-100 rounded"
+                          title="Delete/Void"
+                        >
+                          <Trash2 size={14} className="text-red-500" />
+                        </button>
                       </div>
                     </td>
                   </tr>

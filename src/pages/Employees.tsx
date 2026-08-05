@@ -1,4 +1,5 @@
 import { useEffect, useState, Fragment } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Search, X, Edit2, Trash2, BookOpen } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, formatTime, todayStr } from '../utils/format';
@@ -73,9 +74,24 @@ export default function Employees() {
   const [editingTxnId, setEditingTxnId] = usePersistentState<string | null>('employees.editingTxnId', null);
   const [txnEditForm, setTxnEditForm] = usePersistentState('employees.txnEditForm', { date: '', amount: '', mode: 'cash', notes: '' });
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
   useEffect(() => {
     fetchData();
   }, [refreshKey]);
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId) return;
+    const txn = transactions.find((t) => t.id === editId && ['employee_loan', 'employee_advance', 'employee_salary'].includes(t.type));
+    if (!txn || !txn.employee_id) return;
+    const emp = employees.find((e) => e.id === txn.employee_id);
+    if (!emp) return;
+    setSelectedEmployee(emp);
+    setTxnDatePreset('all');
+    startEditTxn(txn);
+    setSearchParams({}, { replace: true });
+  }, [transactions, employees, searchParams]);
 
   useEffect(() => {
     if (selectedEmployee) {

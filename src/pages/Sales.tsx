@@ -172,6 +172,7 @@ export default function Sales() {
     if (!editId) return;
     const match = sales.find((s) => s.id === editId);
     if (match) {
+      setDatePreset('all');
       setExpandedDates((prev) => new Set(prev).add(match.date));
       startEdit(match);
       setSearchParams({}, { replace: true });

@@ -44,7 +44,7 @@ const emptyDraw: DrawForm = {
 export default function Partners() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
   const { user } = useAuth();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const partnerParam = searchParams.get('partner');
   const [activePartner, setActivePartner] = usePersistentState<'taher' | 'abdulqadir'>('partners.activePartner', () =>
     partnerParam === 'abdulqadir' || partnerParam === 'taher'
@@ -86,6 +86,20 @@ export default function Partners() {
   useEffect(() => {
     fetchData();
   }, [activePartner, refreshKey]);
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId) return;
+    const txn = transactions.find((t) => t.id === editId && (t.type === 'partner_draw' || t.type === 'partner_loan'));
+    if (!txn || !txn.partner_id) return;
+    if (txn.partner_id !== activePartner) {
+      setActivePartner(txn.partner_id as 'taher' | 'abdulqadir');
+      return;
+    }
+    setTakenPreset('all');
+    startEditTxn(txn);
+    setSearchParams({}, { replace: true });
+  }, [transactions, activePartner, searchParams]);
 
   async function fetchData() {
     setLoading(true);

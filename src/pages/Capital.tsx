@@ -1,4 +1,5 @@
 import { useEffect, useState, Fragment } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Plus,
   X,
@@ -108,9 +109,31 @@ export default function Capital() {
   });
   const [showLedger, setShowLedger] = useState(false);
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
   useEffect(() => {
     fetchData();
   }, [refreshKey]);
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId) return;
+    const payment = loanPayments.find((p) => p.id === editId);
+    if (payment) {
+      startEditLoanPayment(payment);
+      setSearchParams({}, { replace: true });
+      return;
+    }
+    const txn = capitalTxns.find((t) => t.id === editId);
+    if (txn) {
+      const entry = capitalEntries.find((c) => c.id === txn.transaction_id.slice(4));
+      if (entry) {
+        setHistoryDatePreset('all');
+        startEditCapital(entry);
+        setSearchParams({}, { replace: true });
+      }
+    }
+  }, [loanPayments, capitalTxns, capitalEntries, searchParams]);
 
   async function fetchData() {
     setLoading(true);
@@ -816,6 +839,10 @@ export default function Capital() {
               {loans.map((loan) => {
                 const progress = loan.total_amount > 0 ? Math.min(100, ((loan.total_amount - loan.remaining_balance) / loan.total_amount) * 100) : 0;
                 const payments = getLoanPayments(loan.id);
+                const top3Payments = payments.slice(0, 3);
+                const visiblePayments = editingLoanPaymentId && !top3Payments.some((p) => p.id === editingLoanPaymentId)
+                  ? [...top3Payments, ...payments.filter((p) => p.id === editingLoanPaymentId)]
+                  : top3Payments;
                 return (
                   <div key={loan.id} className="border border-slate-200 rounded-lg p-4">
                     <div className="flex items-center justify-between mb-2">
@@ -841,7 +868,7 @@ export default function Capital() {
                       <div className="mt-3 border-t border-slate-100 pt-2">
                         <p className="text-xs text-slate-500 mb-1">Payment History:</p>
                         <div className="space-y-1">
-                          {payments.slice(0, 3).map((p) => (
+                          {visiblePayments.map((p) => (
                             <Fragment key={p.id}>
                             <div className="flex justify-between items-center text-xs">
                               <span className="text-slate-500">{formatDate(p.date)}</span>

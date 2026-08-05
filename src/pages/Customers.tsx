@@ -1,4 +1,5 @@
 import { useEffect, useState, Fragment } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -126,9 +127,25 @@ export default function Customers() {
   const [txnCustomFrom, setTxnCustomFrom] = usePersistentState('customers.txnCustomFrom', '');
   const [txnCustomTo, setTxnCustomTo] = usePersistentState('customers.txnCustomTo', '');
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
   useEffect(() => {
     fetchData();
   }, [refreshKey]);
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId) return;
+    const txn = transactions.find((t) => t.id === editId);
+    if (!txn || !txn.customer_id) return;
+    const cust = customers.find((c) => c.id === txn.customer_id);
+    if (!cust) return;
+    setSelectedCustomer(cust);
+    setTxnDatePreset('all');
+    if (txn.type === 'opening_balance') startEditOpening(txn);
+    else if (txn.type === 'customer_payment') startEditPayment(txn);
+    setSearchParams({}, { replace: true });
+  }, [transactions, customers, searchParams]);
 
   useEffect(() => {
     if (selectedCustomer) {
