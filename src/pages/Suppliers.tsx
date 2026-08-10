@@ -238,21 +238,14 @@ export default function Suppliers() {
         notes: form.notes || null,
         is_dual_party: form.isDualParty,
         linked_partner_id: form.linkedPartnerId || null,
+        balance: newOpening,
       }).eq('id', editingId);
 
-      // Keep the opening balance in sync by delta, not by overwriting the whole
-      // balance - any real invoices/payments recorded since should not be wiped out.
       // Look up the mirror row directly (not from is_void-filtered state) so a
       // previously-voided row is found and revived instead of re-inserted, which
       // would fail against the transaction_id unique constraint.
       const txnId = openingBalanceTxnId(editingId);
       const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
-      const oldOpening = existing && !existing.is_void ? existing.amount || 0 : 0;
-      const delta = newOpening - oldOpening;
-
-      if (delta !== 0) {
-        await adjustSupplierBalance(editingId, delta);
-      }
 
       if (existing) {
         if (newOpening > 0) {
