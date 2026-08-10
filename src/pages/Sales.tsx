@@ -416,10 +416,11 @@ export default function Sales() {
       }
     }
 
-    // Not a hard block - just a heads-up. The sale still saves either way;
-    // profit will show as 0 until the cost price is filled in via Edit.
+    // Cancel goes back to the form so the user can fill in the Cost Price;
+    // OK saves anyway and profit will show as 0 until edited later.
     if (!form.costPrice || form.costPrice.trim() === '') {
-      alert('Cost Price not entered. The sale will still be saved - profit will show as 0 until you edit it later and fill in the real cost.');
+      const saveAnyway = confirm('Cost Price not entered. Click OK to save anyway (profit will show as 0 until you edit it later), or Cancel to go back and enter the Cost Price.');
+      if (!saveAnyway) return;
     }
 
     // The supplier split can't add up to more than the cost price itself -
