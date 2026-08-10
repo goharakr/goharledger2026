@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, formatTime, todayStr, isSaleIncomplete } from '../utils/format';
-import { adjustSupplierBalance, applySettlementSource, undoSettlementForTransaction, adjustPaymentAmount } from '../utils/balances';
+import { adjustSupplierBalance, recomputeSupplierBalance, applySettlementSource, undoSettlementForTransaction, adjustPaymentAmount } from '../utils/balances';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
@@ -238,7 +238,6 @@ export default function Suppliers() {
         notes: form.notes || null,
         is_dual_party: form.isDualParty,
         linked_partner_id: form.linkedPartnerId || null,
-        balance: newOpening,
       }).eq('id', editingId);
 
       // Look up the mirror row directly (not from is_void-filtered state) so a
@@ -246,6 +245,7 @@ export default function Suppliers() {
       // would fail against the transaction_id unique constraint.
       const txnId = openingBalanceTxnId(editingId);
       const { data: existing } = await supabase.from('transactions').select('*').eq('transaction_id', txnId).maybeSingle();
+      const oldOpening = existing && !existing.is_void ? existing.amount || 0 : 0;
 
       if (existing) {
         if (newOpening > 0) {
@@ -264,6 +264,19 @@ export default function Suppliers() {
           description: `Opening balance - ${form.name.trim()}`,
           created_by: user?.username || null,
         });
+      }
+
+      // A Dual (linked-partner) supplier's balance can move via a cross-balance
+      // offset that leaves no Invoice/Payment/Sale row on its own ledger, so a
+      // full recompute would silently drop that - shift by the difference
+      // instead for those. Everyone else gets recomputed from their real
+      // Invoice/Payment/Sale history, so a fixed typo can't leave Balance Owed
+      // out of sync with what the ledger actually shows.
+      if (form.isDualParty) {
+        const delta = newOpening - oldOpening;
+        if (delta !== 0) await adjustSupplierBalance(editingId, delta);
+      } else {
+        await recomputeSupplierBalance(editingId);
       }
     } else {
       const { data: newSupplier } = await supabase.from('suppliers').insert({
@@ -328,7 +341,14 @@ export default function Suppliers() {
         edited_at: new Date().toISOString(),
       }).eq('id', editingInvoiceId);
       if (error) { alert('Failed to save invoice: ' + error.message); return; }
-      if (delta !== 0) await adjustSupplierBalance(selectedSupplier.id, delta);
+      // See the Opening Balance comment above: a Dual supplier's balance can
+      // move via a cross-balance offset that leaves no row on its own ledger,
+      // so it still needs the safe delta shift instead of a full recompute.
+      if (selectedSupplier.is_dual_party) {
+        if (delta !== 0) await adjustSupplierBalance(selectedSupplier.id, delta);
+      } else {
+        await recomputeSupplierBalance(selectedSupplier.id);
+      }
       setEditingInvoiceId(null);
       setInvoiceForm(emptyInvoice);
       setShowInvoice(false);

@@ -25,6 +25,35 @@ export async function adjustSupplierBalance(supplierId: string, delta: number): 
   return true;
 }
 
+// Recomputes a supplier's balance from scratch from its own Invoice/Payment/
+// supplier-mode-Sale transactions, instead of shifting the existing balance by
+// a delta. Used after correcting an Opening Balance or Invoice amount, so a
+// fixed typo can't leave the balance out of sync with what the ledger actually
+// shows. NOT safe for a "Dual" (linked-partner) supplier - a cross-balance
+// offset payment can move its balance without leaving an Invoice/Payment/Sale
+// row on this supplier's own ledger, so a recompute here would silently drop
+// that adjustment. Callers must keep using adjustSupplierBalance's delta
+// approach for those instead.
+export async function recomputeSupplierBalance(supplierId: string): Promise<boolean> {
+  const { data: txns, error: selectError } = await supabase
+    .from('transactions')
+    .select('type, amount, primary_mode')
+    .eq('supplier_id', supplierId)
+    .eq('is_void', false);
+  if (selectError) { console.error('recomputeSupplierBalance: lookup failed', selectError); return false; }
+
+  let balance = 0;
+  for (const t of txns || []) {
+    if (t.type === 'supplier_invoice') balance += t.amount || 0;
+    else if (t.type === 'supplier_payment') balance -= t.amount || 0;
+    else if (t.type === 'sale' && t.primary_mode === 'supplier') balance -= t.amount || 0;
+  }
+
+  const { error } = await supabase.from('suppliers').update({ balance }).eq('id', supplierId);
+  if (error) { console.error('recomputeSupplierBalance: update failed', error); return false; }
+  return true;
+}
+
 export async function adjustCustomerCredit(customerId: string, delta: number): Promise<boolean> {
   const { data, error: selectError } = await supabase.from('customers').select('credit_balance').eq('id', customerId).single();
   if (selectError) { console.error('adjustCustomerCredit: could not read current balance', selectError); return false; }
