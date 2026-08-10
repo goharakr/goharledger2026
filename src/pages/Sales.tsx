@@ -593,15 +593,20 @@ export default function Sales() {
   async function handleBulkSave() {
     if (saving) return;
     const overAllocatedRows: number[] = [];
+    const noPriceRows: number[] = [];
+    const noCustomerRows: number[] = [];
+    const noSupplierRows: number[] = [];
+    const noSplitAmountRows: number[] = [];
     const validForms = bulkForms
       .map((f, originalIndex) => ({ f, originalIndex }))
       .filter(({ f, originalIndex }) => {
-        if (!f.sellingPrice || parseFloat(f.sellingPrice) <= 0) return false;
-        if ((f.mode === 'credit' || f.mode === 'advance') && !f.customerId) return false;
-        if (f.mode === 'supplier' && !f.supplierId) return false;
+        const rowTouched = !!(f.customerId || f.supplierId || f.notes || f.costPrice || f.commission);
+        if (!f.sellingPrice || parseFloat(f.sellingPrice) <= 0) { if (rowTouched) noPriceRows.push(originalIndex + 1); return false; }
+        if ((f.mode === 'credit' || f.mode === 'advance') && !f.customerId) { noCustomerRows.push(originalIndex + 1); return false; }
+        if (f.mode === 'supplier' && !f.supplierId) { noSupplierRows.push(originalIndex + 1); return false; }
         if (f.mode === 'split') {
           const splitTotal = parseFloat(f.splitMpesa || '0') + parseFloat(f.splitCash || '0') + parseFloat(f.splitPaybill || '0');
-          if (splitTotal <= 0) return false;
+          if (splitTotal <= 0) { noSplitAmountRows.push(originalIndex + 1); return false; }
         }
         // Same rule as the single Add Sale form: the supplier split can't add
         // up to more than the cost price - the rest is stock the shop
@@ -618,6 +623,18 @@ export default function Sales() {
       });
     if (overAllocatedRows.length > 0) {
       alert(`Row(s) ${overAllocatedRows.join(', ')}: supplier amounts add up to more than the Cost Price. Fix these rows before they can be saved - the rest will still save.`);
+    }
+    if (noCustomerRows.length > 0) {
+      alert(`Row(s) ${noCustomerRows.join(', ')}: no Customer picked for a Credit/Advance sale - these rows were NOT saved. Pick a customer and save them again.`);
+    }
+    if (noSupplierRows.length > 0) {
+      alert(`Row(s) ${noSupplierRows.join(', ')}: no Supplier picked for a Supplier sale - these rows were NOT saved. Pick a supplier and save them again.`);
+    }
+    if (noSplitAmountRows.length > 0) {
+      alert(`Row(s) ${noSplitAmountRows.join(', ')}: split sale has nothing entered for Mpesa, Cash, or Paybill - these rows were NOT saved.`);
+    }
+    if (noPriceRows.length > 0) {
+      alert(`Row(s) ${noPriceRows.join(', ')}: no Selling Price entered - these rows were NOT saved.`);
     }
     if (validForms.length === 0) return;
     setSaving(true);

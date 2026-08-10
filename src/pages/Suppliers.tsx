@@ -512,9 +512,17 @@ export default function Suppliers() {
   // to many different suppliers in one sitting, e.g. catching up on real data.
   async function handleBulkPaymentSave() {
     if (bulkPaymentSaving) return;
+    const noSupplierRows: number[] = [];
     const validForms = bulkPaymentForms
       .map((f, originalIndex) => ({ f, originalIndex }))
-      .filter(({ f }) => f.supplierId && f.amount && parseFloat(f.amount) > 0);
+      .filter(({ f, originalIndex }) => {
+        if (!f.amount || parseFloat(f.amount) <= 0) return false;
+        if (!f.supplierId) { noSupplierRows.push(originalIndex + 1); return false; }
+        return true;
+      });
+    if (noSupplierRows.length > 0) {
+      alert(`Row(s) ${noSupplierRows.join(', ')}: has an amount but no Supplier picked - these rows were NOT saved. Pick a supplier and save them again.`);
+    }
     if (validForms.length === 0) return;
     setBulkPaymentSaving(true);
     try {

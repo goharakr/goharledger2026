@@ -494,7 +494,11 @@ export default function Expenses() {
 
     // Handle supplier payment separately
     if (activeTab === 'suppliers') {
-      if (!form.supplierId) return;
+      if (!form.supplierId) {
+        const keepEditing = confirm('No Supplier picked. Click OK to go back and pick one, or Cancel to close this form without saving.');
+        if (!keepEditing) { setForm(emptyForm); setShowAdd(false); }
+        return;
+      }
       const supp = suppliers.find((s) => s.id === form.supplierId);
       if (!supp) return;
 
@@ -558,7 +562,11 @@ export default function Expenses() {
 
     // Handle loan payment separately
     if (activeTab === 'loans') {
-      if (!form.loanId) return;
+      if (!form.loanId) {
+        const keepEditing = confirm('No Loan picked. Click OK to go back and pick one, or Cancel to close this form without saving.');
+        if (!keepEditing) { setForm(emptyForm); setShowAdd(false); }
+        return;
+      }
       const loan = loans.find((l) => l.id === form.loanId);
       if (!loan) return;
 
@@ -586,7 +594,11 @@ export default function Expenses() {
 
     // Handle partner draw separately
     if (activeTab === 'partners') {
-      if (!form.partnerId) return;
+      if (!form.partnerId) {
+        const keepEditing = confirm('No Partner picked. Click OK to go back and pick one, or Cancel to close this form without saving.');
+        if (!keepEditing) { setForm(emptyForm); setShowAdd(false); }
+        return;
+      }
 
       const { data: newTxn, error } = await insertTransactionWithId('DRW-' + form.date.replace(/-/g, ''), (txnId) => ({
         transaction_id: txnId,
@@ -706,9 +718,17 @@ export default function Expenses() {
   // payments to many different suppliers in one sitting.
   async function handleBulkSupplierSave() {
     if (bulkSupplierSaving) return;
+    const noSupplierRows: number[] = [];
     const validForms = bulkSupplierForms
       .map((f, originalIndex) => ({ f, originalIndex }))
-      .filter(({ f }) => f.supplierId && f.amount && parseFloat(f.amount) > 0);
+      .filter(({ f, originalIndex }) => {
+        if (!f.amount || parseFloat(f.amount) <= 0) return false;
+        if (!f.supplierId) { noSupplierRows.push(originalIndex + 1); return false; }
+        return true;
+      });
+    if (noSupplierRows.length > 0) {
+      alert(`Row(s) ${noSupplierRows.join(', ')}: has an amount but no Supplier picked - these rows were NOT saved. Pick a supplier and save them again.`);
+    }
     if (validForms.length === 0) return;
     setBulkSupplierSaving(true);
     try {
