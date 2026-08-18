@@ -208,7 +208,7 @@ export default function Sales() {
 
   async function handleQuickAddCustomer() {
     const name = quickCustomer.name.trim();
-    if (!name) return;
+    if (!name) { alert('Enter a name before saving.'); return; }
     if (customers.some((c) => c.name.toLowerCase() === name.toLowerCase())) {
       alert('A customer with this name already exists.');
       return;
@@ -228,7 +228,7 @@ export default function Sales() {
 
   async function handleQuickAddSupplier() {
     const name = quickSupplier.name.trim();
-    if (!name) return;
+    if (!name) { alert('Enter a name before saving.'); return; }
     if (suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
       alert('A supplier with this name already exists.');
       return;
@@ -266,7 +266,7 @@ export default function Sales() {
   // available to every other row's dropdown right away too.
   async function handleBulkQuickAddCustomer(rowIndex: number) {
     const name = quickCustomer.name.trim();
-    if (!name) return;
+    if (!name) { alert('Enter a name before saving.'); return; }
     if (customers.some((c) => c.name.toLowerCase() === name.toLowerCase())) {
       alert('A customer with this name already exists.');
       return;
@@ -290,7 +290,7 @@ export default function Sales() {
 
   async function handleBulkQuickAddSupplier(rowIndex: number) {
     const name = quickSupplier.name.trim();
-    if (!name) return;
+    if (!name) { alert('Enter a name before saving.'); return; }
     if (suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
       alert('A supplier with this name already exists.');
       return;
@@ -327,7 +327,7 @@ export default function Sales() {
 
   async function handleBulkQuickAddCostSupplier(rowIndex: number, subIndex: number) {
     const name = quickCostSupplier.name.trim();
-    if (!name) return;
+    if (!name) { alert('Enter a name before saving.'); return; }
     if (suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
       alert('A supplier with this name already exists.');
       return;
@@ -352,7 +352,14 @@ export default function Sales() {
   }
 
   async function handleDepositAdvance() {
-    if (!advanceDepositForm.customerId || !advanceDepositForm.amount || parseFloat(advanceDepositForm.amount) <= 0) return;
+    if (!advanceDepositForm.customerId) {
+      alert('Pick a Customer before saving.');
+      return;
+    }
+    if (!advanceDepositForm.amount || parseFloat(advanceDepositForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
 
     const amt = parseFloat(advanceDepositForm.amount);
     const customer = customers.find((c) => c.id === advanceDepositForm.customerId);
@@ -381,7 +388,7 @@ export default function Sales() {
 
   async function handleQuickAddCostSupplier(subIndex: number) {
     const name = quickCostSupplier.name.trim();
-    if (!name) return;
+    if (!name) { alert('Enter a name before saving.'); return; }
     if (suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
       alert('A supplier with this name already exists.');
       return;
@@ -1049,7 +1056,10 @@ export default function Sales() {
     if (saving) return;
     if (!refundingSale) return;
     const amount = parseFloat(refundForm.amount);
-    if (!amount || amount <= 0) return;
+    if (!amount || amount <= 0) {
+      alert('Enter an Amount to refund before saving.');
+      return;
+    }
 
     const maxRefundable = refundableAmount(refundingSale);
     if (amount > maxRefundable) {
@@ -1151,9 +1161,20 @@ export default function Sales() {
     if (!editingId) return;
     const oldTxn = sales.find((s) => s.id === editingId);
     if (!oldTxn) return;
-    if (!form.sellingPrice || parseFloat(form.sellingPrice) <= 0) return;
-    if ((form.mode === 'credit' || form.mode === 'advance') && !form.customerId) return;
-    if (form.mode === 'supplier' && !form.supplierId) return;
+    if (!form.sellingPrice || parseFloat(form.sellingPrice) <= 0) {
+      alert('Enter a Selling Price before saving.');
+      return;
+    }
+    if ((form.mode === 'credit' || form.mode === 'advance') && !form.customerId) {
+      const keepEditing = confirm('No Customer picked. Click OK to go back and pick one, or Cancel to close without saving.');
+      if (!keepEditing) { setShowAdd(false); setEditingId(null); }
+      return;
+    }
+    if (form.mode === 'supplier' && !form.supplierId) {
+      const keepEditing = confirm('No Supplier picked. Click OK to go back and pick one, or Cancel to close without saving.');
+      if (!keepEditing) { setShowAdd(false); setEditingId(null); }
+      return;
+    }
     if (form.mode === 'split') {
       const splitTotal = parseFloat(form.splitMpesa || '0') + parseFloat(form.splitCash || '0') + parseFloat(form.splitPaybill || '0');
       if (splitTotal <= 0) {

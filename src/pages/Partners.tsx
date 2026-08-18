@@ -206,7 +206,10 @@ export default function Partners() {
   }
 
   async function handleDraw() {
-    if (!drawForm.amount || parseFloat(drawForm.amount) <= 0) return;
+    if (!drawForm.amount || parseFloat(drawForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
 
     const amt = parseFloat(drawForm.amount);
     const { data: newTxn, error } = await insertTransactionWithId('DRW-' + drawForm.date.replace(/-/g, ''), (txnId) => ({
@@ -229,7 +232,10 @@ export default function Partners() {
   }
 
   async function handleReturn() {
-    if (!returnForm.amount || parseFloat(returnForm.amount) <= 0) return;
+    if (!returnForm.amount || parseFloat(returnForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
 
     const amt = parseFloat(returnForm.amount);
     const { data: newTxn, error } = await insertTransactionWithId('RET-' + returnForm.date.replace(/-/g, ''), (txnId) => ({
@@ -252,7 +258,11 @@ export default function Partners() {
   }
 
   async function handleMarkTaken() {
-    if (!showMarkTaken || !markForm.amount || parseFloat(markForm.amount) <= 0) return;
+    if (!showMarkTaken) return;
+    if (!markForm.amount || parseFloat(markForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
 
     const amt = parseFloat(markForm.amount);
     const isProfitShare = showMarkTaken.type === 'profit';

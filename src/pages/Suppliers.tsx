@@ -209,7 +209,7 @@ export default function Suppliers() {
 
   async function handleSaveSupplier() {
     const name = form.name.trim();
-    if (!name) return;
+    if (!name) { alert('Enter a name before saving.'); return; }
     if (!editingId && suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
       alert('A supplier with this name already exists.');
       return;
@@ -325,7 +325,11 @@ export default function Suppliers() {
   }
 
   async function handleAddInvoice() {
-    if (!selectedSupplier || !invoiceForm.amount || parseFloat(invoiceForm.amount) <= 0) return;
+    if (!selectedSupplier) return;
+    if (!invoiceForm.amount || parseFloat(invoiceForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
 
     const amt = parseFloat(invoiceForm.amount);
 
@@ -416,7 +420,11 @@ export default function Suppliers() {
   }
 
   async function handlePayment() {
-    if (!selectedSupplier || !paymentForm.amount || parseFloat(paymentForm.amount) <= 0) return;
+    if (!selectedSupplier) return;
+    if (!paymentForm.amount || parseFloat(paymentForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
 
     const amt = parseFloat(paymentForm.amount);
     const linkedPartnerId = selectedSupplier.linked_partner_id;

@@ -127,7 +127,7 @@ export default function Employees() {
 
   async function handleSaveEmployee() {
     const name = form.name.trim();
-    if (!name) return;
+    if (!name) { alert('Enter a name before saving.'); return; }
     if (!editingId && employees.some((e) => e.name.toLowerCase() === name.toLowerCase())) {
       alert('An employee with this name already exists.');
       return;
@@ -209,7 +209,11 @@ export default function Employees() {
   }
 
   async function handleGiveLoan() {
-    if (!selectedEmployee || !loanForm.amount || parseFloat(loanForm.amount) <= 0) return;
+    if (!selectedEmployee) return;
+    if (!loanForm.amount || parseFloat(loanForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
     const { error } = await giveEmployeeLoan(selectedEmployee.id, loanForm.date, parseFloat(loanForm.amount), loanForm.mode, loanForm.notes || null, user?.username || null, loanForm.noRealCash);
     if (error) { alert('Failed to save loan: ' + error.message); return; }
     setLoanForm(emptyLoanAdvance());
@@ -219,7 +223,11 @@ export default function Employees() {
   }
 
   async function handleGiveAdvance() {
-    if (!selectedEmployee || !advanceForm.amount || parseFloat(advanceForm.amount) <= 0) return;
+    if (!selectedEmployee) return;
+    if (!advanceForm.amount || parseFloat(advanceForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
     const { error } = await giveEmployeeAdvance(selectedEmployee.id, advanceForm.date, parseFloat(advanceForm.amount), advanceForm.mode, advanceForm.notes || null, user?.username || null, advanceForm.noRealCash);
     if (error) { alert('Failed to save advance: ' + error.message); return; }
     setAdvanceForm(emptyLoanAdvance());

@@ -115,8 +115,14 @@ export default function CashBank() {
   }
 
   async function handleTransfer() {
-    if (!transferForm.amount || parseFloat(transferForm.amount) <= 0) return;
-    if (transferForm.fromMode === transferForm.toMode) return;
+    if (!transferForm.amount || parseFloat(transferForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
+    if (transferForm.fromMode === transferForm.toMode) {
+      alert('From and To must be different modes.');
+      return;
+    }
 
     const amt = parseFloat(transferForm.amount);
     const desc = `${transferForm.fromMode} to ${transferForm.toMode}`;
@@ -183,7 +189,10 @@ export default function CashBank() {
 
   async function handleSetOpeningBalance() {
     const amt = parseFloat(openingAmount || '0');
-    if (amt < 0) return;
+    if (amt < 0) {
+      alert('Opening Balance cannot be negative.');
+      return;
+    }
 
     // Look up the mirror row directly (not from is_void-filtered state) so a
     // previously-voided row is found and revived instead of re-inserted, which

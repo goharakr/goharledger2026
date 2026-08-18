@@ -167,7 +167,10 @@ export default function Capital() {
   }
 
   async function handleSaveCapital() {
-    if (!capitalForm.amount || parseFloat(capitalForm.amount) <= 0) return;
+    if (!capitalForm.amount || parseFloat(capitalForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
 
     const { data: entry } = await supabase.from('capital_entries').insert({
       partner_id: capitalForm.partnerId,
@@ -215,7 +218,11 @@ export default function Capital() {
   }
 
   async function handleUpdateCapital() {
-    if (!editingCapitalId || !capitalForm.amount || parseFloat(capitalForm.amount) <= 0) return;
+    if (!editingCapitalId) return;
+    if (!capitalForm.amount || parseFloat(capitalForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
 
     const payload = {
       partner_id: capitalForm.partnerId,
@@ -254,7 +261,11 @@ export default function Capital() {
   }
 
   async function handleLoanPayment() {
-    if (!selectedLoan || !loanPaymentForm.amount || parseFloat(loanPaymentForm.amount) <= 0) return;
+    if (!selectedLoan) return;
+    if (!loanPaymentForm.amount || parseFloat(loanPaymentForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
 
     const amt = parseFloat(loanPaymentForm.amount);
     const loan = loans.find((l) => l.id === selectedLoan);
@@ -321,7 +332,8 @@ export default function Capital() {
   }
 
   async function handleAddLoan() {
-    if (!newLoanForm.loanName.trim() || !newLoanForm.totalAmount) return;
+    if (!newLoanForm.loanName.trim()) { alert('Enter a Loan Name before saving.'); return; }
+    if (!newLoanForm.totalAmount) { alert('Enter a Total Amount before saving.'); return; }
     const total = parseFloat(newLoanForm.totalAmount);
     if (isNaN(total) || total <= 0) { alert('Enter a valid total amount greater than 0'); return; }
 
@@ -353,7 +365,8 @@ export default function Capital() {
 
   async function handleEditLoan() {
     if (!showEditLoan) return;
-    if (!editLoanForm.loanName.trim() || !editLoanForm.totalAmount) return;
+    if (!editLoanForm.loanName.trim()) { alert('Enter a Loan Name before saving.'); return; }
+    if (!editLoanForm.totalAmount) { alert('Enter a Total Amount before saving.'); return; }
     const total = parseFloat(editLoanForm.totalAmount);
     const paid = parseFloat(editLoanForm.amountPaid || '0');
     if (isNaN(total) || total <= 0 || isNaN(paid) || paid < 0) {
@@ -387,7 +400,8 @@ export default function Capital() {
   // existed, and mirroring it would double-count that profit against the live
   // transactions Reports/Dashboard already compute for the current period.
   async function handleSaveHistorical() {
-    if (!historicalForm.month || !historicalForm.totalProfit) return;
+    if (!historicalForm.month) { alert('Pick a Month before saving.'); return; }
+    if (!historicalForm.totalProfit) { alert('Enter a Total Profit before saving.'); return; }
 
     const totalProfit = parseFloat(historicalForm.totalProfit);
     const taherShare = parseFloat(historicalForm.taherShare || '0');
@@ -437,7 +451,9 @@ export default function Capital() {
   }
 
   async function handleUpdateHistorical() {
-    if (!editingHistoricalId || !historicalForm.month || !historicalForm.totalProfit) return;
+    if (!editingHistoricalId) return;
+    if (!historicalForm.month) { alert('Pick a Month before saving.'); return; }
+    if (!historicalForm.totalProfit) { alert('Enter a Total Profit before saving.'); return; }
 
     const totalProfit = parseFloat(historicalForm.totalProfit);
     const taherShare = parseFloat(historicalForm.taherShare || '0');

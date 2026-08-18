@@ -303,7 +303,7 @@ export default function Expenses() {
 
   async function handleQuickAddSupplier() {
     const name = quickSupplier.name.trim();
-    if (!name) return;
+    if (!name) { alert('Enter a name before saving.'); return; }
     if (suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
       alert('A supplier with this name already exists.');
       return;
@@ -339,7 +339,7 @@ export default function Expenses() {
   // other row's dropdown right away too.
   async function handleBulkQuickAddSupplier(rowIndex: number) {
     const name = quickSupplier.name.trim();
-    if (!name) return;
+    if (!name) { alert('Enter a name before saving.'); return; }
     if (suppliers.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
       alert('A supplier with this name already exists.');
       return;
@@ -472,7 +472,7 @@ export default function Expenses() {
   }
 
   async function handleSaveCategory() {
-    if (!newCategoryName.trim()) return;
+    if (!newCategoryName.trim()) { alert('Enter a Category Name before saving.'); return; }
     await supabase.from('expense_categories').insert({
       name: newCategoryName.trim().toLowerCase().replace(/\s+/g, '_'),
       description: newCategoryDesc || null,

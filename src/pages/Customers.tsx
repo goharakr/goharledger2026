@@ -193,7 +193,7 @@ export default function Customers() {
 
   async function handleSaveCustomer() {
     const name = form.name.trim();
-    if (!name) return;
+    if (!name) { alert('Enter a name before saving.'); return; }
     if (customers.some((c) => c.name.toLowerCase() === name.toLowerCase())) {
       alert('A customer with this name already exists.');
       return;
@@ -260,7 +260,8 @@ export default function Customers() {
   }
 
   async function handleUpdateCustomer() {
-    if (!selectedCustomer || !form.name.trim()) return;
+    if (!selectedCustomer) return;
+    if (!form.name.trim()) { alert('Enter a name before saving.'); return; }
 
     if (form.linkedPartnerId && form.linkedPartnerId !== (selectedCustomer.linked_partner_id || '')) {
       const partnerLabel = form.linkedPartnerId === 'abdulqadir' ? 'Abdulqadir' : 'Taher';
@@ -359,7 +360,11 @@ export default function Customers() {
   }
 
   async function handlePayment() {
-    if (!selectedCustomer || !paymentForm.amount || parseFloat(paymentForm.amount) <= 0) return;
+    if (!selectedCustomer) return;
+    if (!paymentForm.amount || parseFloat(paymentForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
 
     const amt = parseFloat(paymentForm.amount);
     const linkedPartnerId = selectedCustomer.linked_partner_id;
@@ -461,7 +466,11 @@ export default function Customers() {
   }
 
   async function handleAddAdvance() {
-    if (!selectedCustomer || !paymentForm.amount || parseFloat(paymentForm.amount) <= 0) return;
+    if (!selectedCustomer) return;
+    if (!paymentForm.amount || parseFloat(paymentForm.amount) <= 0) {
+      alert('Enter an Amount before saving.');
+      return;
+    }
 
     const amt = parseFloat(paymentForm.amount);
 
