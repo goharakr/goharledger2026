@@ -405,9 +405,20 @@ export default function Sales() {
 
   async function handleSave() {
     if (saving) return;
-    if (!form.sellingPrice || parseFloat(form.sellingPrice) <= 0) return;
-    if ((form.mode === 'credit' || form.mode === 'advance') && !form.customerId) return;
-    if (form.mode === 'supplier' && !form.supplierId) return;
+    if (!form.sellingPrice || parseFloat(form.sellingPrice) <= 0) {
+      alert('Enter a Selling Price before saving.');
+      return;
+    }
+    if ((form.mode === 'credit' || form.mode === 'advance') && !form.customerId) {
+      const keepEditing = confirm('No Customer picked. Click OK to go back and pick one, or Cancel to close this form without saving.');
+      if (!keepEditing) { setForm(emptyForm); setShowAdd(false); }
+      return;
+    }
+    if (form.mode === 'supplier' && !form.supplierId) {
+      const keepEditing = confirm('No Supplier picked. Click OK to go back and pick one, or Cancel to close this form without saving.');
+      if (!keepEditing) { setForm(emptyForm); setShowAdd(false); }
+      return;
+    }
     if (form.mode === 'split') {
       const splitTotal = parseFloat(form.splitMpesa || '0') + parseFloat(form.splitCash || '0') + parseFloat(form.splitPaybill || '0');
       if (splitTotal <= 0) {
