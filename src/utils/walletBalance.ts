@@ -82,6 +82,17 @@ export function computeWalletBalance(
         if (t.primary_mode === 'mpesa') mpesa -= t.amount;
         else if (t.primary_mode === 'cash') cash -= t.amount;
         else if (t.primary_mode === 'paybill') bank -= t.amount;
+        // An Extra Payment Line lets one expense be paid across more than
+        // one mode (or the same mode more than once) - stored as
+        // transaction_splits, same shape a Split sale already uses.
+        else if (t.primary_mode === 'split') {
+          const s = splitMap.get(t.transaction_id) || [];
+          s.forEach((sp) => {
+            if (sp.mode === 'mpesa') mpesa -= sp.amount;
+            else if (sp.mode === 'cash') cash -= sp.amount;
+            else if (sp.mode === 'paybill') bank -= sp.amount;
+          });
+        }
       }
     } else if (t.type === 'fund_transfer') {
       const desc = (t.description || '').toLowerCase();
@@ -106,6 +117,18 @@ export function computeWalletBalance(
         if (t.primary_mode === 'mpesa') mpesa -= t.amount;
         else if (t.primary_mode === 'cash') cash -= t.amount;
         else if (t.primary_mode === 'paybill') bank -= t.amount;
+        // An Extra Payment Line lets one payment be paid across more than
+        // one real mode - transaction_splits rows here may also include
+        // non-cash settlement sources (Home Expense Owed etc.), which are
+        // correctly ignored since only cash/mpesa/paybill are matched.
+        else if (t.primary_mode === 'split') {
+          const s = splitMap.get(t.transaction_id) || [];
+          s.forEach((sp) => {
+            if (sp.mode === 'mpesa') mpesa -= sp.amount;
+            else if (sp.mode === 'cash') cash -= sp.amount;
+            else if (sp.mode === 'paybill') bank -= sp.amount;
+          });
+        }
       }
     } else if (t.type === 'partner_draw') {
       if (t.primary_mode === 'mpesa') mpesa -= t.amount;

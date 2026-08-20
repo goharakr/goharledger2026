@@ -275,8 +275,15 @@ export default function CashBank() {
             if (t.primary_mode === 'mpesa') debit += t.amount;
             else if (t.primary_mode === 'cash') debit += t.amount;
             else if (t.primary_mode === 'paybill') debit += t.amount;
+            else if (t.primary_mode === 'split') {
+              const s = splitMap.get(t.transaction_id) || [];
+              s.forEach((sp) => debit += sp.amount);
+            }
           } else if (t.primary_mode === mode) {
             debit += t.amount;
+          } else if (t.primary_mode === 'split') {
+            const s = splitMap.get(t.transaction_id) || [];
+            s.filter((x) => x.mode === mode).forEach((x) => debit += x.amount);
           }
         }
       } else if (t.type === 'customer_payment') {
@@ -284,7 +291,25 @@ export default function CashBank() {
       } else if (t.type === 'opening_balance') {
         if (mode === 'all' || t.primary_mode === mode) credit += t.amount;
       } else if (t.type === 'supplier_payment') {
-        if (!(t.clears_on && t.clears_on > todayStr()) && (mode === 'all' || t.primary_mode === mode)) debit += t.amount;
+        const isPendingClear = t.clears_on && t.clears_on > todayStr();
+        if (!isPendingClear) {
+          if (mode === 'all') {
+            if (t.primary_mode === 'split') {
+              // Real-money lines only - a settlement source (Home Expense
+              // Owed etc.) can share these same split rows and must not be
+              // counted as cash moving here.
+              const s = splitMap.get(t.transaction_id) || [];
+              s.filter((x) => x.mode === 'cash' || x.mode === 'mpesa' || x.mode === 'paybill').forEach((x) => debit += x.amount);
+            } else if (t.primary_mode) {
+              debit += t.amount;
+            }
+          } else if (t.primary_mode === mode) {
+            debit += t.amount;
+          } else if (t.primary_mode === 'split') {
+            const s = splitMap.get(t.transaction_id) || [];
+            s.filter((x) => x.mode === mode).forEach((x) => debit += x.amount);
+          }
+        }
       } else if (t.type === 'partner_draw') {
         if (mode === 'all' || t.primary_mode === mode) debit += t.amount;
       } else if (t.type === 'partner_loan') {

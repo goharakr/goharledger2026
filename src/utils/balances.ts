@@ -217,6 +217,15 @@ export async function adjustPaymentAmount(
     .eq('transaction_id', txn.transaction_id);
   if (splitsError) return { ok: false, error: splitsError.message };
 
+  // An Extra Payment Line can leave more than one cash/mpesa/paybill split
+  // row on the same payment - this simple editor only knows how to adjust
+  // a single cash amount, so it can't safely absorb a delta into one of
+  // several without silently orphaning the others.
+  const cashSplitCount = (splits || []).filter((s) => CASH_SPLIT_MODES.includes(s.mode)).length;
+  if (cashSplitCount > 1) {
+    return { ok: false, error: 'This payment was paid across more than one real payment line (e.g. Mpesa paid twice) - it can\'t be edited here. Void it and re-enter it instead.' };
+  }
+
   const nonCashTotal = (splits || [])
     .filter((s) => !CASH_SPLIT_MODES.includes(s.mode))
     .reduce((sum, s) => sum + (s.amount || 0), 0);

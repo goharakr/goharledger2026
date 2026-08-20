@@ -60,6 +60,11 @@ interface PaymentForm {
   clearsOn: string;
   transactionFee: string;
   settlement: SettlementAmounts;
+  // Extra real-money lines on top of the main Mode above - e.g. paid partly
+  // Cash and partly Mpesa, or Mpesa paid in several separate amounts. Empty
+  // for a normal single-mode payment (the untouched, original save path is
+  // used whenever this is empty).
+  extraLines: { mode: 'cash' | 'mpesa' | 'paybill'; amount: string }[];
 }
 
 const emptySupplier: SupplierForm = {
@@ -89,6 +94,7 @@ const emptyPayment: PaymentForm = {
   clearsOn: '',
   transactionFee: '',
   settlement: emptySettlementAmounts,
+  extraLines: [],
 };
 
 interface BulkPaymentRow {
@@ -431,6 +437,10 @@ export default function Suppliers() {
       alert('Enter an Amount before saving.');
       return;
     }
+    if (paymentForm.extraLines.some((l) => parseFloat(l.amount || '0') <= 0)) {
+      alert('Every extra payment line needs an amount before saving - remove any empty ones.');
+      return;
+    }
 
     const amt = parseFloat(paymentForm.amount);
     const linkedPartnerId = selectedSupplier.linked_partner_id;
@@ -440,22 +450,31 @@ export default function Suppliers() {
 
     if (settlementTotal > amt) { alert('The settlement amounts add up to more than the total payment amount.'); return; }
 
+    // Extra Payment Lines split the real-cash portion (cashAmt) across more
+    // than one mode, or the same mode more than once (e.g. Mpesa paid 3
+    // times) - the main Mode box becomes whatever's left after them.
+    const extraTotal = paymentForm.extraLines.reduce((s, l) => s + (parseFloat(l.amount || '0') || 0), 0);
+    const mainCashAmt = cashAmt - extraTotal;
+    if (mainCashAmt < -0.01) { alert(`Extra payment lines (KES ${extraTotal.toLocaleString()}) add up to more than the real-cash part of this payment (KES ${cashAmt.toLocaleString()}).`); return; }
+    const usesExtraLines = paymentForm.extraLines.length > 0;
+
     if (linkedPartnerId && settlementTotal > 0) {
       const available = computeSettlementAvailable(transactions, shareRules, historicalProfit, linkedPartnerId, linkedCustomer?.credit_balance || 0);
       const warnings = findSettlementOverflows(paymentForm.settlement, available, "Mohamedi's Customer Balance");
       if (warnings.length > 0 && !confirm(warnings.join('\n\n') + '\n\nContinue?')) return;
     }
 
+    const primaryMode = usesExtraLines ? 'split' : (cashAmt > 0 ? paymentForm.mode : null);
     const { data: newTxn, error } = await insertTransactionWithId('SUP-' + paymentForm.date.replace(/-/g, ''), (txnId) => ({
       transaction_id: txnId,
       date: paymentForm.date,
       type: 'supplier_payment',
-      primary_mode: cashAmt > 0 ? (paymentForm.mode as any) : null,
+      primary_mode: primaryMode as any,
       amount: amt,
       supplier_id: selectedSupplier.id,
       description: `Payment to ${selectedSupplier.name}`,
       notes: paymentForm.notes || null,
-      clears_on: paymentForm.mode === 'paybill' && paymentForm.isPostDated && paymentForm.clearsOn ? paymentForm.clearsOn : null,
+      clears_on: !usesExtraLines && paymentForm.mode === 'paybill' && paymentForm.isPostDated && paymentForm.clearsOn ? paymentForm.clearsOn : null,
       created_by: user?.username || null,
     }));
     if (error || !newTxn) { console.error(error); alert('Failed to save payment: ' + (error?.message || 'unknown error')); return; }
@@ -463,7 +482,12 @@ export default function Suppliers() {
     await adjustSupplierBalance(selectedSupplier.id, -amt);
 
     const splitRows: { transaction_id: string; mode: string; amount: number }[] = [];
-    if (cashAmt > 0) splitRows.push({ transaction_id: newTxn.transaction_id, mode: paymentForm.mode, amount: cashAmt });
+    if (usesExtraLines) {
+      if (mainCashAmt > 0.01) splitRows.push({ transaction_id: newTxn.transaction_id, mode: paymentForm.mode, amount: mainCashAmt });
+      paymentForm.extraLines.forEach((l) => splitRows.push({ transaction_id: newTxn.transaction_id, mode: l.mode, amount: parseFloat(l.amount) }));
+    } else if (cashAmt > 0) {
+      splitRows.push({ transaction_id: newTxn.transaction_id, mode: paymentForm.mode, amount: cashAmt });
+    }
 
     if (linkedPartnerId && settlementTotal > 0) {
       const ctx = {
@@ -1492,6 +1516,53 @@ export default function Suppliers() {
                   )}
                 </div>
               )}
+              {/* Extra payment lines - e.g. paid partly Cash and partly Mpesa,
+                  or Mpesa paid in several separate amounts. */}
+              <div className="space-y-1.5 border border-slate-200 rounded p-2">
+                <p className="text-xs font-medium text-slate-600">Extra payment lines (optional)</p>
+                {paymentForm.extraLines.map((line, idx) => (
+                  <div key={idx} className="flex gap-1.5 items-center">
+                    <select
+                      value={line.mode}
+                      onChange={(e) => {
+                        const extraLines = [...paymentForm.extraLines];
+                        extraLines[idx] = { ...extraLines[idx], mode: e.target.value as 'cash' | 'mpesa' | 'paybill' };
+                        setPaymentForm({ ...paymentForm, extraLines });
+                      }}
+                      className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    >
+                      <option value="cash">Cash</option>
+                      <option value="mpesa">Mpesa</option>
+                      <option value="paybill">Paybill</option>
+                    </select>
+                    <input
+                      type="number"
+                      value={line.amount}
+                      onChange={(e) => {
+                        const extraLines = [...paymentForm.extraLines];
+                        extraLines[idx] = { ...extraLines[idx], amount: e.target.value };
+                        setPaymentForm({ ...paymentForm, extraLines });
+                      }}
+                      placeholder="Amount"
+                      className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setPaymentForm({ ...paymentForm, extraLines: paymentForm.extraLines.filter((_, i) => i !== idx) })}
+                      className="p-1.5 text-slate-400 hover:text-red-600 shrink-0"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setPaymentForm({ ...paymentForm, extraLines: [...paymentForm.extraLines, { mode: 'cash', amount: '' }] })}
+                  className="text-xs text-emerald-700 hover:text-emerald-800 font-medium"
+                >
+                  + Add another payment line
+                </button>
+              </div>
               {selectedSupplier.linked_partner_id && (
                 <SettlementModeFields
                   partnerLabel={selectedSupplier.linked_partner_id === 'abdulqadir' ? 'Abdulqadir' : 'Taher'}
