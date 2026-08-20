@@ -629,6 +629,16 @@ export default function Suppliers() {
     if (txn.supplier_id && txn.type === 'sale' && txn.primary_mode === 'supplier') {
       await adjustSupplierBalance(txn.supplier_id, txn.selling_price ?? txn.amount ?? 0);
     }
+    // A 'split' sale can have one Extra Payment Line billed to this supplier
+    // instead of real cash - not caught by primary_mode === 'supplier' above.
+    if (txn.supplier_id && txn.type === 'sale' && txn.primary_mode === 'split') {
+      const { data: splitRows } = await supabase.from('transaction_splits').select('mode, amount').eq('transaction_id', txn.transaction_id);
+      const realSum = (splitRows || [])
+        .filter((s) => s.mode === 'cash' || s.mode === 'mpesa' || s.mode === 'paybill')
+        .reduce((s, x) => s + x.amount, 0);
+      const nonCash = (txn.selling_price ?? txn.amount ?? 0) - realSum;
+      if (nonCash > 0.01) await adjustSupplierBalance(txn.supplier_id, nonCash);
+    }
 
     const { error } = await supabase.from('transactions').update({ is_void: true }).eq('id', id);
     if (error) { alert('Failed to void: ' + error.message); return; }

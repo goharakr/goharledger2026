@@ -37,16 +37,34 @@ export async function adjustSupplierBalance(supplierId: string, delta: number): 
 export async function recomputeSupplierBalance(supplierId: string): Promise<boolean> {
   const { data: txns, error: selectError } = await supabase
     .from('transactions')
-    .select('type, amount, primary_mode')
+    .select('type, amount, primary_mode, transaction_id')
     .eq('supplier_id', supplierId)
     .eq('is_void', false);
   if (selectError) { console.error('recomputeSupplierBalance: lookup failed', selectError); return false; }
+
+  // A 'split' sale can have one Extra Payment Line billed to this supplier
+  // instead of real cash - it's not caught by primary_mode === 'supplier'
+  // above, so work out each one's non-cash portion from its real splits.
+  const splitSaleIds = (txns || []).filter((t) => t.type === 'sale' && t.primary_mode === 'split').map((t) => t.transaction_id);
+  const splitRealSums: Record<string, number> = {};
+  if (splitSaleIds.length > 0) {
+    const { data: splitRows } = await supabase.from('transaction_splits').select('transaction_id, mode, amount').in('transaction_id', splitSaleIds);
+    (splitRows || []).forEach((s) => {
+      if (s.mode === 'cash' || s.mode === 'mpesa' || s.mode === 'paybill') {
+        splitRealSums[s.transaction_id] = (splitRealSums[s.transaction_id] || 0) + s.amount;
+      }
+    });
+  }
 
   let balance = 0;
   for (const t of txns || []) {
     if (t.type === 'supplier_invoice') balance += t.amount || 0;
     else if (t.type === 'supplier_payment') balance -= t.amount || 0;
     else if (t.type === 'sale' && t.primary_mode === 'supplier') balance -= t.amount || 0;
+    else if (t.type === 'sale' && t.primary_mode === 'split') {
+      const nonCash = (t.amount || 0) - (splitRealSums[t.transaction_id] || 0);
+      if (nonCash > 0.01) balance -= nonCash;
+    }
   }
 
   const { error } = await supabase.from('suppliers').update({ balance }).eq('id', supplierId);
@@ -302,6 +320,23 @@ export async function voidSale(txn: Transaction, reason: string): Promise<{ ok: 
   }
   if (txn.supplier_id && txn.primary_mode === 'supplier') {
     await adjustSupplierBalance(txn.supplier_id, txn.amount || 0);
+  }
+  // A 'split' sale can also have one Extra Payment Line that isn't real cash
+  // (Advance/Credit/Supplier) - it doesn't get its own primary_mode, so it's
+  // not caught by the checks above. Its amount is whatever the real cash
+  // splits (already excluded from the wallet balance once is_void is set)
+  // don't cover.
+  if (txn.primary_mode === 'split' && (txn.customer_id || txn.supplier_id)) {
+    const { data: splitRows } = await supabase.from('transaction_splits').select('mode, amount').eq('transaction_id', txn.transaction_id);
+    const realSum = (splitRows || [])
+      .filter((s) => s.mode === 'cash' || s.mode === 'mpesa' || s.mode === 'paybill')
+      .reduce((s, x) => s + x.amount, 0);
+    const nonCash = (txn.amount || 0) - realSum;
+    if (nonCash > 0.01) {
+      if (txn.customer_id && txn.settlement_mode) await adjustCustomerAdvance(txn.customer_id, nonCash);
+      else if (txn.customer_id) await adjustCustomerCredit(txn.customer_id, -nonCash);
+      else if (txn.supplier_id) await adjustSupplierBalance(txn.supplier_id, nonCash);
+    }
   }
 
   const { data: linked } = await supabase

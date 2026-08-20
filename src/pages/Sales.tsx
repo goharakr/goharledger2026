@@ -144,6 +144,15 @@ export function resolvePaymentLines(form: SaleForm): { cashLines: { mode: 'cash'
       { mode: 'paybill', amount: form.splitPaybill || '0' },
     ];
     mainLines = splitLines.filter((l) => parseFloat(l.amount) > 0);
+    // The Selling Price box is auto-derived from these boxes plus any Extra
+    // Payment Lines (see splitTotalWithExtra) - if it's out of sync (e.g.
+    // switched into Split mode after typing a price some other way), catch
+    // it here rather than silently saving a sale that doesn't add up.
+    const sp = parseFloat(form.sellingPrice || '0');
+    const splitBoxTotal = mainLines.reduce((s, l) => s + parseFloat(l.amount), 0) + extra.reduce((s, l) => s + parseFloat(l.amount || '0'), 0);
+    if (Math.abs(sp - splitBoxTotal) > 0.01) {
+      return { cashLines: [], nonCash: null, error: `The Mpesa/Cash/Paybill boxes and extra payment lines add up to KES ${splitBoxTotal.toLocaleString()}, but Selling Price shows KES ${sp.toLocaleString()}. Re-enter an amount in one of the boxes to refresh it before saving.` };
+    }
   } else {
     const sp = parseFloat(form.sellingPrice || '0');
     const extraTotal = extra.reduce((s, l) => s + parseFloat(l.amount || '0'), 0);
@@ -727,17 +736,19 @@ export default function Sales() {
     const noCustomerRows: number[] = [];
     const noSupplierRows: number[] = [];
     const noSplitAmountRows: number[] = [];
+    const badExtraLineRows: number[] = [];
     const validForms = bulkForms
       .map((f, originalIndex) => ({ f, originalIndex }))
       .filter(({ f, originalIndex }) => {
         const rowTouched = !!(f.customerId || f.supplierId || f.notes || f.costPrice || f.commission);
         if (!f.sellingPrice || parseFloat(f.sellingPrice) <= 0) { if (rowTouched) noPriceRows.push(originalIndex + 1); return false; }
-        if ((f.mode === 'credit' || f.mode === 'advance') && !f.customerId) { noCustomerRows.push(originalIndex + 1); return false; }
-        if (f.mode === 'supplier' && !f.supplierId) { noSupplierRows.push(originalIndex + 1); return false; }
+        if ((f.mode === 'credit' || f.mode === 'advance' || f.extraLines.some((l) => l.mode === 'credit' || l.mode === 'advance')) && !f.customerId) { noCustomerRows.push(originalIndex + 1); return false; }
+        if ((f.mode === 'supplier' || f.extraLines.some((l) => l.mode === 'supplier')) && !f.supplierId) { noSupplierRows.push(originalIndex + 1); return false; }
         if (f.mode === 'split') {
           const splitTotal = parseFloat(f.splitMpesa || '0') + parseFloat(f.splitCash || '0') + parseFloat(f.splitPaybill || '0');
-          if (splitTotal <= 0) { noSplitAmountRows.push(originalIndex + 1); return false; }
+          if (splitTotal <= 0 && f.extraLines.length === 0) { noSplitAmountRows.push(originalIndex + 1); return false; }
         }
+        if (f.extraLines.some((l) => parseFloat(l.amount || '0') <= 0)) { badExtraLineRows.push(originalIndex + 1); return false; }
         // Same rule as the single Add Sale form: the supplier split can't add
         // up to more than the cost price - the rest is stock the shop
         // already owned, not a negative amount owed to a supplier.
@@ -762,6 +773,9 @@ export default function Sales() {
     }
     if (noSplitAmountRows.length > 0) {
       alert(`Row(s) ${noSplitAmountRows.join(', ')}: split sale has nothing entered for Mpesa, Cash, or Paybill - these rows were NOT saved.`);
+    }
+    if (badExtraLineRows.length > 0) {
+      alert(`Row(s) ${badExtraLineRows.join(', ')}: an extra payment line has no amount - these rows were NOT saved. Remove any empty extra lines and save again.`);
     }
     if (noPriceRows.length > 0) {
       alert(`Row(s) ${noPriceRows.join(', ')}: no Selling Price entered - these rows were NOT saved.`);
@@ -800,26 +814,57 @@ export default function Sales() {
       const comm = parseFloat(f.commission || '0');
       const prefix = 'SAL-' + f.date.replace(/-/g, '');
 
+      // Same Extra Payment Lines handling as the single Add Sale form - see
+      // handleSave.
+      const usesExtraLines = f.extraLines.length > 0;
+      let lines: ReturnType<typeof resolvePaymentLines> | null = null;
+      if (usesExtraLines) {
+        lines = resolvePaymentLines(f);
+        if (lines.error) { console.error(lines.error); failedRows.push(originalIndex + 1); continue; }
+      }
+      const primaryMode = usesExtraLines ? 'split' : f.mode;
+      const settlementMode = usesExtraLines
+        ? (lines!.nonCash?.mode === 'advance' ? f.advanceMode : null)
+        : (f.mode === 'advance' ? f.advanceMode : null);
+      const customerIdForRow = usesExtraLines
+        ? (lines!.nonCash?.mode === 'advance' || lines!.nonCash?.mode === 'credit' ? (f.customerId || null) : null)
+        : (f.mode === 'credit' || f.mode === 'advance' ? (f.customerId || null) : null);
+      const supplierIdForRow = usesExtraLines
+        ? (lines!.nonCash?.mode === 'supplier' ? (f.supplierId || null) : null)
+        : (f.mode === 'supplier' ? (f.supplierId || null) : null);
+
       const { data: newTxn, error, transactionId: txnId } = await insertTransactionWithId(prefix, (transactionId) => ({
         transaction_id: transactionId,
         date: f.date,
         type: 'sale',
-        primary_mode: f.mode,
-        settlement_mode: f.mode === 'advance' ? f.advanceMode : null,
+        primary_mode: primaryMode,
+        settlement_mode: settlementMode,
         amount: sp,
         description: f.notes || null,
-        notes: f.mode === 'advance' ? `Advance payment via ${f.advanceMode}${f.notes ? ' | ' + f.notes : ''}` : (f.notes || null),
+        notes: !usesExtraLines && f.mode === 'advance' ? `Advance payment via ${f.advanceMode}${f.notes ? ' | ' + f.notes : ''}` : (f.notes || null),
         selling_price: sp,
         cost_price: cp || null,
         commission: comm || null,
         commission_mode: comm > 0 ? f.commissionMode : null,
         is_unclassified: f.isUnclassified,
-        customer_id: f.mode === 'credit' || f.mode === 'advance' ? (f.customerId || null) : null,
-        supplier_id: f.mode === 'supplier' ? (f.supplierId || null) : null,
+        customer_id: customerIdForRow,
+        supplier_id: supplierIdForRow,
         created_by: user?.username || null,
       }));
       if (error || !newTxn) { console.error(error); failedRows.push(originalIndex + 1); continue; }
 
+      if (usesExtraLines) {
+        const splitRows = lines!.cashLines.map((l) => ({ transaction_id: txnId, mode: l.mode, amount: l.amount }));
+        if (splitRows.length > 0) await supabase.from('transaction_splits').insert(splitRows);
+
+        if (lines!.nonCash?.mode === 'advance' && f.customerId) {
+          await adjustCustomerAdvance(f.customerId, -lines!.nonCash.amount);
+        } else if (lines!.nonCash?.mode === 'credit' && f.customerId) {
+          await adjustCustomerCredit(f.customerId, lines!.nonCash.amount);
+        } else if (lines!.nonCash?.mode === 'supplier' && f.supplierId) {
+          await adjustSupplierBalance(f.supplierId, -lines!.nonCash.amount);
+        }
+      } else {
       if (f.mode === 'split') {
         const splits = [];
         if (parseFloat(f.splitMpesa || '0') > 0) splits.push({ transaction_id: txnId, mode: 'mpesa', amount: parseFloat(f.splitMpesa) });
@@ -836,6 +881,7 @@ export default function Sales() {
       }
       if (f.mode === 'supplier' && f.supplierId) {
         await adjustSupplierBalance(f.supplierId, -sp);
+      }
       }
 
       if (comm > 0) {
@@ -1192,6 +1238,14 @@ export default function Sales() {
     const maxRefundable = refundableAmount(refundingSale);
     if (amount > maxRefundable) {
       alert(`You can refund at most KES ${formatKES(maxRefundable)} on this sale (KES ${formatKES(alreadyRefunded(refundingSale))} already refunded).`);
+      return;
+    }
+    // A mixed sale (part Advance/Credit/Supplier, part real cash via an
+    // Extra Payment Line) can't be safely partial-refunded here - there's no
+    // clean way to say which part the refund amount comes out of. Void it
+    // and re-enter it instead, same as the settlement-split guard elsewhere.
+    if (refundingSale.primary_mode === 'split' && (refundingSale.customer_id || refundingSale.supplier_id)) {
+      alert('This sale was paid using more than one source (part Advance/Credit/Supplier, part real cash) - it can\'t be refunded here. Void it and re-enter it instead.');
       return;
     }
     setSaving(true);
@@ -2129,6 +2183,11 @@ export default function Sales() {
                 This was a {refundingSale.primary_mode} sale - no cash changes hands, this will just reduce the {refundingSale.primary_mode === 'supplier' ? "supplier's" : "customer's"} balance.
               </p>
             )}
+            {refundingSale.primary_mode === 'split' && (refundingSale.customer_id || refundingSale.supplier_id) && (
+              <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+                This sale was paid using more than one source (part Advance/Credit/Supplier, part real cash) - it can't be refunded here. Void it and re-enter it instead.
+              </p>
+            )}
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Amount to refund</label>
               <input
@@ -2294,11 +2353,20 @@ function SaleFormFields({
     setForm((prev) => ({ ...prev, costSuppliers: prev.costSuppliers.filter((_, i) => i !== idx) }));
   };
 
+  // In Split mode the Selling Price is auto-derived from the payment boxes
+  // (see handleSplitChange) - an extra line's amount changing the total
+  // needs to recompute it here the same way. Every other mode has the user
+  // type the Selling Price directly, so it's left alone there.
   const updateExtraLine = (idx: number, field: 'mode' | 'amount', value: string) => {
     setForm((prev) => {
       const extraLines = [...prev.extraLines];
       extraLines[idx] = { ...extraLines[idx], [field]: value } as PaymentLine;
-      return { ...prev, extraLines };
+      const updated = { ...prev, extraLines };
+      if (prev.mode !== 'split' || field !== 'amount') return updated;
+      const total = splitTotalWithExtra(updated);
+      if (filled(prev.costPrice)) return { ...updated, sellingPrice: String(total), profit: String(total - parseFloat(prev.costPrice)) };
+      if (filled(prev.profit)) return { ...updated, sellingPrice: String(total), costPrice: String(total - parseFloat(prev.profit)) };
+      return { ...updated, sellingPrice: String(total) };
     });
   };
 
@@ -2307,7 +2375,15 @@ function SaleFormFields({
   };
 
   const removeExtraLine = (idx: number) => {
-    setForm((prev) => ({ ...prev, extraLines: prev.extraLines.filter((_, i) => i !== idx) }));
+    setForm((prev) => {
+      const extraLines = prev.extraLines.filter((_, i) => i !== idx);
+      const updated = { ...prev, extraLines };
+      if (prev.mode !== 'split') return updated;
+      const total = splitTotalWithExtra(updated);
+      if (filled(prev.costPrice)) return { ...updated, sellingPrice: String(total), profit: String(total - parseFloat(prev.costPrice)) };
+      if (filled(prev.profit)) return { ...updated, sellingPrice: String(total), costPrice: String(total - parseFloat(prev.profit)) };
+      return { ...updated, sellingPrice: String(total) };
+    });
   };
 
   const filled = (v: string) => v !== undefined && v !== null && v.trim() !== '';
@@ -2354,10 +2430,18 @@ function SaleFormFields({
   // Split mode's Selling Price is derived from the 3 mode amounts, same
   // override rule as SP/CP/Profit above - it stays in sync with whichever
   // split box you're typing into.
+  // Split mode's Selling Price is the 3 mode boxes PLUS any Extra Payment
+  // Lines added on top (e.g. Mpesa + Cash boxes filled, plus an Advance
+  // extra line) - every place that can change either needs to recompute it.
+  const splitTotalWithExtra = (f: SaleForm) => {
+    const extraTotal = f.extraLines.reduce((s, l) => s + (parseFloat(l.amount || '0') || 0), 0);
+    return parseFloat(f.splitMpesa || '0') + parseFloat(f.splitCash || '0') + parseFloat(f.splitPaybill || '0') + extraTotal;
+  };
+
   const handleSplitChange = (field: 'splitMpesa' | 'splitCash' | 'splitPaybill', value: string) => {
     setForm((prev) => {
       const updated = { ...prev, [field]: value };
-      const total = parseFloat(updated.splitMpesa || '0') + parseFloat(updated.splitCash || '0') + parseFloat(updated.splitPaybill || '0');
+      const total = splitTotalWithExtra(updated);
       if (filled(prev.costPrice)) {
         return { ...updated, sellingPrice: String(total), profit: String(total - parseFloat(prev.costPrice)) };
       } else if (filled(prev.profit)) {

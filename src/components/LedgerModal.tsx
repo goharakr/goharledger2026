@@ -165,6 +165,21 @@ export default function LedgerModal({
       if (txn.supplier_id && txn.primary_mode === 'supplier') {
         await adjustSupplierBalance(txn.supplier_id, txn.amount || 0);
       }
+      // A 'split' sale can also have one Extra Payment Line that isn't real
+      // cash (Advance/Credit/Supplier) - not caught by the primary_mode
+      // checks above. Its amount is whatever the real cash splits (already
+      // excluded once is_void is set below) don't cover.
+      if (txn.primary_mode === 'split' && (txn.customer_id || txn.supplier_id)) {
+        const realSum = splits
+          .filter((s) => s.transaction_id === txn.transaction_id && (s.mode === 'cash' || s.mode === 'mpesa' || s.mode === 'paybill'))
+          .reduce((s, x) => s + x.amount, 0);
+        const nonCash = (txn.amount || 0) - realSum;
+        if (nonCash > 0.01) {
+          if (txn.customer_id && txn.settlement_mode) await adjustCustomerAdvance(txn.customer_id, nonCash);
+          else if (txn.customer_id) await adjustCustomerCredit(txn.customer_id, -nonCash);
+          else if (txn.supplier_id) await adjustSupplierBalance(txn.supplier_id, nonCash);
+        }
+      }
     } else if (txn.type === 'customer_payment' && txn.customer_id) {
       // Both the "Add Advance" flow and the opening-advance mirror ("Opening
       // advance - X") deposit into advance_balance, not credit_balance

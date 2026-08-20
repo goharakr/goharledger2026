@@ -100,6 +100,7 @@ export default function Customers() {
   const { user } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [splits, setSplits] = useState<{ transaction_id: string; mode: string; amount: number }[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [shareRules, setShareRules] = useState<ShareRule[]>([]);
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
@@ -156,17 +157,19 @@ export default function Customers() {
 
   async function fetchData() {
     setLoading(true);
-    const [{ data: cust }, { data: txns }, { data: supp }, { data: rules }, { data: hist }] = await Promise.all([
+    const [{ data: cust }, { data: txns }, { data: splitData }, { data: supp }, { data: rules }, { data: hist }] = await Promise.all([
       supabase.from('customers').select('*').eq('is_active', true).order('name'),
       fetchAllRows<Transaction>((from, to) =>
         supabase.from('transactions').select('*').eq('is_void', false).order('date', { ascending: false }).range(from, to)
       ),
+      supabase.from('transaction_splits').select('*'),
       supabase.from('suppliers').select('*').eq('is_active', true),
       supabase.from('share_rules').select('*').eq('is_active', true),
       supabase.from('historical_profit').select('*'),
     ]);
     setCustomers(cust || []);
     setTransactions(txns || []);
+    setSplits(splitData || []);
     setSuppliers(supp || []);
     setShareRules(rules || []);
     setHistoricalProfit(hist || []);
@@ -503,6 +506,22 @@ export default function Customers() {
     return transactions.filter((t) => t.customer_id === customerId && t.type === 'sale' && t.primary_mode === 'credit');
   }
 
+  // A 'split' sale can have one Extra Payment Line billed to this customer's
+  // Credit instead of real cash - not caught by getCreditSales above, so its
+  // non-cash portion (whatever the real cash splits don't cover) is worked
+  // out here separately.
+  function getMixedCreditSalesTotal(customerId: string): number {
+    return transactions
+      .filter((t) => t.customer_id === customerId && t.type === 'sale' && t.primary_mode === 'split' && !t.settlement_mode)
+      .reduce((sum, t) => {
+        const realSum = splits
+          .filter((s) => s.transaction_id === t.transaction_id && (s.mode === 'cash' || s.mode === 'mpesa' || s.mode === 'paybill'))
+          .reduce((s, x) => s + x.amount, 0);
+        const nonCash = (t.selling_price ?? t.amount ?? 0) - realSum;
+        return sum + (nonCash > 0.01 ? nonCash : 0);
+      }, 0);
+  }
+
   function getPayments(customerId: string) {
     // Only payments against credit, not advance deposits (those build up
     // advance_balance, a separate pool, not a payment against credit owed)
@@ -512,7 +531,7 @@ export default function Customers() {
 
   function getTotalCredit(customerId: string) {
     const openingCredit = transactions.find((t) => t.customer_id === customerId && t.type === 'opening_balance')?.amount || 0;
-    return openingCredit + getCreditSales(customerId).reduce((sum, t) => sum + (t.selling_price || 0), 0);
+    return openingCredit + getCreditSales(customerId).reduce((sum, t) => sum + (t.selling_price || 0), 0) + getMixedCreditSalesTotal(customerId);
   }
 
   function getTotalPaid(customerId: string) {
