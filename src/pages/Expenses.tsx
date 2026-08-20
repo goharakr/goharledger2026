@@ -58,6 +58,11 @@ interface ExpenseForm {
   clearsOn: string;
   transactionFee: string;
   settlement: SettlementAmounts;
+  // Extra real-money lines on top of the main Mode above - e.g. paid partly
+  // Cash and partly Mpesa, or Mpesa paid in several separate amounts. Empty
+  // for a normal single-mode entry (the untouched, original save path is
+  // used whenever this is empty).
+  extraLines: { mode: 'cash' | 'mpesa' | 'paybill'; amount: string }[];
 }
 
 const emptyForm: ExpenseForm = {
@@ -75,6 +80,7 @@ const emptyForm: ExpenseForm = {
   clearsOn: '',
   transactionFee: '',
   settlement: emptySettlementAmounts,
+  extraLines: [],
 };
 
 interface BulkExpenseRow {
@@ -634,11 +640,26 @@ export default function Expenses() {
     // Check if partner expense category
     const isPartnerExpense = category === 'taher' || category === 'abdulqadir';
 
+    // Extra Payment Lines split a real-money expense across more than one
+    // mode (or the same mode more than once) - not offered for an "Own
+    // Pocket" home expense since that's never real cash to begin with.
+    const usesExtraLines = form.extraLines.length > 0 && !(isHomeExpense && form.source === 'own_pocket');
+    if (usesExtraLines && form.extraLines.some((l) => parseFloat(l.amount || '0') <= 0)) {
+      alert('Every extra payment line needs an amount before saving - remove any empty ones.');
+      return;
+    }
+    const extraTotal = usesExtraLines ? form.extraLines.reduce((s, l) => s + (parseFloat(l.amount || '0') || 0), 0) : 0;
+    const mainAmt = amt - extraTotal;
+    if (usesExtraLines && mainAmt < -0.01) {
+      alert(`Extra payment lines (KES ${extraTotal.toLocaleString()}) add up to more than the total Amount (KES ${amt.toLocaleString()}).`);
+      return;
+    }
+
     const { data: newTxn, error } = await insertTransactionWithId('EXP-' + form.date.replace(/-/g, ''), (txnId) => ({
       transaction_id: txnId,
       date: form.date,
       type: isPartnerExpense ? 'partner_draw' : 'expense',
-      primary_mode: isHomeExpense && form.source === 'own_pocket' ? null : form.mode,
+      primary_mode: usesExtraLines ? 'split' : (isHomeExpense && form.source === 'own_pocket' ? null : form.mode),
       amount: amt,
       category,
       description: form.description || null,
@@ -646,10 +667,17 @@ export default function Expenses() {
       supplier_id: form.supplierId || null,
       loan_id: form.loanId || null,
       partner_id: isPartnerExpense ? category : (isHomeExpense ? form.partnerId || null : null),
-      clears_on: form.mode === 'paybill' && form.isPostDated && form.clearsOn ? form.clearsOn : null,
+      clears_on: !usesExtraLines && form.mode === 'paybill' && form.isPostDated && form.clearsOn ? form.clearsOn : null,
       created_by: user?.username || null,
     }));
     if (error || !newTxn) { console.error(error); alert('Failed to save expense: ' + (error?.message || 'unknown error')); return; }
+
+    if (usesExtraLines) {
+      const splitRows: { transaction_id: string; mode: string; amount: number }[] = [];
+      if (mainAmt > 0.01) splitRows.push({ transaction_id: newTxn.transaction_id, mode: form.mode, amount: mainAmt });
+      form.extraLines.forEach((l) => splitRows.push({ transaction_id: newTxn.transaction_id, mode: l.mode, amount: parseFloat(l.amount) }));
+      if (splitRows.length > 0) await supabase.from('transaction_splits').insert(splitRows);
+    }
 
     // Update supplier balance
     if (form.supplierId && (category === 'supplier_payment' || category === 'stock')) {
@@ -914,9 +942,15 @@ export default function Expenses() {
     // instead of one row at a time - matches how it was actually entered.
     // A batch mixing plain expenses with partner-category rows (saved as
     // their own partner_draw type) only regroups the expense rows here -
-    // rare enough not to chase further.
-    if (expense.type === 'expense' && !isPartner) {
-      const batch = findBulkBatch(allTransactions, expense, 'expense').filter((t) => (t.category === 'home_expense') === isHome);
+    // rare enough not to chase further. An expense paid across more than
+    // one payment line (Extra Payment Line) is left out, same as the
+    // Supplier Payment settlement-split guard below - this simple bulk form
+    // can't reconstruct/edit that breakdown.
+    const hasSplitLines = (t: Transaction) => t.primary_mode === 'split' && splits.some((sp) => sp.transaction_id === t.transaction_id);
+    if (expense.type === 'expense' && !isPartner && !hasSplitLines(expense)) {
+      const batch = findBulkBatch(allTransactions, expense, 'expense')
+        .filter((t) => (t.category === 'home_expense') === isHome)
+        .filter((t) => !hasSplitLines(t));
       if (batch.length > 1) {
         const sorted = [...batch].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
         setBulkForms(sorted.map((b) => ({
@@ -983,6 +1017,7 @@ export default function Expenses() {
       clearsOn: expense.clears_on || '',
       transactionFee: '',
       settlement: emptySettlementAmounts,
+      extraLines: [],
     });
     if (expense.type === 'supplier_payment') setActiveTab('suppliers');
     else if (expense.type === 'loan_payment') setActiveTab('loans');
@@ -1068,6 +1103,15 @@ export default function Expenses() {
       setShowAdd(false);
       fetchData();
       triggerRefresh();
+      return;
+    }
+
+    // A plain expense saved with more than one payment line (Extra Payment
+    // Lines) can't be safely collapsed back to a single mode/amount by this
+    // form - void and re-enter it instead, same guard as supplier_payment
+    // above.
+    if (oldTxn.primary_mode === 'split' && splits.some((sp) => sp.transaction_id === oldTxn.transaction_id)) {
+      alert('This expense was paid across more than one payment line - it can\'t be edited here. Void and re-enter it instead.');
       return;
     }
 
@@ -1524,6 +1568,59 @@ export default function Expenses() {
                     placeholder="Clears on"
                   />
                 )}
+              </div>
+            )}
+
+            {/* Extra payment lines - e.g. paid partly Cash and partly Mpesa,
+                or Mpesa paid in several separate amounts. Not offered for an
+                "Own Pocket" home expense (no mode involved), or while
+                editing (a saved multi-line entry is voided and re-entered
+                instead, not edited in place). */}
+            {!editingId && (activeTab === 'shop' || (activeTab === 'home' && form.source !== 'own_pocket')) && (
+              <div className="space-y-1.5 border border-slate-200 rounded p-2">
+                <p className="text-xs font-medium text-slate-600">Extra payment lines (optional)</p>
+                {form.extraLines.map((line, idx) => (
+                  <div key={idx} className="flex gap-1.5 items-center">
+                    <select
+                      value={line.mode}
+                      onChange={(e) => {
+                        const extraLines = [...form.extraLines];
+                        extraLines[idx] = { ...extraLines[idx], mode: e.target.value as 'cash' | 'mpesa' | 'paybill' };
+                        setForm({ ...form, extraLines });
+                      }}
+                      className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    >
+                      <option value="cash">Cash</option>
+                      <option value="mpesa">Mpesa</option>
+                      <option value="paybill">Paybill</option>
+                    </select>
+                    <input
+                      type="number"
+                      value={line.amount}
+                      onChange={(e) => {
+                        const extraLines = [...form.extraLines];
+                        extraLines[idx] = { ...extraLines[idx], amount: e.target.value };
+                        setForm({ ...form, extraLines });
+                      }}
+                      placeholder="Amount"
+                      className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, extraLines: form.extraLines.filter((_, i) => i !== idx) })}
+                      className="p-1.5 text-slate-400 hover:text-red-600 shrink-0"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, extraLines: [...form.extraLines, { mode: 'cash', amount: '' }] })}
+                  className="text-xs text-emerald-700 hover:text-emerald-800 font-medium"
+                >
+                  + Add another payment line
+                </button>
               </div>
             )}
 
