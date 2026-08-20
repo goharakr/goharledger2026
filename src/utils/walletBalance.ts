@@ -48,11 +48,26 @@ export function computeWalletBalance(
       }
       else if (t.primary_mode === 'split') {
         const s = splitMap.get(t.transaction_id) || [];
+        let realSum = 0;
         s.forEach((sp) => {
-          if (sp.mode === 'mpesa') mpesa += sp.amount;
-          else if (sp.mode === 'cash') cash += sp.amount;
-          else if (sp.mode === 'paybill') bank += sp.amount;
+          if (sp.mode === 'mpesa') { mpesa += sp.amount; realSum += sp.amount; }
+          else if (sp.mode === 'cash') { cash += sp.amount; realSum += sp.amount; }
+          else if (sp.mode === 'paybill') { bank += sp.amount; realSum += sp.amount; }
         });
+        // A split sale can also have an Extra Payment Line drawing from the
+        // customer's advance balance (settlement_mode marks which sub-bucket
+        // it reduces) - same "already counted when deposited" rule as a
+        // plain Advance-mode sale, just for whatever the real-cash lines
+        // above don't cover. Never true for a plain Split sale (those never
+        // set settlement_mode), so this is a no-op for existing data.
+        if (t.settlement_mode) {
+          const advancePortion = t.amount - realSum;
+          if (advancePortion > 0.01) {
+            if (t.settlement_mode === 'mpesa') mpesaAdvance -= advancePortion;
+            else if (t.settlement_mode === 'cash') cashAdvance -= advancePortion;
+            else if (t.settlement_mode === 'paybill') bankAdvance -= advancePortion;
+          }
+        }
       }
       // Sales to supplier - does NOT add to cash (it reduces supplier balance)
       // Commission is no longer deducted here - it's recorded as its own

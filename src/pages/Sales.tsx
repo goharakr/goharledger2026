@@ -60,9 +60,20 @@ interface SaleForm {
   advanceMode: string;
   payCostToSupplier: boolean;
   costSuppliers: CostSupplierRow[];
+  // Extra payment lines on top of the main Mode above - e.g. a customer
+  // paying part in Advance and the rest in Mpesa, or Mpesa paid in several
+  // separate amounts. Empty for a normal single-mode sale (the untouched,
+  // original save path is used whenever this is empty).
+  extraLines: PaymentLine[];
   // Only set on rows that came from Smart Entry and still have something
   // worth a second look before saving - never set on a normally-typed row.
   smartFlags?: string[];
+}
+
+export type PaymentLineMode = 'cash' | 'mpesa' | 'paybill' | 'advance' | 'credit' | 'supplier';
+export interface PaymentLine {
+  mode: PaymentLineMode;
+  amount: string;
 }
 
 // One row of a (possibly multi-supplier) cost-price split - the item's cost
@@ -111,7 +122,64 @@ const emptyForm: SaleForm = {
   advanceMode: 'cash',
   payCostToSupplier: false,
   costSuppliers: [],
+  extraLines: [],
 };
+
+// Works out how a sale's Selling Price is actually being paid once Extra
+// Payment Lines are used - one "main" line (the Mode above, or the 3 Split
+// boxes) plus whatever's been added on top. Real-money lines (cash/mpesa/
+// paybill) can repeat (e.g. Mpesa paid 3 times) and are saved individually
+// via transaction_splits, same as Split mode always has been. Only one
+// balance-only line (advance/credit/supplier) is allowed per sale, since a
+// transaction only has one customer_id/supplier_id to draw it from.
+export function resolvePaymentLines(form: SaleForm): { cashLines: { mode: 'cash' | 'mpesa' | 'paybill'; amount: number }[]; nonCash: { mode: 'advance' | 'credit' | 'supplier'; amount: number } | null; error: string | null } {
+  const extra = form.extraLines.filter((l) => parseFloat(l.amount || '0') > 0);
+  const isCashMode = (m: string): m is 'cash' | 'mpesa' | 'paybill' => m === 'cash' || m === 'mpesa' || m === 'paybill';
+
+  let mainLines: PaymentLine[];
+  if (form.mode === 'split') {
+    const splitLines: PaymentLine[] = [
+      { mode: 'mpesa', amount: form.splitMpesa || '0' },
+      { mode: 'cash', amount: form.splitCash || '0' },
+      { mode: 'paybill', amount: form.splitPaybill || '0' },
+    ];
+    mainLines = splitLines.filter((l) => parseFloat(l.amount) > 0);
+  } else {
+    const sp = parseFloat(form.sellingPrice || '0');
+    const extraTotal = extra.reduce((s, l) => s + parseFloat(l.amount || '0'), 0);
+    const mainAmount = sp - extraTotal;
+    if (mainAmount < -0.01) {
+      return { cashLines: [], nonCash: null, error: `Extra payment lines (KES ${extraTotal.toLocaleString()}) add up to more than the Selling Price (KES ${sp.toLocaleString()}).` };
+    }
+    mainLines = mainAmount > 0.01 ? [{ mode: form.mode as PaymentLineMode, amount: String(mainAmount) }] : [];
+  }
+
+  const allLines = [...mainLines, ...extra];
+  const cashLines = allLines.filter((l) => isCashMode(l.mode)).map((l) => ({ mode: l.mode as 'cash' | 'mpesa' | 'paybill', amount: parseFloat(l.amount) }));
+  const nonCashLines = allLines.filter((l) => !isCashMode(l.mode));
+  if (nonCashLines.length > 1) {
+    return { cashLines: [], nonCash: null, error: 'Only one of Advance, Credit, or Supplier can be used per sale - combine them into one line or remove the extra one.' };
+  }
+  const nonCash = nonCashLines.length === 1 ? { mode: nonCashLines[0].mode as 'advance' | 'credit' | 'supplier', amount: parseFloat(nonCashLines[0].amount) } : null;
+  return { cashLines, nonCash, error: null };
+}
+
+// The reverse of resolvePaymentLines - reopening a saved sale for editing
+// works out its Extra Payment Line (if any) from what's already there: a
+// 'split' sale with a customer/supplier attached has a non-cash portion
+// equal to whatever its real cash splits don't cover.
+function reconstructExtraLines(sale: Transaction, existingSplits: { mode: string; amount: number }[]): PaymentLine[] {
+  if (sale.primary_mode !== 'split' || (!sale.customer_id && !sale.supplier_id)) return [];
+  const realSum = existingSplits
+    .filter((s) => s.mode === 'cash' || s.mode === 'mpesa' || s.mode === 'paybill')
+    .reduce((s, x) => s + x.amount, 0);
+  const nonCash = (sale.amount || 0) - realSum;
+  if (nonCash <= 0.01) return [];
+  if (sale.customer_id && sale.settlement_mode) return [{ mode: 'advance', amount: String(nonCash) }];
+  if (sale.customer_id) return [{ mode: 'credit', amount: String(nonCash) }];
+  if (sale.supplier_id) return [{ mode: 'supplier', amount: String(nonCash) }];
+  return [];
+}
 
 export default function Sales() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
@@ -421,22 +489,26 @@ export default function Sales() {
       alert('Enter a Selling Price before saving.');
       return;
     }
-    if ((form.mode === 'credit' || form.mode === 'advance') && !form.customerId) {
+    if ((form.mode === 'credit' || form.mode === 'advance' || form.extraLines.some((l) => l.mode === 'credit' || l.mode === 'advance')) && !form.customerId) {
       const keepEditing = confirm('No Customer picked. Click OK to go back and pick one, or Cancel to close this form without saving.');
       if (!keepEditing) { setForm(emptyForm); setShowAdd(false); }
       return;
     }
-    if (form.mode === 'supplier' && !form.supplierId) {
+    if ((form.mode === 'supplier' || form.extraLines.some((l) => l.mode === 'supplier')) && !form.supplierId) {
       const keepEditing = confirm('No Supplier picked. Click OK to go back and pick one, or Cancel to close this form without saving.');
       if (!keepEditing) { setForm(emptyForm); setShowAdd(false); }
       return;
     }
     if (form.mode === 'split') {
       const splitTotal = parseFloat(form.splitMpesa || '0') + parseFloat(form.splitCash || '0') + parseFloat(form.splitPaybill || '0');
-      if (splitTotal <= 0) {
+      if (splitTotal <= 0 && form.extraLines.length === 0) {
         alert('Enter how much was paid via Mpesa, Cash, and/or Paybill for this split sale - it cannot be saved with nothing entered, or the money would silently disappear from your balance.');
         return;
       }
+    }
+    if (form.extraLines.some((l) => parseFloat(l.amount || '0') <= 0)) {
+      alert('Every extra payment line needs an amount before saving - remove any empty ones.');
+      return;
     }
 
     // Cancel goes back to the form so the user can fill in the Cost Price;
@@ -465,30 +537,64 @@ export default function Sales() {
     const cp = parseFloat(form.costPrice || '0');
     const comm = parseFloat(form.commission || '0');
 
+    // Extra Payment Lines (e.g. part Advance + part Mpesa) reuse the same
+    // 'split' storage Split mode always has, plus whichever single Advance/
+    // Credit/Supplier balance the non-cash line draws from - everything
+    // below this stays the exact original single-mode/Split save path.
+    const usesExtraLines = form.extraLines.length > 0;
+    let lines: ReturnType<typeof resolvePaymentLines> | null = null;
+    if (usesExtraLines) {
+      lines = resolvePaymentLines(form);
+      if (lines.error) { alert(lines.error); setSaving(false); return; }
+    }
+
+    const primaryMode = usesExtraLines ? 'split' : form.mode;
+    const settlementMode = usesExtraLines
+      ? (lines!.nonCash?.mode === 'advance' ? form.advanceMode : null)
+      : (form.mode === 'advance' ? form.advanceMode : null);
+    const customerIdForRow = usesExtraLines
+      ? (lines!.nonCash?.mode === 'advance' || lines!.nonCash?.mode === 'credit' ? (form.customerId || null) : null)
+      : (form.mode === 'credit' || form.mode === 'advance' ? (form.customerId || null) : null);
+    const supplierIdForRow = usesExtraLines
+      ? (lines!.nonCash?.mode === 'supplier' ? (form.supplierId || null) : null)
+      : (form.mode === 'supplier' ? (form.supplierId || null) : null);
+
     const prefix = 'SAL-' + form.date.replace(/-/g, '');
     const { data: newTxn, error, transactionId: txnId } = await insertTransactionWithId(prefix, (transactionId) => {
       const row: any = {
         transaction_id: transactionId,
         date: form.date,
         type: 'sale',
-        primary_mode: form.mode,
-        settlement_mode: form.mode === 'advance' ? form.advanceMode : null,
+        primary_mode: primaryMode,
+        settlement_mode: settlementMode,
         amount: sp,
         description: form.notes || null,
-        notes: form.mode === 'advance' ? `Advance payment via ${form.advanceMode}${form.notes ? ' | ' + form.notes : ''}` : (form.notes || null),
+        notes: !usesExtraLines && form.mode === 'advance' ? `Advance payment via ${form.advanceMode}${form.notes ? ' | ' + form.notes : ''}` : (form.notes || null),
         selling_price: sp,
         cost_price: cp || null,
         commission: comm || null,
         commission_mode: comm > 0 ? form.commissionMode : null,
         is_unclassified: form.isUnclassified,
-        customer_id: form.mode === 'credit' || form.mode === 'advance' ? (form.customerId || null) : null,
-        supplier_id: form.mode === 'supplier' ? (form.supplierId || null) : null,
+        customer_id: customerIdForRow,
+        supplier_id: supplierIdForRow,
         created_by: user?.username || null,
       };
       return row;
     });
     if (error || !newTxn) { console.error(error); alert('Failed to save sale: ' + (error?.message || 'unknown error')); return; }
 
+    if (usesExtraLines) {
+      const splitRows = lines!.cashLines.map((l) => ({ transaction_id: txnId, mode: l.mode, amount: l.amount }));
+      if (splitRows.length > 0) await supabase.from('transaction_splits').insert(splitRows);
+
+      if (lines!.nonCash?.mode === 'advance' && form.customerId) {
+        await adjustCustomerAdvance(form.customerId, -lines!.nonCash.amount);
+      } else if (lines!.nonCash?.mode === 'credit' && form.customerId) {
+        await adjustCustomerCredit(form.customerId, lines!.nonCash.amount);
+      } else if (lines!.nonCash?.mode === 'supplier' && form.supplierId) {
+        await adjustSupplierBalance(form.supplierId, -lines!.nonCash.amount);
+      }
+    } else {
     // For split mode, store the split amounts
     if (form.mode === 'split') {
       const splits = [];
@@ -510,6 +616,7 @@ export default function Sales() {
 
     if (form.mode === 'supplier' && form.supplierId) {
       await adjustSupplierBalance(form.supplierId, -sp);
+    }
     }
 
     // Optionally, pay one or more suppliers back for the cost of this item
@@ -1187,6 +1294,10 @@ export default function Sales() {
     const cp = parseFloat(f.costPrice || '0');
     const comm = parseFloat(f.commission || '0');
 
+    // Reverse whatever the old version drew from Advance/Credit/Supplier -
+    // either a plain single-mode sale, or (if it was a 'split' sale with an
+    // Extra Payment Line) the one non-cash portion of it (settlement_mode
+    // set = that portion was Advance, unset = it was Credit).
     if (oldTxn.customer_id && (oldTxn.primary_mode === 'credit' || oldTxn.primary_mode === 'advance')) {
       if (oldTxn.primary_mode === 'credit') {
         await adjustCustomerCredit(oldTxn.customer_id, -(oldTxn.amount || 0));
@@ -1197,21 +1308,50 @@ export default function Sales() {
     if (oldTxn.supplier_id && oldTxn.primary_mode === 'supplier') {
       await adjustSupplierBalance(oldTxn.supplier_id, oldTxn.amount || 0);
     }
+    if (oldTxn.primary_mode === 'split' && (oldTxn.customer_id || oldTxn.supplier_id)) {
+      const oldRealSum = splits
+        .filter((s) => s.transaction_id === oldTxn.transaction_id && (s.mode === 'cash' || s.mode === 'mpesa' || s.mode === 'paybill'))
+        .reduce((s, x) => s + x.amount, 0);
+      const oldNonCash = (oldTxn.amount || 0) - oldRealSum;
+      if (oldNonCash > 0.01) {
+        if (oldTxn.customer_id && oldTxn.settlement_mode) await adjustCustomerAdvance(oldTxn.customer_id, oldNonCash);
+        else if (oldTxn.customer_id) await adjustCustomerCredit(oldTxn.customer_id, -oldNonCash);
+        else if (oldTxn.supplier_id) await adjustSupplierBalance(oldTxn.supplier_id, oldNonCash);
+      }
+    }
+
+    const usesExtraLines = f.extraLines.length > 0;
+    let lines: ReturnType<typeof resolvePaymentLines> | null = null;
+    if (usesExtraLines) {
+      lines = resolvePaymentLines(f);
+      if (lines.error) return { ok: false, error: lines.error + ' The old balances were already reversed - please reopen this sale and try again.' };
+    }
+
+    const primaryMode = usesExtraLines ? 'split' : f.mode;
+    const settlementMode = usesExtraLines
+      ? (lines!.nonCash?.mode === 'advance' ? f.advanceMode : null)
+      : (f.mode === 'advance' ? f.advanceMode : null);
+    const customerIdForRow = usesExtraLines
+      ? (lines!.nonCash?.mode === 'advance' || lines!.nonCash?.mode === 'credit' ? (f.customerId || null) : null)
+      : (f.mode === 'credit' || f.mode === 'advance' ? (f.customerId || null) : null);
+    const supplierIdForRow = usesExtraLines
+      ? (lines!.nonCash?.mode === 'supplier' ? (f.supplierId || null) : null)
+      : (f.mode === 'supplier' ? (f.supplierId || null) : null);
 
     const { error: updateError } = await supabase.from('transactions').update({
       date: f.date,
-      primary_mode: f.mode,
-      settlement_mode: f.mode === 'advance' ? f.advanceMode : null,
+      primary_mode: primaryMode,
+      settlement_mode: settlementMode,
       amount: sp,
       description: f.notes || null,
-      notes: f.mode === 'advance' ? `Advance payment via ${f.advanceMode}${f.notes ? ' | ' + f.notes : ''}` : (f.notes || null),
+      notes: !usesExtraLines && f.mode === 'advance' ? `Advance payment via ${f.advanceMode}${f.notes ? ' | ' + f.notes : ''}` : (f.notes || null),
       selling_price: sp,
       cost_price: cp || null,
       commission: comm || null,
       commission_mode: comm > 0 ? f.commissionMode : null,
       is_unclassified: f.isUnclassified,
-      customer_id: f.mode === 'credit' || f.mode === 'advance' ? (f.customerId || null) : null,
-      supplier_id: f.mode === 'supplier' ? (f.supplierId || null) : null,
+      customer_id: customerIdForRow,
+      supplier_id: supplierIdForRow,
       edited_at: new Date().toISOString(),
     }).eq('id', oldTxn.id);
 
@@ -1224,6 +1364,18 @@ export default function Sales() {
     // old rows are cleared first so switching away from split mode, or
     // changing the amounts, never leaves a stale/mismatched breakdown behind
     await supabase.from('transaction_splits').delete().eq('transaction_id', oldTxn.transaction_id);
+    if (usesExtraLines) {
+      const splitRows = lines!.cashLines.map((l) => ({ transaction_id: oldTxn.transaction_id, mode: l.mode, amount: l.amount }));
+      if (splitRows.length > 0) await supabase.from('transaction_splits').insert(splitRows);
+
+      if (lines!.nonCash?.mode === 'advance' && f.customerId) {
+        await adjustCustomerAdvance(f.customerId, -lines!.nonCash.amount);
+      } else if (lines!.nonCash?.mode === 'credit' && f.customerId) {
+        await adjustCustomerCredit(f.customerId, lines!.nonCash.amount);
+      } else if (lines!.nonCash?.mode === 'supplier' && f.supplierId) {
+        await adjustSupplierBalance(f.supplierId, -lines!.nonCash.amount);
+      }
+    } else {
     if (f.mode === 'split') {
       const newSplits = [];
       if (parseFloat(f.splitMpesa || '0') > 0) newSplits.push({ transaction_id: oldTxn.transaction_id, mode: 'mpesa', amount: parseFloat(f.splitMpesa) });
@@ -1241,6 +1393,7 @@ export default function Sales() {
     if (f.mode === 'supplier' && f.supplierId) {
       await adjustSupplierBalance(f.supplierId, -sp);
     }
+    }
 
     await syncCommissionExpense(oldTxn.transaction_id, f.date, comm, f.commissionMode, user?.username || null);
     return { ok: true };
@@ -1255,22 +1408,26 @@ export default function Sales() {
       alert('Enter a Selling Price before saving.');
       return;
     }
-    if ((form.mode === 'credit' || form.mode === 'advance') && !form.customerId) {
+    if ((form.mode === 'credit' || form.mode === 'advance' || form.extraLines.some((l) => l.mode === 'credit' || l.mode === 'advance')) && !form.customerId) {
       const keepEditing = confirm('No Customer picked. Click OK to go back and pick one, or Cancel to close without saving.');
       if (!keepEditing) { setShowAdd(false); setEditingId(null); }
       return;
     }
-    if (form.mode === 'supplier' && !form.supplierId) {
+    if ((form.mode === 'supplier' || form.extraLines.some((l) => l.mode === 'supplier')) && !form.supplierId) {
       const keepEditing = confirm('No Supplier picked. Click OK to go back and pick one, or Cancel to close without saving.');
       if (!keepEditing) { setShowAdd(false); setEditingId(null); }
       return;
     }
     if (form.mode === 'split') {
       const splitTotal = parseFloat(form.splitMpesa || '0') + parseFloat(form.splitCash || '0') + parseFloat(form.splitPaybill || '0');
-      if (splitTotal <= 0) {
+      if (splitTotal <= 0 && form.extraLines.length === 0) {
         alert('Enter how much was paid via Mpesa, Cash, and/or Paybill for this split sale - it cannot be saved with nothing entered, or the money would silently disappear from your balance.');
         return;
       }
+    }
+    if (form.extraLines.some((l) => parseFloat(l.amount || '0') <= 0)) {
+      alert('Every extra payment line needs an amount before saving - remove any empty ones.');
+      return;
     }
     setSaving(true);
     try {
@@ -1324,6 +1481,7 @@ export default function Sales() {
           advanceMode: b.settlement_mode || 'cash',
           payCostToSupplier: false,
           costSuppliers: [],
+          extraLines: reconstructExtraLines(b, existingSplits),
         };
       }));
       setBulkTxnIds(sorted.map((b) => b.id));
@@ -1352,6 +1510,7 @@ export default function Sales() {
       advanceMode: sale.settlement_mode || 'cash',
       payCostToSupplier: false,
       costSuppliers: [],
+      extraLines: reconstructExtraLines(sale, existingSplits),
     });
     setShowAdd(true);
   }
@@ -2135,6 +2294,22 @@ function SaleFormFields({
     setForm((prev) => ({ ...prev, costSuppliers: prev.costSuppliers.filter((_, i) => i !== idx) }));
   };
 
+  const updateExtraLine = (idx: number, field: 'mode' | 'amount', value: string) => {
+    setForm((prev) => {
+      const extraLines = [...prev.extraLines];
+      extraLines[idx] = { ...extraLines[idx], [field]: value } as PaymentLine;
+      return { ...prev, extraLines };
+    });
+  };
+
+  const addExtraLine = () => {
+    setForm((prev) => ({ ...prev, extraLines: [...prev.extraLines, { mode: 'cash', amount: '' }] }));
+  };
+
+  const removeExtraLine = (idx: number) => {
+    setForm((prev) => ({ ...prev, extraLines: prev.extraLines.filter((_, i) => i !== idx) }));
+  };
+
   const filled = (v: string) => v !== undefined && v !== null && v.trim() !== '';
 
   // Any 2 of {Selling Price, Cost Price, Profit} filled in auto-fills the 3rd.
@@ -2246,7 +2421,7 @@ function SaleFormFields({
           <option value="advance">Advance</option>
           <option value="supplier">Supplier</option>
         </select>
-        {(form.mode === 'credit' || form.mode === 'advance') && (
+        {(form.mode === 'credit' || form.mode === 'advance' || form.extraLines.some((l) => l.mode === 'credit' || l.mode === 'advance')) && (
           <div className="col-span-2 flex gap-1">
             <select
               value={form.customerId}
@@ -2269,7 +2444,7 @@ function SaleFormFields({
             )}
           </div>
         )}
-        {form.mode === 'supplier' && (
+        {(form.mode === 'supplier' || form.extraLines.some((l) => l.mode === 'supplier')) && (
           <div className="col-span-2 flex gap-1">
             <select
               value={form.supplierId}
@@ -2292,9 +2467,46 @@ function SaleFormFields({
             )}
           </div>
         )}
-        {form.mode !== 'credit' && form.mode !== 'advance' && form.mode !== 'supplier' && (
+        {!(form.mode === 'credit' || form.mode === 'advance' || form.mode === 'supplier' || form.extraLines.some((l) => l.mode === 'credit' || l.mode === 'advance' || l.mode === 'supplier')) && (
           <div className="col-span-2" />
         )}
+      </div>
+
+      {/* Extra Payment Lines - e.g. part paid from the customer's Advance and
+          the rest in Mpesa, or Mpesa paid in several separate amounts. Only
+          one Advance/Credit/Supplier line is allowed (a sale only has one
+          customer/supplier to draw it from) - real-money lines can repeat. */}
+      <div className="space-y-1.5 border border-slate-200 rounded p-2">
+        <p className="text-xs font-medium text-slate-600">Extra payment lines (optional)</p>
+        {form.extraLines.map((line, idx) => (
+          <div key={idx} className="flex gap-1.5 items-center">
+            <select
+              value={line.mode}
+              onChange={(e) => updateExtraLine(idx, 'mode', e.target.value)}
+              className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+            >
+              <option value="cash">Cash</option>
+              <option value="mpesa">Mpesa</option>
+              <option value="paybill">Paybill</option>
+              <option value="advance">Use customer's advance</option>
+              <option value="credit">Add to customer's credit (owed)</option>
+              <option value="supplier">Bill to supplier</option>
+            </select>
+            <input
+              type="number"
+              value={line.amount}
+              onChange={(e) => updateExtraLine(idx, 'amount', e.target.value)}
+              placeholder="Amount"
+              className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+            />
+            <button type="button" onClick={() => removeExtraLine(idx)} className="p-1.5 text-slate-400 hover:text-red-600 shrink-0">
+              <X size={14} />
+            </button>
+          </div>
+        ))}
+        <button type="button" onClick={addExtraLine} className="text-xs text-emerald-700 hover:text-emerald-800 font-medium">
+          + Add another payment line
+        </button>
       </div>
 
       {/* Inline quick-add customer */}
@@ -2576,20 +2788,23 @@ function SaleFormFields({
       )}
 
       {/* Advance mode buttons */}
-      {form.mode === 'advance' && (
-        <div className="flex gap-2">
-          {['cash', 'mpesa', 'paybill'].map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => update('advanceMode', m)}
-              className={`px-3 py-1 rounded text-xs font-medium ${
-                form.advanceMode === m ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'
-              }`}
-            >
-              {m.charAt(0).toUpperCase() + m.slice(1)}
-            </button>
-          ))}
+      {(form.mode === 'advance' || form.extraLines.some((l) => l.mode === 'advance')) && (
+        <div className="space-y-1">
+          {form.mode !== 'advance' && <p className="text-xs text-slate-500">His advance was originally held as:</p>}
+          <div className="flex gap-2">
+            {['cash', 'mpesa', 'paybill'].map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => update('advanceMode', m)}
+                className={`px-3 py-1 rounded text-xs font-medium ${
+                  form.advanceMode === m ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                {m.charAt(0).toUpperCase() + m.slice(1)}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 

@@ -261,9 +261,11 @@ export default function CashBank() {
         } else if (t.primary_mode === mode) {
           credit += t.amount;
         } else if (t.primary_mode === 'split') {
+          // A split sale can have more than one line in the same mode (e.g.
+          // Mpesa paid in 2 separate amounts via an Extra Payment Line) - sum
+          // every matching row here, not just the first.
           const s = splitMap.get(t.transaction_id) || [];
-          const sp = s.find((x) => x.mode === mode);
-          if (sp) credit += sp.amount;
+          s.filter((x) => x.mode === mode).forEach((x) => credit += x.amount);
         }
       } else if (t.type === 'expense') {
         const isHomeExpenseFromOwnPocket = t.category === 'home_expense' && t.notes?.includes('From Own Pocket');

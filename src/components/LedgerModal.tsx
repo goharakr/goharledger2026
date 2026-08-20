@@ -131,8 +131,17 @@ export default function LedgerModal({
   function getModeDisplay(txn: Transaction) {
     if (txn.primary_mode === 'split') {
       const s = splits.filter((sp) => sp.transaction_id === txn.transaction_id);
-      if (s.length === 0) return 'Split';
-      return s.map((sp) => `${sp.mode}: ${formatKES(sp.amount)}`).join(', ');
+      const parts = s.map((sp) => `${sp.mode}: ${formatKES(sp.amount)}`);
+      // An Extra Payment Line that isn't real cash (Advance/Credit/Supplier)
+      // doesn't get its own split row - whatever the cash lines above don't
+      // cover is that leftover instead.
+      const realSum = s.reduce((sum, sp) => sum + sp.amount, 0);
+      const leftover = (txn.selling_price ?? txn.amount ?? 0) - realSum;
+      if (leftover > 0.01) {
+        const label = txn.customer_id && txn.settlement_mode ? 'advance' : txn.customer_id ? 'credit' : txn.supplier_id ? 'supplier' : null;
+        if (label) parts.push(`${label}: ${formatKES(leftover)}`);
+      }
+      return parts.length ? parts.join(', ') : 'Split';
     }
     return txn.primary_mode || '-';
   }

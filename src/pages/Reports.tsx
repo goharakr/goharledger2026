@@ -195,7 +195,17 @@ function SalesReport() {
   function getModeDisplay(t: Transaction) {
     if (t.primary_mode === 'split') {
       const s = splitMap.get(t.transaction_id) || [];
-      return s.length ? s.map((sp) => `${sp.mode}: ${formatKES(sp.amount)}`).join(', ') : 'Split';
+      const parts = s.map((sp) => `${sp.mode}: ${formatKES(sp.amount)}`);
+      // An Extra Payment Line that isn't real cash (Advance/Credit/Supplier)
+      // doesn't get its own transaction_splits row - whatever the cash lines
+      // above don't cover is that leftover instead.
+      const realSum = s.reduce((sum, sp) => sum + sp.amount, 0);
+      const leftover = (t.selling_price ?? t.amount ?? 0) - realSum;
+      if (leftover > 0.01) {
+        const label = t.customer_id && t.settlement_mode ? 'advance' : t.customer_id ? 'credit' : t.supplier_id ? 'supplier' : null;
+        if (label) parts.push(`${label}: ${formatKES(leftover)}`);
+      }
+      return parts.length ? parts.join(', ') : 'Split';
     }
     return t.primary_mode || '-';
   }
@@ -214,7 +224,17 @@ function SalesReport() {
       totalSales += sp;
       grossProfit += saleProfit(t);
       if (t.primary_mode === 'split') {
-        (splitMap.get(t.transaction_id) || []).forEach((s) => { modeTotals[s.mode] = (modeTotals[s.mode] || 0) + s.amount; });
+        const s = splitMap.get(t.transaction_id) || [];
+        let realSum = 0;
+        s.forEach((sp2) => { modeTotals[sp2.mode] = (modeTotals[sp2.mode] || 0) + sp2.amount; realSum += sp2.amount; });
+        // Same leftover rule as getModeDisplay above - an Extra Payment Line
+        // that isn't real cash doesn't have its own split row.
+        const leftover = sp - realSum;
+        if (leftover > 0.01) {
+          if (t.customer_id && t.settlement_mode) modeTotals.advance += leftover;
+          else if (t.customer_id) modeTotals.credit += leftover;
+          else if (t.supplier_id) modeTotals.supplier += leftover;
+        }
       } else if (t.primary_mode && Object.prototype.hasOwnProperty.call(modeTotals, t.primary_mode)) {
         modeTotals[t.primary_mode] += sp;
       }

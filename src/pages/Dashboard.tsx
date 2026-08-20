@@ -166,11 +166,22 @@ export default function Dashboard() {
       else if (t.primary_mode === 'supplier') supplierAmount += t.selling_price || 0;
       else if (t.primary_mode === 'split') {
         const s = splitMap.get(t.transaction_id) || [];
+        let realSum = 0;
         s.forEach((sp) => {
-          if (sp.mode === 'cash') cashAmount += sp.amount;
-          else if (sp.mode === 'mpesa') mpesaAmount += sp.amount;
-          else if (sp.mode === 'paybill') paybillAmount += sp.amount;
+          if (sp.mode === 'cash') { cashAmount += sp.amount; realSum += sp.amount; }
+          else if (sp.mode === 'mpesa') { mpesaAmount += sp.amount; realSum += sp.amount; }
+          else if (sp.mode === 'paybill') { paybillAmount += sp.amount; realSum += sp.amount; }
         });
+        // A split sale can also have an Extra Payment Line that isn't real
+        // cash (Advance/Credit/Supplier) - whatever the real-cash lines
+        // above don't cover goes to that bucket instead, same as a plain
+        // Advance/Credit/Supplier sale.
+        const leftover = (t.selling_price || 0) - realSum;
+        if (leftover > 0.01) {
+          if (t.customer_id && t.settlement_mode) advanceAmount += leftover;
+          else if (t.customer_id) creditAmount += leftover;
+          else if (t.supplier_id) supplierAmount += leftover;
+        }
       }
     });
 
