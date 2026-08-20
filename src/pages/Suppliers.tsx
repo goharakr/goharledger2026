@@ -11,6 +11,7 @@ import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, formatTime, todayStr, isSaleIncomplete } from '../utils/format';
 import { adjustSupplierBalance, recomputeSupplierBalance, applySettlementSource, undoSettlementForTransaction, adjustPaymentAmount } from '../utils/balances';
 import { insertTransactionWithId } from '../utils/transactionId';
+import { findBulkBatch } from '../utils/batchGroup';
 import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
@@ -138,6 +139,11 @@ export default function Suppliers() {
   const [showLedger, setShowLedger] = useState(false);
   const [showBulkPayment, setShowBulkPayment] = usePersistentState('suppliers.showBulkPayment', false);
   const [bulkPaymentForms, setBulkPaymentForms] = usePersistentState<BulkPaymentRow[]>('suppliers.bulkPaymentForms', () => Array.from({ length: 10 }, () => ({ ...emptyBulkPaymentRow })));
+  // Parallel to bulkPaymentForms - the existing transaction each row came
+  // from when reopening a past bulk batch to edit, so Save All knows which
+  // rows to update in place instead of inserting as new payments. null for
+  // every row when this is a fresh (not reopened) bulk entry.
+  const [bulkPaymentTxnIds, setBulkPaymentTxnIds] = usePersistentState<(string | null)[]>('suppliers.bulkPaymentTxnIds', () => []);
   const [bulkPaymentSaving, setBulkPaymentSaving] = useState(false);
   const [txnDatePreset, setTxnDatePreset] = usePersistentState<DatePreset>('suppliers.txnDatePreset', 'month');
   const [txnCustomFrom, setTxnCustomFrom] = usePersistentState('suppliers.txnCustomFrom', '');
@@ -163,7 +169,7 @@ export default function Suppliers() {
     setSelectedSupplier(supp);
     setTxnDatePreset('all');
     if (txn.type === 'supplier_invoice') startEditInvoice(txn);
-    else if (txn.type === 'supplier_payment') startEditPayment(txn);
+    else if (txn.type === 'supplier_payment') startEditPaymentAsBulk(txn);
     setSearchParams({}, { replace: true });
   }, [transactions, suppliers, searchParams]);
 
@@ -554,6 +560,28 @@ export default function Suppliers() {
         const amt = parseFloat(f.amount);
         const supplier = suppliers.find((s) => s.id === f.supplierId);
         if (!supplier) { failedRows.push(originalIndex + 1); continue; }
+        const existingTxnId = bulkPaymentTxnIds[originalIndex];
+
+        if (existingTxnId) {
+          const existing = transactions.find((t) => t.id === existingTxnId);
+          if (!existing) { failedRows.push(originalIndex + 1); continue; }
+          const result = await adjustPaymentAmount(existing, amt, f.mode);
+          if (!result.ok) { console.error(result.error); failedRows.push(originalIndex + 1); continue; }
+          const { error } = await supabase.from('transactions').update({
+            date: f.date,
+            supplier_id: f.supplierId,
+            notes: f.notes || null,
+            clears_on: f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
+            edited_at: new Date().toISOString(),
+          }).eq('id', existingTxnId);
+          if (error) { console.error(error); failedRows.push(originalIndex + 1); continue; }
+          const delta = amt - (existing.amount || 0);
+          if (delta !== 0 || existing.supplier_id !== f.supplierId) {
+            if (existing.supplier_id) await adjustSupplierBalance(existing.supplier_id, existing.amount || 0);
+            await adjustSupplierBalance(f.supplierId, -amt);
+          }
+          continue;
+        }
 
         const { data: newTxn, error } = await insertTransactionWithId('SUP-' + f.date.replace(/-/g, ''), (txnId) => ({
           transaction_id: txnId,
@@ -573,6 +601,7 @@ export default function Suppliers() {
       }
 
       setBulkPaymentForms(Array.from({ length: 10 }, () => ({ ...emptyBulkPaymentRow, date: todayStr() })));
+      setBulkPaymentTxnIds([]);
       setShowBulkPayment(false);
       refreshSupplierData();
       if (failedRows.length > 0) {
@@ -610,6 +639,28 @@ export default function Suppliers() {
   function startEditPayment(t: Transaction) {
     setEditingPaymentId(t.id);
     setPaymentEditForm({ amount: String(t.amount || ''), date: t.date, mode: t.primary_mode || 'cash', notes: t.notes || '' });
+  }
+
+  // A payment entered through Bulk Payments reopens as that same bulk batch
+  // (every payment saved alongside it, found via findBulkBatch) instead of
+  // one row at a time - matches how it was actually entered. Falls back to
+  // the single-payment editor above if it was entered on its own.
+  function startEditPaymentAsBulk(t: Transaction) {
+    const batch = findBulkBatch(transactions, t, 'supplier_payment');
+    if (batch.length <= 1) { startEditPayment(t); return; }
+    const sorted = [...batch].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+    setBulkPaymentForms(sorted.map((b) => ({
+      supplierId: b.supplier_id || '',
+      amount: String(b.amount || ''),
+      date: b.date,
+      mode: b.primary_mode || 'cash',
+      notes: b.notes || '',
+      isPostDated: !!b.clears_on,
+      clearsOn: b.clears_on || '',
+      transactionFee: '',
+    })));
+    setBulkPaymentTxnIds(sorted.map((b) => b.id));
+    setShowBulkPayment(true);
   }
 
   async function handleUpdatePayment() {
@@ -725,7 +776,7 @@ export default function Suppliers() {
             <Plus size={16} /> Add Supplier
           </button>
           <button
-            onClick={() => { setShowBulkPayment(true); setBulkPaymentForms(Array.from({ length: 10 }, () => ({ ...emptyBulkPaymentRow, date: todayStr() }))); }}
+            onClick={() => { setShowBulkPayment(true); setBulkPaymentForms(Array.from({ length: 10 }, () => ({ ...emptyBulkPaymentRow, date: todayStr() }))); setBulkPaymentTxnIds([]); }}
             className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
           >
             <Plus size={16} /> Bulk Payments
@@ -841,12 +892,12 @@ export default function Suppliers() {
       {showBulkPayment && (
         <div
           className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-          onKeyDown={(e) => { if (e.key === 'Escape') setShowBulkPayment(false); }}
+          onKeyDown={(e) => { if (e.key === 'Escape') { setShowBulkPayment(false); setBulkPaymentTxnIds([]); } }}
         >
         <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-3xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-slate-800 text-sm">Bulk Payments to Suppliers</h3>
-            <button onClick={() => setShowBulkPayment(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
+            <h3 className="font-semibold text-slate-800 text-sm">{bulkPaymentTxnIds.length > 0 ? 'Edit Bulk Payments' : 'Bulk Payments to Suppliers'}</h3>
+            <button onClick={() => { setShowBulkPayment(false); setBulkPaymentTxnIds([]); }} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
           </div>
           <div className="space-y-2">
             {bulkPaymentForms.map((f, i) => (
@@ -994,7 +1045,7 @@ export default function Suppliers() {
             <button onClick={handleBulkPaymentSave} disabled={bulkPaymentSaving} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm font-medium">
               {bulkPaymentSaving ? 'Saving...' : 'Save All'}
             </button>
-            <button onClick={() => setShowBulkPayment(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
+            <button onClick={() => { setShowBulkPayment(false); setBulkPaymentTxnIds([]); }} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
           </div>
         </div>
         </div>
@@ -1204,7 +1255,7 @@ export default function Suppliers() {
                           <td className="px-3 py-2 text-center">
                             <div className="flex items-center justify-center gap-1">
                               {t.type === 'supplier_payment' && (
-                                <button onClick={() => startEditPayment(t)} className="p-1 hover:bg-slate-200 rounded">
+                                <button onClick={() => startEditPaymentAsBulk(t)} className="p-1 hover:bg-slate-200 rounded">
                                   <Edit2 size={14} className="text-slate-500" />
                                 </button>
                               )}

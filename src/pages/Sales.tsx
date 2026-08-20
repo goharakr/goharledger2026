@@ -21,6 +21,7 @@ import { adjustCustomerCredit, adjustCustomerAdvance, adjustSupplierBalance, app
 import { syncCommissionExpense } from '../utils/commissionExpense';
 import { parseSmartEntryText, parsePayments, detectCommission, parseExcelSmartEntryText, detectPercentCommission } from '../utils/smartEntryParser';
 import { findBestMatch } from '../utils/fuzzyMatch';
+import { findBulkBatch } from '../utils/batchGroup';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { usePersistentState } from '../context/PageStateContext';
@@ -129,6 +130,10 @@ export default function Sales() {
   const [saving, setSaving] = useState(false);
   const [form, setForm] = usePersistentState<SaleForm>('sales.form', emptyForm);
   const [bulkForms, setBulkForms] = usePersistentState<SaleForm[]>('sales.bulkForms', () => Array.from({ length: 10 }, () => ({ ...emptyForm })));
+  // Parallel to bulkForms - set when this bulk form was reopened to edit a
+  // past batch (see startEdit), so Save All knows which rows to update in
+  // place instead of inserting as new sales. Empty for a fresh bulk entry.
+  const [bulkTxnIds, setBulkTxnIds] = usePersistentState<(string | null)[]>('sales.bulkTxnIds', () => []);
   const [search, setSearch] = usePersistentState('sales.search', '');
   const [filterMode, setFilterMode] = usePersistentState<string>('sales.filterMode', '');
   const [datePreset, setDatePreset] = usePersistentState<DatePreset>('sales.datePreset', 'month');
@@ -669,6 +674,20 @@ export default function Sales() {
 
     for (let i = 0; i < validForms.length; i++) {
       const { f, originalIndex } = validForms[i];
+      const existingTxnId = bulkTxnIds[originalIndex];
+
+      // A row reopened from a past batch (see startEdit) is saved back
+      // through the same update path the single Edit form uses - the
+      // pay-cost-to-supplier flow below is create-time-only convenience and
+      // isn't reconstructed here.
+      if (existingTxnId) {
+        const oldTxn = sales.find((s) => s.id === existingTxnId);
+        if (!oldTxn) { failedRows.push(originalIndex + 1); continue; }
+        const result = await applySaleUpdate(oldTxn, f);
+        if (!result.ok) { console.error(result.error); failedRows.push(originalIndex + 1); }
+        continue;
+      }
+
       const sp = parseFloat(f.sellingPrice);
       const cp = parseFloat(f.costPrice || '0');
       const comm = parseFloat(f.commission || '0');
@@ -782,6 +801,7 @@ export default function Sales() {
     }
 
     setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyForm })));
+    setBulkTxnIds([]);
     setShowBulk(false);
     fetchData();
     triggerRefresh();
@@ -980,6 +1000,7 @@ export default function Sales() {
     }));
     if (forms.length === 0) return;
     setBulkForms(forms);
+    setBulkTxnIds([]);
     setShowBulk(true);
     setShowSmartEntry(false);
     setSmartEntryPreview([]);
@@ -1156,6 +1177,75 @@ export default function Sales() {
     }
   }
 
+  // Reverses whatever the old version of this sale did to a customer/supplier
+  // balance, writes the new form's values in place, replaces its split
+  // breakdown, and applies the new balance effects - the whole "edit one
+  // sale" operation, shared by the single Edit form and reopening a Bulk
+  // Add Sale batch to edit several at once.
+  async function applySaleUpdate(oldTxn: Transaction, f: SaleForm): Promise<{ ok: boolean; error?: string }> {
+    const sp = parseFloat(f.sellingPrice);
+    const cp = parseFloat(f.costPrice || '0');
+    const comm = parseFloat(f.commission || '0');
+
+    if (oldTxn.customer_id && (oldTxn.primary_mode === 'credit' || oldTxn.primary_mode === 'advance')) {
+      if (oldTxn.primary_mode === 'credit') {
+        await adjustCustomerCredit(oldTxn.customer_id, -(oldTxn.amount || 0));
+      } else {
+        await adjustCustomerAdvance(oldTxn.customer_id, oldTxn.amount || 0);
+      }
+    }
+    if (oldTxn.supplier_id && oldTxn.primary_mode === 'supplier') {
+      await adjustSupplierBalance(oldTxn.supplier_id, oldTxn.amount || 0);
+    }
+
+    const { error: updateError } = await supabase.from('transactions').update({
+      date: f.date,
+      primary_mode: f.mode,
+      settlement_mode: f.mode === 'advance' ? f.advanceMode : null,
+      amount: sp,
+      description: f.notes || null,
+      notes: f.mode === 'advance' ? `Advance payment via ${f.advanceMode}${f.notes ? ' | ' + f.notes : ''}` : (f.notes || null),
+      selling_price: sp,
+      cost_price: cp || null,
+      commission: comm || null,
+      commission_mode: comm > 0 ? f.commissionMode : null,
+      is_unclassified: f.isUnclassified,
+      customer_id: f.mode === 'credit' || f.mode === 'advance' ? (f.customerId || null) : null,
+      supplier_id: f.mode === 'supplier' ? (f.supplierId || null) : null,
+      edited_at: new Date().toISOString(),
+    }).eq('id', oldTxn.id);
+
+    if (updateError) {
+      console.error(updateError);
+      return { ok: false, error: updateError.message + '. The old balances were already reversed - please reopen this sale and try again.' };
+    }
+
+    // Replace the split breakdown to match the (possibly new) mode/amounts -
+    // old rows are cleared first so switching away from split mode, or
+    // changing the amounts, never leaves a stale/mismatched breakdown behind
+    await supabase.from('transaction_splits').delete().eq('transaction_id', oldTxn.transaction_id);
+    if (f.mode === 'split') {
+      const newSplits = [];
+      if (parseFloat(f.splitMpesa || '0') > 0) newSplits.push({ transaction_id: oldTxn.transaction_id, mode: 'mpesa', amount: parseFloat(f.splitMpesa) });
+      if (parseFloat(f.splitCash || '0') > 0) newSplits.push({ transaction_id: oldTxn.transaction_id, mode: 'cash', amount: parseFloat(f.splitCash) });
+      if (parseFloat(f.splitPaybill || '0') > 0) newSplits.push({ transaction_id: oldTxn.transaction_id, mode: 'paybill', amount: parseFloat(f.splitPaybill) });
+      if (newSplits.length > 0) await supabase.from('transaction_splits').insert(newSplits);
+    }
+
+    if (f.mode === 'credit' && f.customerId) {
+      await adjustCustomerCredit(f.customerId, sp);
+    }
+    if (f.mode === 'advance' && f.customerId) {
+      await adjustCustomerAdvance(f.customerId, -sp);
+    }
+    if (f.mode === 'supplier' && f.supplierId) {
+      await adjustSupplierBalance(f.supplierId, -sp);
+    }
+
+    await syncCommissionExpense(oldTxn.transaction_id, f.date, comm, f.commissionMode, user?.username || null);
+    return { ok: true };
+  }
+
   async function handleUpdate() {
     if (saving) return;
     if (!editingId) return;
@@ -1185,43 +1275,9 @@ export default function Sales() {
     setSaving(true);
     try {
 
-    const sp = parseFloat(form.sellingPrice);
-    const cp = parseFloat(form.costPrice || '0');
-    const comm = parseFloat(form.commission || '0');
-
-    // Reverse old customer/supplier effects
-    if (oldTxn.customer_id && (oldTxn.primary_mode === 'credit' || oldTxn.primary_mode === 'advance')) {
-      if (oldTxn.primary_mode === 'credit') {
-        await adjustCustomerCredit(oldTxn.customer_id, -(oldTxn.amount || 0));
-      } else {
-        await adjustCustomerAdvance(oldTxn.customer_id, oldTxn.amount || 0);
-      }
-    }
-    if (oldTxn.supplier_id && oldTxn.primary_mode === 'supplier') {
-      await adjustSupplierBalance(oldTxn.supplier_id, oldTxn.amount || 0);
-    }
-
-    // Update transaction
-    const { error: updateError } = await supabase.from('transactions').update({
-      date: form.date,
-      primary_mode: form.mode,
-      settlement_mode: form.mode === 'advance' ? form.advanceMode : null,
-      amount: sp,
-      description: form.notes || null,
-      notes: form.mode === 'advance' ? `Advance payment via ${form.advanceMode}${form.notes ? ' | ' + form.notes : ''}` : (form.notes || null),
-      selling_price: sp,
-      cost_price: cp || null,
-      commission: comm || null,
-      commission_mode: comm > 0 ? form.commissionMode : null,
-      is_unclassified: form.isUnclassified,
-      customer_id: form.mode === 'credit' || form.mode === 'advance' ? (form.customerId || null) : null,
-      supplier_id: form.mode === 'supplier' ? (form.supplierId || null) : null,
-      edited_at: new Date().toISOString(),
-    }).eq('id', editingId);
-
-    if (updateError) {
-      console.error(updateError);
-      alert('Failed to save changes: ' + updateError.message + '. The old balances were already reversed - please reopen this sale and try again.');
+    const result = await applySaleUpdate(oldTxn, form);
+    if (!result.ok) {
+      alert('Failed to save changes: ' + result.error);
       setEditingId(null);
       setForm(emptyForm);
       setShowAdd(false);
@@ -1229,31 +1285,6 @@ export default function Sales() {
       triggerRefresh();
       return;
     }
-
-    // Replace the split breakdown to match the (possibly new) mode/amounts -
-    // old rows are cleared first so switching away from split mode, or
-    // changing the amounts, never leaves a stale/mismatched breakdown behind
-    await supabase.from('transaction_splits').delete().eq('transaction_id', oldTxn.transaction_id);
-    if (form.mode === 'split') {
-      const newSplits = [];
-      if (parseFloat(form.splitMpesa || '0') > 0) newSplits.push({ transaction_id: oldTxn.transaction_id, mode: 'mpesa', amount: parseFloat(form.splitMpesa) });
-      if (parseFloat(form.splitCash || '0') > 0) newSplits.push({ transaction_id: oldTxn.transaction_id, mode: 'cash', amount: parseFloat(form.splitCash) });
-      if (parseFloat(form.splitPaybill || '0') > 0) newSplits.push({ transaction_id: oldTxn.transaction_id, mode: 'paybill', amount: parseFloat(form.splitPaybill) });
-      if (newSplits.length > 0) await supabase.from('transaction_splits').insert(newSplits);
-    }
-
-    // Apply new customer/supplier effects
-    if (form.mode === 'credit' && form.customerId) {
-      await adjustCustomerCredit(form.customerId, sp);
-    }
-    if (form.mode === 'advance' && form.customerId) {
-      await adjustCustomerAdvance(form.customerId, -sp);
-    }
-    if (form.mode === 'supplier' && form.supplierId) {
-      await adjustSupplierBalance(form.supplierId, -sp);
-    }
-
-    await syncCommissionExpense(oldTxn.transaction_id, form.date, comm, form.commissionMode, user?.username || null);
 
     setEditingId(null);
     setForm(emptyForm);
@@ -1266,6 +1297,41 @@ export default function Sales() {
   }
 
   function startEdit(sale: Transaction) {
+    // A sale entered through Bulk Add Sale reopens as that same batch (every
+    // sale saved alongside it, found via findBulkBatch) instead of one row
+    // at a time - matches how it was actually entered. The pay-cost-to-
+    // supplier flow is create-time-only convenience and isn't reconstructed.
+    const batch = findBulkBatch(sales, sale, 'sale');
+    if (batch.length > 1) {
+      const sorted = [...batch].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+      setBulkForms(sorted.map((b) => {
+        const existingSplits = splits.filter((s) => s.transaction_id === b.transaction_id);
+        return {
+          date: b.date,
+          mode: (b.primary_mode as SaleMode) || 'cash',
+          sellingPrice: String(b.selling_price || ''),
+          costPrice: String(b.cost_price || ''),
+          profit: b.cost_price !== null && b.cost_price !== undefined ? String((b.selling_price || 0) - b.cost_price) : '',
+          commission: String(b.commission || ''),
+          commissionMode: b.commission_mode || 'cash',
+          notes: b.primary_mode === 'advance' ? (b.description || '') : (b.description || b.notes || ''),
+          customerId: b.customer_id || '',
+          supplierId: b.supplier_id || '',
+          splitMpesa: String(existingSplits.find((s) => s.mode === 'mpesa')?.amount || ''),
+          splitCash: String(existingSplits.find((s) => s.mode === 'cash')?.amount || ''),
+          splitPaybill: String(existingSplits.find((s) => s.mode === 'paybill')?.amount || ''),
+          isUnclassified: b.is_unclassified,
+          advanceMode: b.settlement_mode || 'cash',
+          payCostToSupplier: false,
+          costSuppliers: [],
+        };
+      }));
+      setBulkTxnIds(sorted.map((b) => b.id));
+      setShowAdd(false);
+      setShowBulk(true);
+      return;
+    }
+
     setEditingId(sale.id);
     const existingSplits = splits.filter((s) => s.transaction_id === sale.transaction_id);
     setForm({
@@ -1337,19 +1403,19 @@ export default function Sales() {
       {/* Header actions */}
       <div className="flex flex-wrap items-center gap-3">
         <button
-          onClick={() => { setShowAdd(true); setShowBulk(false); setEditingId(null); setForm({ ...emptyForm, date: todayStr() }); }}
+          onClick={() => { setShowAdd(true); setShowBulk(false); setBulkTxnIds([]); setEditingId(null); setForm({ ...emptyForm, date: todayStr() }); }}
           className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
         >
           <Plus size={16} /> Add Sale
         </button>
         <button
-          onClick={() => { setShowBulk(true); setShowAdd(false); setShowSmartEntry(false); setEditingId(null); setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyForm, date: todayStr() }))); }}
+          onClick={() => { setShowBulk(true); setShowAdd(false); setShowSmartEntry(false); setEditingId(null); setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyForm, date: todayStr() }))); setBulkTxnIds([]); }}
           className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
         >
           <Plus size={16} /> Bulk Entry
         </button>
         <button
-          onClick={() => { setShowSmartEntry(true); setShowAdd(false); setShowBulk(false); setEditingId(null); }}
+          onClick={() => { setShowSmartEntry(true); setShowAdd(false); setShowBulk(false); setBulkTxnIds([]); setEditingId(null); }}
           className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
         >
           <Plus size={16} /> Smart Entry
@@ -1560,11 +1626,11 @@ export default function Sales() {
         <div
           className="bg-white rounded-xl border border-slate-200 shadow-lg p-4"
           data-sale-form
-          onKeyDown={(e) => { if (e.key === 'Escape') setShowBulk(false); }}
+          onKeyDown={(e) => { if (e.key === 'Escape') { setShowBulk(false); setBulkTxnIds([]); } }}
         >
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-slate-800">Bulk Entry</h3>
-            <button onClick={() => setShowBulk(false)} className="p-1 hover:bg-slate-100 rounded">
+            <h3 className="font-semibold text-slate-800">{bulkTxnIds.length > 0 ? 'Edit Bulk Entry' : 'Bulk Entry'}</h3>
+            <button onClick={() => { setShowBulk(false); setBulkTxnIds([]); }} className="p-1 hover:bg-slate-100 rounded">
               <X size={16} />
             </button>
           </div>
@@ -1651,7 +1717,7 @@ export default function Sales() {
             <button onClick={handleBulkSave} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm font-medium">
               {saving ? 'Saving...' : 'Save All'}
             </button>
-            <button onClick={() => setShowBulk(false)} className="text-slate-500 hover:text-slate-700 text-sm">
+            <button onClick={() => { setShowBulk(false); setBulkTxnIds([]); }} className="text-slate-500 hover:text-slate-700 text-sm">
               Cancel
             </button>
           </div>

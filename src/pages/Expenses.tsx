@@ -15,6 +15,7 @@ import {
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, todayStr } from '../utils/format';
 import { adjustSupplierBalance, adjustLoanBalance, applySettlementSource, undoSettlementForTransaction } from '../utils/balances';
+import { findBulkBatch } from '../utils/batchGroup';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { useDataRefresh } from '../context/DataContext';
@@ -179,9 +180,14 @@ export default function Expenses() {
   const [showLedger, setShowLedger] = useState(false);
   const [showBulk, setShowBulk] = usePersistentState('expenses.showBulk', false);
   const [bulkForms, setBulkForms] = usePersistentState<BulkExpenseRow[]>('expenses.bulkForms', () => Array.from({ length: 10 }, () => ({ ...emptyBulkRow })));
+  // Parallel to bulkForms - set when this bulk form was reopened to edit a
+  // past batch (see startEdit), so Save All knows which rows to update in
+  // place instead of inserting as new expenses. Empty for a fresh bulk entry.
+  const [bulkTxnIds, setBulkTxnIds] = usePersistentState<(string | null)[]>('expenses.bulkTxnIds', () => []);
   const [bulkSaving, setBulkSaving] = useState(false);
   const [showBulkSupplier, setShowBulkSupplier] = usePersistentState('expenses.showBulkSupplier', false);
   const [bulkSupplierForms, setBulkSupplierForms] = usePersistentState<BulkSupplierPaymentRow[]>('expenses.bulkSupplierForms', () => Array.from({ length: 10 }, () => ({ ...emptyBulkSupplierRow })));
+  const [bulkSupplierTxnIds, setBulkSupplierTxnIds] = usePersistentState<(string | null)[]>('expenses.bulkSupplierTxnIds', () => []);
   const [bulkSupplierSaving, setBulkSupplierSaving] = useState(false);
   const [showQuickAddSupplier, setShowQuickAddSupplier] = useState(false);
   const [quickSupplier, setQuickSupplier] = useState({ name: '', phone: '', balance: '' });
@@ -452,16 +458,19 @@ export default function Expenses() {
       const rows = smartEntryPreview.filter((r) => r.destination === 'shop');
       if (rows.length === 0) { alert('No Shop Expense rows found in this paste.'); return; }
       setBulkForms(rows.map((r) => ({ ...emptyBulkRow, date: r.date, amount: r.amount, mode: r.mode, category: r.category, description: r.description, smartFlags: r.flags })));
+      setBulkTxnIds([]);
       setShowBulk(true);
     } else if (activeTab === 'home') {
       const rows = smartEntryPreview.filter((r) => r.destination === 'home');
       if (rows.length === 0) { alert('No Home Expense rows found in this paste.'); return; }
       setBulkForms(rows.map((r) => ({ ...emptyBulkRow, date: r.date, amount: r.amount, mode: r.mode, partnerId: r.partnerId, source: r.source, description: r.description, smartFlags: r.flags })));
+      setBulkTxnIds([]);
       setShowBulk(true);
     } else if (activeTab === 'suppliers') {
       const rows = smartEntryPreview.filter((r) => r.destination === 'supplier');
       if (rows.length === 0) { alert('No Supplier Payment rows found in this paste.'); return; }
       setBulkSupplierForms(rows.map((r) => ({ ...emptyBulkSupplierRow, date: r.date, amount: r.amount, mode: r.mode, supplierId: r.supplierId, notes: r.description, smartFlags: r.flags })));
+      setBulkSupplierTxnIds([]);
       setShowBulkSupplier(true);
     } else {
       alert('Switch to the Shop Expenses, Home Expenses, or Supplier Payments tab first, then click this again to load that group.');
@@ -682,9 +691,9 @@ export default function Expenses() {
         const amt = parseFloat(f.amount);
         const category = isHomeExpense ? 'home_expense' : f.category;
         const isPartnerExpense = !isHomeExpense && (category === 'taher' || category === 'abdulqadir');
+        const existingTxnId = bulkTxnIds[originalIndex];
 
-        const { data: newTxn, error } = await insertTransactionWithId('EXP-' + f.date.replace(/-/g, ''), (txnId) => ({
-          transaction_id: txnId,
+        const payload = {
           date: f.date,
           type: isPartnerExpense ? 'partner_draw' : 'expense',
           primary_mode: isHomeExpense && f.source === 'own_pocket' ? null : f.mode,
@@ -694,6 +703,17 @@ export default function Expenses() {
           notes: isHomeExpense ? `From ${f.source === 'own_pocket' ? 'Own Pocket' : 'Shop'}` : null,
           partner_id: isPartnerExpense ? category : (isHomeExpense ? f.partnerId || null : null),
           clears_on: f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
+        };
+
+        if (existingTxnId) {
+          const { error } = await supabase.from('transactions').update({ ...payload, edited_at: new Date().toISOString() }).eq('id', existingTxnId);
+          if (error) { console.error(error); failedRows.push(originalIndex + 1); }
+          continue;
+        }
+
+        const { data: newTxn, error } = await insertTransactionWithId('EXP-' + f.date.replace(/-/g, ''), (txnId) => ({
+          transaction_id: txnId,
+          ...payload,
           created_by: user?.username || null,
         }));
         if (error || !newTxn) { console.error(error); failedRows.push(originalIndex + 1); continue; }
@@ -701,6 +721,7 @@ export default function Expenses() {
       }
 
       setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyBulkRow, date: todayStr() })));
+      setBulkTxnIds([]);
       setShowBulk(false);
       fetchData();
       triggerRefresh();
@@ -739,6 +760,32 @@ export default function Expenses() {
         const amt = parseFloat(f.amount);
         const supplier = suppliers.find((s) => s.id === f.supplierId);
         if (!supplier) { failedRows.push(originalIndex + 1); continue; }
+        const existingTxnId = bulkSupplierTxnIds[originalIndex];
+
+        // Rows reopened from a past batch never carry a settlement split (see
+        // startEdit - a row with one is left out of the reopened batch), so
+        // updating one is just its own plain fields plus the balance delta.
+        if (existingTxnId) {
+          const existing = allTransactions.find((t) => t.id === existingTxnId);
+          if (!existing) { failedRows.push(originalIndex + 1); continue; }
+          const { error } = await supabase.from('transactions').update({
+            date: f.date,
+            primary_mode: f.mode,
+            amount: amt,
+            supplier_id: f.supplierId,
+            notes: f.notes || null,
+            clears_on: f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
+            edited_at: new Date().toISOString(),
+          }).eq('id', existingTxnId);
+          if (error) { console.error(error); failedRows.push(originalIndex + 1); continue; }
+          savedDates.add(f.date);
+          const delta = amt - (existing.amount || 0);
+          if (delta !== 0 || existing.supplier_id !== f.supplierId) {
+            if (existing.supplier_id) await adjustSupplierBalance(existing.supplier_id, existing.amount || 0);
+            await adjustSupplierBalance(f.supplierId, -amt);
+          }
+          continue;
+        }
 
         const linkedPartnerId = supplier.linked_partner_id;
         const linkedCustomer = linkedPartnerId ? customersForLink.find((c) => c.linked_partner_id === linkedPartnerId) : undefined;
@@ -788,6 +835,7 @@ export default function Expenses() {
       }
 
       setBulkSupplierForms(Array.from({ length: 10 }, () => ({ ...emptyBulkSupplierRow, date: todayStr() })));
+      setBulkSupplierTxnIds([]);
       setShowBulkSupplier(false);
       // Make what was just saved immediately visible - not buried under a
       // collapsed date row, or invisible because the date filter doesn't
@@ -858,9 +906,67 @@ export default function Expenses() {
   }
 
   function startEdit(expense: Transaction) {
-    setEditingId(expense.id);
     const isHome = expense.category === 'home_expense';
     const isPartner = expense.type === 'partner_draw';
+
+    // A Shop/Home expense entered through Bulk Entry reopens as that same
+    // batch (every expense saved alongside it, found via findBulkBatch)
+    // instead of one row at a time - matches how it was actually entered.
+    // A batch mixing plain expenses with partner-category rows (saved as
+    // their own partner_draw type) only regroups the expense rows here -
+    // rare enough not to chase further.
+    if (expense.type === 'expense' && !isPartner) {
+      const batch = findBulkBatch(allTransactions, expense, 'expense').filter((t) => (t.category === 'home_expense') === isHome);
+      if (batch.length > 1) {
+        const sorted = [...batch].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+        setBulkForms(sorted.map((b) => ({
+          date: b.date,
+          amount: String(b.amount || ''),
+          mode: b.primary_mode || 'cash',
+          category: isHome ? '' : (b.category || ''),
+          partnerId: b.partner_id || '',
+          source: (b.notes?.includes('Own Pocket') ? 'own_pocket' : 'shop') as 'shop' | 'own_pocket',
+          description: b.description || '',
+          isPostDated: !!b.clears_on,
+          clearsOn: b.clears_on || '',
+          transactionFee: '',
+        })));
+        setBulkTxnIds(sorted.map((b) => b.id));
+        setActiveTab(isHome ? 'home' : 'shop');
+        setShowBulk(true);
+        return;
+      }
+    }
+
+    // Same idea for a Supplier Payment entered through Bulk Payments - but a
+    // payment settled via Home Expenses Owed/Profit Share/cross-balance
+    // leaves a transaction_splits row this simple form can't reconstruct, so
+    // any row with one (this one included) is left out and still opens
+    // single, same as handleUpdate's own guard for that case below.
+    if (expense.type === 'supplier_payment' && !splits.some((sp) => sp.transaction_id === expense.transaction_id)) {
+      const batch = findBulkBatch(allTransactions, expense, 'supplier_payment')
+        .filter((t) => !splits.some((sp) => sp.transaction_id === t.transaction_id));
+      if (batch.length > 1) {
+        const sorted = [...batch].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+        setBulkSupplierForms(sorted.map((b) => ({
+          supplierId: b.supplier_id || '',
+          amount: String(b.amount || ''),
+          date: b.date,
+          mode: b.primary_mode || 'cash',
+          notes: b.notes || '',
+          isPostDated: !!b.clears_on,
+          clearsOn: b.clears_on || '',
+          transactionFee: '',
+          settlement: emptySettlementAmounts,
+        })));
+        setBulkSupplierTxnIds(sorted.map((b) => b.id));
+        setActiveTab('suppliers');
+        setShowBulkSupplier(true);
+        return;
+      }
+    }
+
+    setEditingId(expense.id);
     const source = expense.notes?.includes('From Own Pocket') ? 'own_pocket' : 'shop';
     setForm({
       date: expense.date,
@@ -1084,7 +1190,7 @@ export default function Expenses() {
         )}
         {(activeTab === 'shop' || activeTab === 'home') && (
           <button
-            onClick={() => { setShowBulk(true); setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyBulkRow, date: todayStr() }))); }}
+            onClick={() => { setShowBulk(true); setBulkForms(Array.from({ length: 10 }, () => ({ ...emptyBulkRow, date: todayStr() }))); setBulkTxnIds([]); }}
             className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
           >
             <Plus size={16} /> Bulk Entry
@@ -1092,7 +1198,7 @@ export default function Expenses() {
         )}
         {activeTab === 'suppliers' && (
           <button
-            onClick={() => { setShowBulkSupplier(true); setBulkSupplierForms(Array.from({ length: 10 }, () => ({ ...emptyBulkSupplierRow, date: todayStr() }))); }}
+            onClick={() => { setShowBulkSupplier(true); setBulkSupplierForms(Array.from({ length: 10 }, () => ({ ...emptyBulkSupplierRow, date: todayStr() }))); setBulkSupplierTxnIds([]); }}
             className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
           >
             <Plus size={16} /> Bulk Payments
@@ -1602,12 +1708,12 @@ export default function Expenses() {
       {showBulk && (activeTab === 'shop' || activeTab === 'home') && (
         <div
           className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-          onKeyDown={(e) => { if (e.key === 'Escape') setShowBulk(false); }}
+          onKeyDown={(e) => { if (e.key === 'Escape') { setShowBulk(false); setBulkTxnIds([]); } }}
         >
         <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-3xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-slate-800 text-sm">Bulk Entry - {activeTab === 'shop' ? 'Shop Expenses' : 'Home Expenses'}</h3>
-            <button onClick={() => setShowBulk(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
+            <h3 className="font-semibold text-slate-800 text-sm">{bulkTxnIds.length > 0 ? 'Edit Bulk Entry' : 'Bulk Entry'} - {activeTab === 'shop' ? 'Shop Expenses' : 'Home Expenses'}</h3>
+            <button onClick={() => { setShowBulk(false); setBulkTxnIds([]); }} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
           </div>
           <div className="space-y-2">
             {bulkForms.map((f, i) => (
@@ -1798,7 +1904,7 @@ export default function Expenses() {
             <button onClick={handleBulkSave} disabled={bulkSaving} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm font-medium">
               {bulkSaving ? 'Saving...' : 'Save All'}
             </button>
-            <button onClick={() => setShowBulk(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
+            <button onClick={() => { setShowBulk(false); setBulkTxnIds([]); }} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
           </div>
         </div>
         </div>
@@ -1809,12 +1915,12 @@ export default function Expenses() {
       {showBulkSupplier && activeTab === 'suppliers' && (
         <div
           className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-          onKeyDown={(e) => { if (e.key === 'Escape') setShowBulkSupplier(false); }}
+          onKeyDown={(e) => { if (e.key === 'Escape') { setShowBulkSupplier(false); setBulkSupplierTxnIds([]); } }}
         >
         <div className="bg-white rounded-xl border border-slate-200 shadow-lg p-4 w-full max-w-3xl max-h-[90vh] overflow-y-auto" data-form-nav>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-slate-800 text-sm">Bulk Payments to Suppliers</h3>
-            <button onClick={() => setShowBulkSupplier(false)} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
+            <h3 className="font-semibold text-slate-800 text-sm">{bulkSupplierTxnIds.length > 0 ? 'Edit Bulk Payments' : 'Bulk Payments to Suppliers'}</h3>
+            <button onClick={() => { setShowBulkSupplier(false); setBulkSupplierTxnIds([]); }} className="p-1 hover:bg-slate-100 rounded"><X size={14} /></button>
           </div>
           <div className="space-y-2">
             {bulkSupplierForms.map((f, i) => (
@@ -2034,7 +2140,7 @@ export default function Expenses() {
             <button onClick={handleBulkSupplierSave} disabled={bulkSupplierSaving} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm font-medium">
               {bulkSupplierSaving ? 'Saving...' : 'Save All'}
             </button>
-            <button onClick={() => setShowBulkSupplier(false)} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
+            <button onClick={() => { setShowBulkSupplier(false); setBulkSupplierTxnIds([]); }} className="text-slate-500 hover:text-slate-700 text-sm">Cancel</button>
           </div>
         </div>
         </div>
