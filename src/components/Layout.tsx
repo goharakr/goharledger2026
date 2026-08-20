@@ -49,6 +49,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
+  // A due reminder that's still "pending" (not yet marked OK) pops up as its
+  // own in-app modal here - separate from the OS Notification below, which
+  // needs a permission grant and doesn't work on every device. Choosing
+  // "Remind me later" only clears it from THIS queue, not the database, so
+  // the next check (60s later) puts it right back if it's still due and
+  // pending - it keeps coming back until "OK" actually marks it done.
+  const [dueReminderQueue, setDueReminderQueue] = useState<Reminder[]>([]);
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>(
     typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'
   );
@@ -89,7 +96,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   // Check for due reminders every minute, regardless of which page is open
   useEffect(() => {
     const checkReminders = () => {
-      if (notifPermission !== 'granted') return;
       const supplierAlerts = localStorage.getItem('gohar_alert_supplier') !== 'false';
       const collectionAlerts = localStorage.getItem('gohar_alert_collection') !== 'false';
       const now = new Date();
@@ -103,18 +109,28 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         return reminderDate <= now && r.status === 'pending';
       });
       if (due.length > 0) {
-        due.forEach((r) => {
-          const entity = r.entity_type === 'supplier'
-            ? suppliers.find((s) => s.id === r.entity_id)
-            : customers.find((c) => c.id === r.entity_id);
-          new Notification(`Payment Reminder: ${r.reminder_type === 'supplier_payment' ? 'Pay' : 'Collect from'} ${entity?.name || 'Unknown'}`, {
-            body: `Amount: KES ${formatKES(r.amount || 0)}\nDue: ${formatDate(r.due_date)}`,
-            icon: '/favicon.ico',
-            tag: r.id, // Prevents duplicate notifications
-          });
+        // The in-app popup works everywhere, with no permission needed - it's
+        // the primary way this shows up. The OS Notification is an extra,
+        // only when the browser's granted it.
+        setDueReminderQueue((prev) => {
+          const prevIds = new Set(prev.map((r) => r.id));
+          const newOnes = due.filter((r) => !prevIds.has(r.id));
+          return newOnes.length > 0 ? [...prev, ...newOnes] : prev;
         });
-        if (audioRef.current) {
-          audioRef.current.play().catch(() => {});
+        if (notifPermission === 'granted') {
+          due.forEach((r) => {
+            const entity = r.entity_type === 'supplier'
+              ? suppliers.find((s) => s.id === r.entity_id)
+              : customers.find((c) => c.id === r.entity_id);
+            new Notification(`Payment Reminder: ${r.reminder_type === 'supplier_payment' ? 'Pay' : 'Collect from'} ${entity?.name || 'Unknown'}`, {
+              body: `Amount: KES ${formatKES(r.amount || 0)}\nDue: ${formatDate(r.due_date)}`,
+              icon: '/favicon.ico',
+              tag: r.id, // Prevents duplicate notifications
+            });
+          });
+          if (audioRef.current) {
+            audioRef.current.play().catch(() => {});
+          }
         }
       }
     };
@@ -148,6 +164,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       amount: parseFloat(reminderForm.amount || '0') || null,
       due_date: reminderForm.dueDate,
       reminder_date: reminderForm.reminderDate,
+      reminder_time: reminderForm.reminderTime || null,
       notes: reminderForm.notes || null,
       status: 'pending',
     });
@@ -155,6 +172,20 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     setReminderForm({ entityType: 'supplier', entityId: '', amount: '', dueDate: '', reminderDate: '', reminderTime: '09:00', notes: '' });
     setShowReminderPopup(false);
     triggerRefresh();
+  }
+
+  // "OK" on the due-reminder popup - marks it done for good, it never
+  // fires again.
+  async function handleReminderDone(id: string) {
+    await supabase.from('reminders').update({ status: 'completed' }).eq('id', id);
+    setDueReminderQueue((prev) => prev.filter((r) => r.id !== id));
+    setReminders((prev) => prev.filter((r) => r.id !== id));
+  }
+
+  // "Remind me later" - only closes this popup, the reminder stays pending
+  // in the database, so it comes right back the next time it's checked.
+  function handleReminderLater(id: string) {
+    setDueReminderQueue((prev) => prev.filter((r) => r.id !== id));
   }
 
   return (
@@ -276,6 +307,49 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Hidden audio for reminder notification sound */}
         <audio ref={audioRef} src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdH2LkZeYl5aSjIR8eXp5e3uBh4yRk5aXl5aTkI2HgH17e3t7fISLkpWYl5eWko6IhIJ8e3t8fYOKkJWYmJiWko6JhYOBfHt8fYGHjZGXmJiWk46JhoSDgX18fX6Ch4yRlpiYlpKOiYWEg4F9fX5/gYaMkZaYmJaSjomFhIOBf39/gIGGjJGXmJeWko6JhYSDgYB/f4CCRoyRlpiXlpKOioWEg4GAf3+AgYaOkZSYl5aSjYqFhIOBf4CAgYSMkZSYl5aTjomFhIOCf4CBgYaNkZSXl5aTjomGhIOCf4CBgoiQlJeXlpOOioWEg4J/gIGChoyRlJeWlZOQi4WEg4J/gICCgoeOkpSWlpSSkIuGhIOCf4GCg4ePkpSVlZSQjouGhIOCgIGCg4ePkpOTkpKQjouGhIOCgIGChA==" />
+
+        {/* Due Reminder Alert - pops up on its own, on any page, the moment a
+            reminder becomes due. "OK" marks it done for good; "Remind me
+            later" only closes this popup - it comes right back the next
+            time it's checked (every minute) since it's still pending. */}
+        {dueReminderQueue.length > 0 && (() => {
+          const r = dueReminderQueue[0];
+          const entity = r.entity_type === 'supplier'
+            ? suppliers.find((s) => s.id === r.entity_id)
+            : customers.find((c) => c.id === r.entity_id);
+          return (
+            <div className="fixed inset-0 bg-black/40 z-[70] flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+                <div className="flex items-center gap-2 mb-3">
+                  <Bell size={20} className="text-amber-500" />
+                  <h3 className="font-semibold text-slate-800">
+                    {r.reminder_type === 'supplier_payment' ? 'Pay' : 'Collect from'} {entity?.name || 'Unknown'}
+                  </h3>
+                </div>
+                <p className="text-sm text-slate-600 mb-1">Amount: KES {formatKES(r.amount || 0)}</p>
+                <p className="text-sm text-slate-600 mb-1">Due: {formatDate(r.due_date)}</p>
+                {r.notes && <p className="text-sm text-slate-500 mb-3">{r.notes}</p>}
+                {dueReminderQueue.length > 1 && (
+                  <p className="text-xs text-amber-600 mb-3">+{dueReminderQueue.length - 1} more reminder{dueReminderQueue.length > 2 ? 's' : ''} due</p>
+                )}
+                <div className="flex gap-2 mt-2">
+                  <button
+                    onClick={() => handleReminderDone(r.id)}
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-medium"
+                  >
+                    OK - Done
+                  </button>
+                  <button
+                    onClick={() => handleReminderLater(r.id)}
+                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-lg text-sm font-medium"
+                  >
+                    Remind me later
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Quick Add Reminder Popup */}
         {showReminderPopup && (

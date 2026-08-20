@@ -72,6 +72,12 @@ interface SaleForm {
   overpayCustomerId: string;
   overpayAmount: string;
   overpayMode: string;
+  // Same "Set reminder" idea already on the Suppliers Invoice form - a
+  // collection reminder for this customer, created alongside the sale. Only
+  // offered when creating (not Edit), so it can't fire more than once.
+  setReminder: boolean;
+  reminderDate: string;
+  reminderTime: string;
   // Only set on rows that came from Smart Entry and still have something
   // worth a second look before saving - never set on a normally-typed row.
   smartFlags?: string[];
@@ -133,6 +139,9 @@ const emptyForm: SaleForm = {
   overpayCustomerId: '',
   overpayAmount: '',
   overpayMode: 'cash',
+  setReminder: false,
+  reminderDate: '',
+  reminderTime: '09:00',
 };
 
 // Works out how a sale's Selling Price is actually being paid once Extra
@@ -547,6 +556,10 @@ export default function Sales() {
       alert('Pick which customer the extra payment goes to before saving.');
       return;
     }
+    if (form.setReminder && !form.reminderDate) {
+      alert('Pick a reminder date before saving, or turn off "Set a reminder".');
+      return;
+    }
 
     // Cancel goes back to the form so the user can fill in the Cost Price;
     // OK saves anyway and profit will show as 0 until edited later.
@@ -772,6 +785,21 @@ export default function Sales() {
       } else {
         await adjustCustomerAdvance(overpayCustomerId, overpayAmt);
       }
+    }
+
+    // Set Reminder - same pattern already used on the Suppliers Invoice
+    // form, just for a customer's Credit/Advance sale instead.
+    if (form.setReminder && form.reminderDate && form.customerId) {
+      await supabase.from('reminders').insert({
+        reminder_type: 'customer_collection',
+        entity_id: form.customerId,
+        entity_type: 'customer',
+        amount: sp,
+        due_date: form.date,
+        reminder_date: form.reminderDate,
+        reminder_time: form.reminderTime || null,
+        notes: `Sale ${txnId}`,
+      });
     }
 
     setForm(emptyForm);
@@ -1593,6 +1621,9 @@ export default function Sales() {
           overpayCustomerId: '',
           overpayAmount: '',
           overpayMode: 'cash',
+          setReminder: false,
+          reminderDate: '',
+          reminderTime: '09:00',
         };
       }));
       setBulkTxnIds(sorted.map((b) => b.id));
@@ -1625,6 +1656,9 @@ export default function Sales() {
       overpayCustomerId: '',
       overpayAmount: '',
       overpayMode: 'cash',
+      setReminder: false,
+      reminderDate: '',
+      reminderTime: '09:00',
     });
     setShowAdd(true);
   }
@@ -2998,6 +3032,39 @@ function SaleFormFields({
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Set a collection reminder for this customer - same idea already on
+          the Suppliers Invoice form. Only shown when a customer is actually
+          involved (Credit/Advance mode, or an extra Credit/Advance line),
+          and only when creating - not Edit or Bulk. */}
+      {!hideActions && !isEditing && (form.mode === 'credit' || form.mode === 'advance' || form.extraLines.some((l) => l.mode === 'credit' || l.mode === 'advance')) && (
+        <div className="space-y-1.5 border border-slate-200 rounded p-2">
+          <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+            <input
+              type="checkbox"
+              checked={form.setReminder}
+              onChange={(e) => update('setReminder', e.target.checked)}
+            />
+            Set a reminder to collect from this customer
+          </label>
+          {form.setReminder && (
+            <div className="flex gap-1.5">
+              <input
+                type="date"
+                value={form.reminderDate}
+                onChange={(e) => update('reminderDate', e.target.value)}
+                className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+              <input
+                type="time"
+                value={form.reminderTime}
+                onChange={(e) => update('reminderTime', e.target.value)}
+                className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+            </div>
+          )}
         </div>
       )}
 

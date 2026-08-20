@@ -489,6 +489,7 @@ export default function Dashboard() {
       amount: parseFloat(reminderForm.amount || '0') || null,
       due_date: reminderForm.dueDate,
       reminder_date: reminderForm.reminderDate,
+      reminder_time: reminderForm.reminderTime || null,
       notes: reminderForm.notes || null,
     });
 
