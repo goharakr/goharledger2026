@@ -504,7 +504,7 @@ export default function Employees() {
                           <td className="px-3 py-2 text-right font-medium text-slate-800">KES {formatKES(t.amount)}</td>
                           <td className="px-3 py-2 text-center">
                             <div className="flex items-center justify-center gap-1">
-                              <button onClick={() => startEditTxn(t)} className="p-1 hover:bg-slate-200 rounded"><Edit2 size={14} className="text-slate-500" /></button>
+                              <button onClick={() => { if (t.type === 'employee_salary') { setBulkSalaryEditDate(t.date); setShowBulkSalary(true); } else { startEditTxn(t); } }} className="p-1 hover:bg-slate-200 rounded"><Edit2 size={14} className="text-slate-500" /></button>
                               <button onClick={() => handleVoidTxn(t)} className="p-1 hover:bg-red-100 rounded"><Trash2 size={14} className="text-red-500" /></button>
                             </div>
                           </td>

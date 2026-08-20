@@ -198,10 +198,9 @@ export default function Expenses() {
   const { saving: savingExpense, guard: guardExpense } = useSaveGuard();
   const [showAddSalary, setShowAddSalary] = usePersistentState('expenses.showAddSalary', false);
   const [showBulkSalary, setShowBulkSalary] = useState(false);
+  const [bulkSalaryEditDate, setBulkSalaryEditDate] = useState<string | null>(null);
   const [salaryForm, setSalaryForm] = usePersistentState<SalaryForm>('expenses.salaryForm', () => emptySalaryForm(todayStr()));
   const [savingSalary, setSavingSalary] = useState(false);
-  const [editingSalaryId, setEditingSalaryId] = usePersistentState<string | null>('expenses.editingSalaryId', null);
-  const [salaryEditForm, setSalaryEditForm] = usePersistentState('expenses.salaryEditForm', { date: '', amount: '', commission: '', daysWorked: '', mode: 'cash', notes: '' });
 
   useEffect(() => {
     fetchData();
@@ -1329,8 +1328,9 @@ export default function Expenses() {
           employees={employees}
           transactions={allTransactions}
           createdBy={user?.username || null}
-          onClose={() => setShowBulkSalary(false)}
-          onSaved={() => { setShowBulkSalary(false); fetchData(); triggerRefresh(); }}
+          editDate={bulkSalaryEditDate || undefined}
+          onClose={() => { setShowBulkSalary(false); setBulkSalaryEditDate(null); }}
+          onSaved={() => { setShowBulkSalary(false); setBulkSalaryEditDate(null); fetchData(); triggerRefresh(); }}
         />
       )}
 
@@ -2157,7 +2157,7 @@ export default function Expenses() {
                       <td className="px-3 py-2 text-right font-medium text-slate-800">KES {formatKES(t.amount)}</td>
                       <td className="px-3 py-2 text-center">
                         <div className="flex items-center justify-center gap-1">
-                          <button onClick={() => { setEditingSalaryId(t.id); setSalaryEditForm({ date: t.date, amount: String(t.amount || ''), commission: String(t.commission || ''), daysWorked: String(t.days_worked || ''), mode: t.primary_mode || 'cash', notes: t.notes || '' }); }} className="p-1 hover:bg-slate-200 rounded">
+                          <button onClick={() => { setBulkSalaryEditDate(t.date); setShowBulkSalary(true); }} className="p-1 hover:bg-slate-200 rounded">
                             <Edit2 size={14} className="text-slate-500" />
                           </button>
                           <button
@@ -2175,53 +2175,6 @@ export default function Expenses() {
                         </div>
                       </td>
                     </tr>
-                    {editingSalaryId === t.id && (
-                      <tr>
-                        <td colSpan={5} className="px-3 py-3 bg-slate-50">
-                          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                            <input type="date" value={salaryEditForm.date} onChange={(e) => setSalaryEditForm({ ...salaryEditForm, date: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-                            <input type="number" min="0" value={salaryEditForm.amount} onChange={(e) => setSalaryEditForm({ ...salaryEditForm, amount: e.target.value })} placeholder="Amount" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-                            <input type="number" min="0" value={salaryEditForm.commission} onChange={(e) => setSalaryEditForm({ ...salaryEditForm, commission: e.target.value })} placeholder="Commission" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-                            <select value={salaryEditForm.mode} onChange={(e) => setSalaryEditForm({ ...salaryEditForm, mode: e.target.value })} className="border border-slate-300 rounded px-2 py-1.5 text-sm">
-                              <option value="cash">Cash</option>
-                              <option value="mpesa">Mpesa</option>
-                              <option value="paybill">Paybill</option>
-                            </select>
-                            <input type="number" min="0" value={salaryEditForm.daysWorked} onChange={(e) => setSalaryEditForm({ ...salaryEditForm, daysWorked: e.target.value })} placeholder="Days worked" className="border border-slate-300 rounded px-2 py-1.5 text-sm" />
-                            <input type="text" value={salaryEditForm.notes} onChange={(e) => setSalaryEditForm({ ...salaryEditForm, notes: e.target.value })} placeholder="Notes" className="col-span-2 md:col-span-3 border border-slate-300 rounded px-2 py-1.5 text-sm" />
-                          </div>
-                          {(t.employee_loan_deduction || t.employee_advance_deduction) ? (
-                            <p className="text-xs text-slate-500 mt-1">This payment includes a loan/advance deduction - void and re-enter it instead if that part needs to change.</p>
-                          ) : null}
-                          <div className="flex gap-2 mt-2">
-                            <button
-                              onClick={async () => {
-                                const newAmount = parseFloat(salaryEditForm.amount);
-                                if (!salaryEditForm.amount || isNaN(newAmount) || newAmount < 0) { alert('Enter a valid amount'); return; }
-                                const { error } = await supabase.from('transactions').update({
-                                  date: salaryEditForm.date,
-                                  amount: newAmount,
-                                  primary_mode: newAmount > 0 ? salaryEditForm.mode : null,
-                                  commission: salaryEditForm.commission ? parseFloat(salaryEditForm.commission) : null,
-                                  commission_mode: salaryEditForm.commission ? salaryEditForm.mode : null,
-                                  days_worked: salaryEditForm.daysWorked ? parseInt(salaryEditForm.daysWorked, 10) : null,
-                                  notes: salaryEditForm.notes || null,
-                                  edited_at: new Date().toISOString(),
-                                }).eq('id', editingSalaryId);
-                                if (error) { alert('Failed to save: ' + error.message); return; }
-                                setEditingSalaryId(null);
-                                fetchData();
-                                triggerRefresh();
-                              }}
-                              className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded text-xs font-medium"
-                            >
-                              Save
-                            </button>
-                            <button onClick={() => setEditingSalaryId(null)} className="text-slate-500 hover:text-slate-700 text-xs">Cancel</button>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
                     </Fragment>
                   );
                 })}
