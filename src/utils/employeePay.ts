@@ -172,6 +172,50 @@ export async function saveEmployeeSalaryPayment(input: SalaryPaymentInput): Prom
   return { ok: true };
 }
 
+// Same rules as saveEmployeeSalaryPayment, but updates an existing row in
+// place instead of inserting a new one - used when editing a payment that
+// was already saved (single or as part of a bulk run). loanOutstanding/
+// advanceOutstanding must be computed with this transaction's own old
+// deduction excluded first, or increasing a deduction here would look like
+// it exceeds what's outstanding when it doesn't.
+export async function updateEmployeeSalaryPayment(id: string, input: SalaryPaymentInput): Promise<{ ok: boolean; error?: string }> {
+  const netAmount = input.salaryAmount + input.commission - input.loanDeduction - input.advanceDeduction;
+  if (netAmount < 0) {
+    return { ok: false, error: 'The loan and advance deductions add up to more than the salary and commission - the net amount would be negative.' };
+  }
+
+  let loanRef: string | null = null;
+  if (input.loanDeduction > 0) {
+    const resolved = await resolveDeductionRef('employee_loan', input.employeeId, input.date, input.loanDeduction, input.loanOutstanding, input.loanActiveRef, input.createdBy);
+    if (resolved?.error) return { ok: false, error: resolved.error };
+    loanRef = resolved?.ref || null;
+  }
+
+  let advanceRef: string | null = null;
+  if (input.advanceDeduction > 0) {
+    const resolved = await resolveDeductionRef('employee_advance', input.employeeId, input.date, input.advanceDeduction, input.advanceOutstanding, input.advanceActiveRef, input.createdBy);
+    if (resolved?.error) return { ok: false, error: resolved.error };
+    advanceRef = resolved?.ref || null;
+  }
+
+  const { error } = await supabase.from('transactions').update({
+    date: input.date,
+    primary_mode: netAmount > 0 ? input.mode : null,
+    amount: netAmount,
+    commission: input.commission > 0 ? input.commission : null,
+    commission_mode: input.commission > 0 ? input.mode : null,
+    employee_loan_ref: loanRef,
+    employee_loan_deduction: input.loanDeduction > 0 ? input.loanDeduction : null,
+    employee_advance_ref: advanceRef,
+    employee_advance_deduction: input.advanceDeduction > 0 ? input.advanceDeduction : null,
+    days_worked: input.daysWorked,
+    notes: input.notes,
+    edited_at: new Date().toISOString(),
+  }).eq('id', id);
+  if (error) return { ok: false, error: 'Failed to update salary payment: ' + error.message };
+  return { ok: true };
+}
+
 // noRealCash: the money already left before this was recorded (e.g. a loan
 // given back in July, entered into the app only now) - primary_mode is left
 // null so walletBalance.ts's mode-based deduction never fires for it, same

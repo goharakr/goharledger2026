@@ -61,6 +61,7 @@ export default function Employees() {
   const [form, setForm] = usePersistentState<EmployeeForm>('employees.form', emptyEmployee);
   const [showSalary, setShowSalary] = usePersistentState('employees.showSalary', false);
   const [showBulkSalary, setShowBulkSalary] = useState(false);
+  const [bulkSalaryEditDate, setBulkSalaryEditDate] = useState<string | null>(null);
   const [salaryForm, setSalaryForm] = usePersistentState<SalaryForm>('employees.salaryForm', () => emptySalaryForm(todayStr()));
   const [savingSalary, setSavingSalary] = useState(false);
   const [showLoan, setShowLoan] = usePersistentState('employees.showLoan', false);
@@ -89,7 +90,15 @@ export default function Employees() {
     if (!emp) return;
     setSelectedEmployee(emp);
     setTxnDatePreset('all');
-    startEditTxn(txn);
+    // A salary payment is reopened as its whole day's bulk run (every
+    // employee paid that date, in one editable batch) instead of one row at
+    // a time - matches how it was actually entered.
+    if (txn.type === 'employee_salary') {
+      setBulkSalaryEditDate(txn.date);
+      setShowBulkSalary(true);
+    } else {
+      startEditTxn(txn);
+    }
     setSearchParams({}, { replace: true });
   }, [transactions, employees, searchParams]);
 
@@ -639,8 +648,9 @@ export default function Employees() {
           employees={employees}
           transactions={transactions}
           createdBy={user?.username || null}
-          onClose={() => setShowBulkSalary(false)}
-          onSaved={() => { setShowBulkSalary(false); fetchData(); triggerRefresh(); }}
+          editDate={bulkSalaryEditDate || undefined}
+          onClose={() => { setShowBulkSalary(false); setBulkSalaryEditDate(null); }}
+          onSaved={() => { setShowBulkSalary(false); setBulkSalaryEditDate(null); fetchData(); triggerRefresh(); }}
         />
       )}
 
