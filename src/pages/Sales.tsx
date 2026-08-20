@@ -65,6 +65,13 @@ interface SaleForm {
   // separate amounts. Empty for a normal single-mode sale (the untouched,
   // original save path is used whenever this is empty).
   extraLines: PaymentLine[];
+  // A customer paid more than this sale's Selling Price and wants the rest
+  // banked for next time - a one-off "Deposit Advance" bolted onto the Add
+  // Sale form, only ever offered when creating a brand new sale (not on
+  // Edit, so re-saving the same sale never fires it twice).
+  overpayCustomerId: string;
+  overpayAmount: string;
+  overpayMode: string;
   // Only set on rows that came from Smart Entry and still have something
   // worth a second look before saving - never set on a normally-typed row.
   smartFlags?: string[];
@@ -123,6 +130,9 @@ const emptyForm: SaleForm = {
   payCostToSupplier: false,
   costSuppliers: [],
   extraLines: [],
+  overpayCustomerId: '',
+  overpayAmount: '',
+  overpayMode: 'cash',
 };
 
 // Works out how a sale's Selling Price is actually being paid once Extra
@@ -260,6 +270,20 @@ export default function Sales() {
       setSearchParams({}, { replace: true });
     }
   }, [sales, searchParams]);
+
+  // "Add Sale" clicked from a customer's own page - opens a fresh Add Sale
+  // form with that customer already picked, so their sale can be entered
+  // without hunting them down again here.
+  useEffect(() => {
+    const customerId = searchParams.get('newForCustomer');
+    if (!customerId) return;
+    setEditingId(null);
+    setBulkTxnIds([]);
+    setForm({ ...emptyForm, date: todayStr(), mode: 'credit', customerId });
+    setShowAdd(true);
+    setShowBulk(false);
+    setSearchParams({}, { replace: true });
+  }, [searchParams]);
 
   async function fetchData() {
     setLoading(true);
@@ -519,6 +543,10 @@ export default function Sales() {
       alert('Every extra payment line needs an amount before saving - remove any empty ones.');
       return;
     }
+    if (form.overpayAmount && parseFloat(form.overpayAmount) > 0 && !(form.overpayCustomerId || form.customerId)) {
+      alert('Pick which customer the extra payment goes to before saving.');
+      return;
+    }
 
     // Cancel goes back to the form so the user can fill in the Cost Price;
     // OK saves anyway and profit will show as 0 until edited later.
@@ -718,6 +746,32 @@ export default function Sales() {
 
     if (comm > 0) {
       await syncCommissionExpense(txnId, form.date, comm, form.commissionMode, user?.username || null);
+    }
+
+    // Customer paid more than the Selling Price - bank the rest as advance,
+    // same as the standalone Deposit Advance action (a separate transaction,
+    // not part of this sale).
+    const overpayAmt = parseFloat(form.overpayAmount || '0');
+    const overpayCustomerId = form.overpayCustomerId || form.customerId;
+    if (overpayAmt > 0 && overpayCustomerId) {
+      const overpayCustomer = customers.find((c) => c.id === overpayCustomerId);
+      const { data: depTxn, error: depError } = await insertTransactionWithId('ADV-' + form.date.replace(/-/g, ''), (transactionId) => ({
+        transaction_id: transactionId,
+        date: form.date,
+        type: 'customer_payment',
+        primary_mode: form.overpayMode,
+        amount: overpayAmt,
+        customer_id: overpayCustomerId,
+        description: `Advance from ${overpayCustomer?.name || 'customer'}`,
+        notes: `Extra paid on sale ${txnId}`,
+        created_by: user?.username || null,
+      }));
+      if (depError || !depTxn) {
+        console.error(depError);
+        alert('Sale saved, but recording the extra amount into advance failed: ' + (depError?.message || 'unknown error'));
+      } else {
+        await adjustCustomerAdvance(overpayCustomerId, overpayAmt);
+      }
     }
 
     setForm(emptyForm);
@@ -1536,6 +1590,9 @@ export default function Sales() {
           payCostToSupplier: false,
           costSuppliers: [],
           extraLines: reconstructExtraLines(b, existingSplits),
+          overpayCustomerId: '',
+          overpayAmount: '',
+          overpayMode: 'cash',
         };
       }));
       setBulkTxnIds(sorted.map((b) => b.id));
@@ -1565,6 +1622,9 @@ export default function Sales() {
       payCostToSupplier: false,
       costSuppliers: [],
       extraLines: reconstructExtraLines(sale, existingSplits),
+      overpayCustomerId: '',
+      overpayAmount: '',
+      overpayMode: 'cash',
     });
     setShowAdd(true);
   }
@@ -2901,6 +2961,45 @@ function SaleFormFields({
         placeholder="Notes (optional)"
         className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
       />
+
+      {/* Customer paid more than this sale's Selling Price - banks the rest
+          as advance for next time (a one-off "Deposit Advance" bolted onto
+          this form). Only offered when creating a brand new sale - not on
+          Edit or Bulk, so re-saving never fires it twice. */}
+      {!hideActions && !isEditing && (
+        <div className="space-y-1.5 border border-slate-200 rounded p-2">
+          <p className="text-xs font-medium text-slate-600">Customer paid extra? Add it to their advance (optional)</p>
+          <div className="flex gap-1.5 items-center flex-wrap">
+            <select
+              value={form.overpayCustomerId || form.customerId}
+              onChange={(e) => update('overpayCustomerId', e.target.value)}
+              className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+            >
+              <option value="">Customer</option>
+              {sortCustomersByBalance(customers).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <input
+              type="number"
+              value={form.overpayAmount}
+              onChange={(e) => update('overpayAmount', e.target.value)}
+              placeholder="Extra amount"
+              className="w-28 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+            />
+            {['cash', 'mpesa', 'paybill'].map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => update('overpayMode', m)}
+                className={`px-3 py-1 rounded text-xs font-medium ${
+                  form.overpayMode === m ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                {m.charAt(0).toUpperCase() + m.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Profit display and actions */}
       {!hideActions && (

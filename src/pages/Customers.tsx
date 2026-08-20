@@ -1,5 +1,5 @@
 import { useEffect, useState, Fragment } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -129,6 +129,7 @@ export default function Customers() {
   const [txnCustomTo, setTxnCustomTo] = usePersistentState('customers.txnCustomTo', '');
 
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
 
   useEffect(() => {
     fetchData();
@@ -1021,6 +1022,12 @@ export default function Customers() {
                     className="p-1.5 hover:bg-red-100 rounded"
                   >
                     <Trash2 size={14} className="text-red-500" />
+                  </button>
+                  <button
+                    onClick={() => navigate(`/sales?newForCustomer=${selectedCustomer.id}`)}
+                    className="bg-slate-700 hover:bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-medium"
+                  >
+                    Add Sale
                   </button>
                   <button
                     onClick={() => { setShowPayment(true); setPaymentForm({ ...emptyPayment, date: todayStr(), paymentType: 'credit' }); }}
