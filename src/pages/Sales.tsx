@@ -46,6 +46,12 @@ interface SaleForm {
   date: string;
   mode: SaleMode;
   sellingPrice: string;
+  // The price before Discount, and the Discount itself - both blank for a
+  // normal sale with no discount. Typing either one recomputes Selling
+  // Price as grossPrice - discount; typing Selling Price directly still
+  // overrides it (same "whichever box you type wins" rule as CP/Profit).
+  grossPrice: string;
+  discount: string;
   costPrice: string;
   profit: string;
   commission: string;
@@ -121,6 +127,8 @@ const emptyForm: SaleForm = {
   date: todayStr(),
   mode: 'cash',
   sellingPrice: '',
+  grossPrice: '',
+  discount: '',
   costPrice: '',
   profit: '',
   commission: '',
@@ -586,6 +594,10 @@ export default function Sales() {
     const sp = parseFloat(form.sellingPrice);
     const cp = parseFloat(form.costPrice || '0');
     const comm = parseFloat(form.commission || '0');
+    // No dedicated Discount column exists yet - kept on record as plain text
+    // in Notes instead, same as how an Advance sale's mode already gets
+    // written in there.
+    const discountNote = form.discount && parseFloat(form.discount) > 0 ? `Discount: KES ${parseFloat(form.discount).toLocaleString()}` : '';
 
     // Extra Payment Lines (e.g. part Advance + part Mpesa) reuse the same
     // 'split' storage Split mode always has, plus whichever single Advance/
@@ -619,7 +631,11 @@ export default function Sales() {
         settlement_mode: settlementMode,
         amount: sp,
         description: form.notes || null,
-        notes: !usesExtraLines && form.mode === 'advance' ? `Advance payment via ${form.advanceMode}${form.notes ? ' | ' + form.notes : ''}` : (form.notes || null),
+        notes: [
+          !usesExtraLines && form.mode === 'advance' ? `Advance payment via ${form.advanceMode}` : '',
+          discountNote,
+          form.notes,
+        ].filter(Boolean).join(' | ') || null,
         selling_price: sp,
         cost_price: cp || null,
         commission: comm || null,
@@ -894,6 +910,7 @@ export default function Sales() {
       const sp = parseFloat(f.sellingPrice);
       const cp = parseFloat(f.costPrice || '0');
       const comm = parseFloat(f.commission || '0');
+      const discountNote = f.discount && parseFloat(f.discount) > 0 ? `Discount: KES ${parseFloat(f.discount).toLocaleString()}` : '';
       const prefix = 'SAL-' + f.date.replace(/-/g, '');
 
       // Same Extra Payment Lines handling as the single Add Sale form - see
@@ -923,7 +940,11 @@ export default function Sales() {
         settlement_mode: settlementMode,
         amount: sp,
         description: f.notes || null,
-        notes: !usesExtraLines && f.mode === 'advance' ? `Advance payment via ${f.advanceMode}${f.notes ? ' | ' + f.notes : ''}` : (f.notes || null),
+        notes: [
+          !usesExtraLines && f.mode === 'advance' ? `Advance payment via ${f.advanceMode}` : '',
+          discountNote,
+          f.notes,
+        ].filter(Boolean).join(' | ') || null,
         selling_price: sp,
         cost_price: cp || null,
         commission: comm || null,
@@ -1265,6 +1286,15 @@ export default function Sales() {
     return Math.max(0, original - alreadyRefunded(sale));
   }
 
+  // Every refund actually made against a sale, most recent first - shown
+  // attached to that sale's own row in the list below instead of as its own
+  // separate, easy-to-miss negative-amount entry.
+  function refundsOf(sale: Transaction): Transaction[] {
+    return sales
+      .filter((s) => s.refunded_of === sale.transaction_id && !s.is_void)
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }
+
   // Refund Amount/Cost Price/Profit auto-fill each other the same way the main
   // Sales form does (Amount stands in for Selling Price here) - type any 2,
   // the 3rd works itself out; whichever box you actually type into wins.
@@ -1429,6 +1459,7 @@ export default function Sales() {
     const sp = parseFloat(f.sellingPrice);
     const cp = parseFloat(f.costPrice || '0');
     const comm = parseFloat(f.commission || '0');
+    const discountNote = f.discount && parseFloat(f.discount) > 0 ? `Discount: KES ${parseFloat(f.discount).toLocaleString()}` : '';
 
     // Reverse whatever the old version drew from Advance/Credit/Supplier -
     // either a plain single-mode sale, or (if it was a 'split' sale with an
@@ -1480,7 +1511,11 @@ export default function Sales() {
       settlement_mode: settlementMode,
       amount: sp,
       description: f.notes || null,
-      notes: !usesExtraLines && f.mode === 'advance' ? `Advance payment via ${f.advanceMode}${f.notes ? ' | ' + f.notes : ''}` : (f.notes || null),
+      notes: [
+        !usesExtraLines && f.mode === 'advance' ? `Advance payment via ${f.advanceMode}` : '',
+        discountNote,
+        f.notes,
+      ].filter(Boolean).join(' | ') || null,
       selling_price: sp,
       cost_price: cp || null,
       commission: comm || null,
@@ -1603,6 +1638,8 @@ export default function Sales() {
           date: b.date,
           mode: (b.primary_mode as SaleMode) || 'cash',
           sellingPrice: String(b.selling_price || ''),
+          grossPrice: '',
+          discount: '',
           costPrice: String(b.cost_price || ''),
           profit: b.cost_price !== null && b.cost_price !== undefined ? String((b.selling_price || 0) - b.cost_price) : '',
           commission: String(b.commission || ''),
@@ -1638,6 +1675,8 @@ export default function Sales() {
       date: sale.date,
       mode: (sale.primary_mode as SaleMode) || 'cash',
       sellingPrice: String(sale.selling_price || ''),
+      grossPrice: '',
+      discount: '',
       costPrice: String(sale.cost_price || ''),
       profit: sale.cost_price !== null && sale.cost_price !== undefined ? String((sale.selling_price || 0) - sale.cost_price) : '',
       commission: String(sale.commission || ''),
@@ -1682,7 +1721,7 @@ export default function Sales() {
 
   // Only rows currently visible (their date group expanded) can be browsed
   // with arrow keys - a collapsed group has nothing on screen to move into.
-  const visibleSales = sortedDates.filter((d) => expandedDates.has(d)).flatMap((d) => grouped.get(d) || []);
+  const visibleSales = sortedDates.filter((d) => expandedDates.has(d)).flatMap((d) => grouped.get(d) || []).filter((s) => !s.refunded_of);
 
   const handleListKeyDown = (e: React.KeyboardEvent) => {
     if (!['ArrowDown', 'ArrowUp', 'Enter'].includes(e.key)) return;
@@ -2061,7 +2100,7 @@ export default function Sales() {
                   >
                     {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                     <span className="font-medium text-slate-800">{formatDate(date)}</span>
-                    <span className="text-sm text-slate-500 ml-2">{daySales.length} sales</span>
+                    <span className="text-sm text-slate-500 ml-2">{daySales.filter((s) => !s.refunded_of).length} sales</span>
                     <span className="ml-auto text-sm font-medium text-emerald-600">KES {formatKES(dayTotal)}</span>
                     <span className="text-xs text-slate-400 ml-2">Profit: KES {formatKES(dayProfit)}</span>
                   </button>
@@ -2080,9 +2119,13 @@ export default function Sales() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {daySales.map((sale) => {
-                            const profit = saleProfit(sale);
+                          {daySales.filter((sale) => !sale.refunded_of).map((sale) => {
                             const incomplete = isSaleIncomplete(sale);
+                            const refunds = refundsOf(sale);
+                            const netAmount = (sale.selling_price || 0) - alreadyRefunded(sale);
+                            // Profit shown here already nets out any refund's own
+                            // reversed profit, so it matches what's actually kept.
+                            const profit = saleProfit(sale) + refunds.reduce((sum, r) => sum + saleProfit(r), 0);
                             return (
                               <tr
                                 key={sale.id}
@@ -2113,6 +2156,22 @@ export default function Sales() {
                                     <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500" title={`Edited ${formatDate(sale.edited_at)}`}>
                                       Edited
                                     </span>
+                                  )}
+                                  {/* Refund(s) shown attached right here instead of as their
+                                      own confusing separate negative-amount row - the money
+                                      still actually left the wallet on its own real date
+                                      (see the Cash/Mpesa/Paybill Ledger for that). */}
+                                  {refunds.length > 0 && (
+                                    <div className="mt-1 space-y-0.5">
+                                      {refunds.map((r) => (
+                                        <div key={r.id} className="text-xs text-amber-700">
+                                          ↩ Refunded KES {formatKES(Math.abs(r.selling_price ?? r.amount ?? 0))} on {formatDate(r.date)}
+                                        </div>
+                                      ))}
+                                      <div className="text-xs text-slate-500">
+                                        Sold KES {formatKES(sale.selling_price || 0)} — Net KES {formatKES(netAmount)}
+                                      </div>
+                                    </div>
                                   )}
                                 </td>
                                 <td className="px-4 py-2 text-right font-medium">{formatKES(sale.selling_price || 0)}</td>
@@ -2481,6 +2540,36 @@ function SaleFormFields({
   };
 
   const filled = (v: string) => v !== undefined && v !== null && v.trim() !== '';
+
+  // Typing a Price or a Discount works out Selling Price = Price - Discount
+  // for you. The first time Discount is used, Price is captured from
+  // whatever Selling Price already was, so editing Discount again always
+  // recomputes from that same original Price, not from the already-
+  // discounted amount - 200 off 2000 gives 1800, then changing it to 300
+  // gives 1700, not 1500. Typing Selling Price directly still overrides it,
+  // same "whichever box you type wins" rule as CP/Profit below.
+  const handleGrossPriceChange = (value: string) => {
+    const gross = parseFloat(value || '0');
+    setForm((prev) => {
+      const disc = parseFloat(prev.discount || '0');
+      const sp = String(gross - disc);
+      if (filled(prev.costPrice)) return { ...prev, grossPrice: value, sellingPrice: sp, profit: String(parseFloat(sp) - parseFloat(prev.costPrice)) };
+      if (filled(prev.profit)) return { ...prev, grossPrice: value, sellingPrice: sp, costPrice: String(parseFloat(sp) - parseFloat(prev.profit)) };
+      return { ...prev, grossPrice: value, sellingPrice: sp };
+    });
+  };
+
+  const handleDiscountChange = (value: string) => {
+    const disc = parseFloat(value || '0');
+    setForm((prev) => {
+      const grossPrice = filled(prev.grossPrice) ? prev.grossPrice : prev.sellingPrice;
+      const gross = parseFloat(grossPrice || '0');
+      const sp = String(gross - disc);
+      if (filled(prev.costPrice)) return { ...prev, discount: value, grossPrice, sellingPrice: sp, profit: String(parseFloat(sp) - parseFloat(prev.costPrice)) };
+      if (filled(prev.profit)) return { ...prev, discount: value, grossPrice, sellingPrice: sp, costPrice: String(parseFloat(sp) - parseFloat(prev.profit)) };
+      return { ...prev, discount: value, grossPrice, sellingPrice: sp };
+    });
+  };
 
   // Any 2 of {Selling Price, Cost Price, Profit} filled in auto-fills the 3rd.
   // Whichever box you type into yourself always wins - this only ever
@@ -2887,6 +2976,28 @@ function SaleFormFields({
           )}
         </div>
       )}
+
+      {/* Discount (optional) - Price minus Discount fills in Selling Price
+          below automatically; typing Selling Price directly still works as
+          before and overrides this. */}
+      <div className="grid grid-cols-2 gap-2">
+        <input
+          type="number"
+          value={form.grossPrice}
+          onChange={(e) => handleGrossPriceChange(e.target.value)}
+          onKeyDown={(e) => handleKeyDown(e, 'grossPrice')}
+          placeholder="Price (before discount)"
+          className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+        />
+        <input
+          type="number"
+          value={form.discount}
+          onChange={(e) => handleDiscountChange(e.target.value)}
+          onKeyDown={(e) => handleKeyDown(e, 'discount')}
+          placeholder="Discount (optional)"
+          className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+        />
+      </div>
 
       {/* Row 2: SP, CP, Profit, Commission - any 2 of SP/CP/Profit auto-fill the 3rd */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
