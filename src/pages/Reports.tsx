@@ -13,21 +13,25 @@ import {
   Landmark,
   Scale,
   TrendingUp,
+  BookOpen,
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, getMonthLabel, saleProfit, todayStr } from '../utils/format';
 import { sortCustomersByBalance, sortSuppliersByBalance } from '../utils/sortEntities';
 import { buildMonthlyFigures, calculateShareEarned } from '../utils/shareDue';
 import { fetchAllRows } from '../utils/fetchAll';
+import { buildLedgerEntries } from '../utils/ledgerEntries';
 import { useDataRefresh } from '../context/DataContext';
 import { usePersistentState } from '../context/PageStateContext';
 import DateFilterBar from '../components/DateFilterBar';
+import LedgerModal from '../components/LedgerModal';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
 import type { Transaction, Customer, Supplier, ExpenseCategory, LoanTracker, HistoricalProfit } from '../types';
 
-type ReportKey = 'sales' | 'expenses' | 'home_expenses' | 'partners' | 'suppliers' | 'customers' | 'loans' | 'cash_reconciliation' | 'monthly_profit';
+type ReportKey = 'ledger' | 'sales' | 'expenses' | 'home_expenses' | 'partners' | 'suppliers' | 'customers' | 'loans' | 'cash_reconciliation' | 'monthly_profit';
 
 const REPORT_LIST: { key: ReportKey; label: string; icon: typeof ShoppingCart }[] = [
+  { key: 'ledger', label: 'Combined Ledger', icon: BookOpen },
   { key: 'sales', label: 'Sales', icon: ShoppingCart },
   { key: 'expenses', label: 'Expenses', icon: Receipt },
   { key: 'home_expenses', label: 'Home Expenses', icon: Home },
@@ -152,6 +156,81 @@ function ModeSelect({ value, onChange }: { value: string; onChange: (v: string) 
       <option value="cash">Cash</option>
       <option value="paybill">Paybill</option>
     </select>
+  );
+}
+
+// ==================== Combined Ledger (every entry, one place) ====================
+
+function CombinedLedgerReport() {
+  const { refreshKey } = useDataRefresh();
+  const [filter, setFilter] = usePersistentState<{ datePreset: DatePreset; customFrom: string; customTo: string }>('reports.ledger.filter', { datePreset: 'month', customFrom: '', customTo: '' });
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [splits, setSplits] = useState<{ transaction_id: string; mode: string; amount: number }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showLedger, setShowLedger] = useState(false);
+
+  const { from: dateFrom, to: dateTo } = getDatePresetRange(filter.datePreset, filter.customFrom, filter.customTo);
+
+  useEffect(() => { fetchData(); }, [refreshKey]);
+
+  async function fetchData() {
+    setLoading(true);
+    const [{ data: txns }, { data: splitData }] = await Promise.all([
+      fetchAllRows<Transaction>((from, to) => supabase.from('transactions').select('*').eq('is_void', false).range(from, to)),
+      supabase.from('transaction_splits').select('*'),
+    ]);
+    setTransactions(txns || []);
+    setSplits(splitData || []);
+    setLoading(false);
+  }
+
+  const splitMap = useMemo(() => {
+    const m = new Map<string, { mode: string; amount: number }[]>();
+    splits.forEach((s) => { if (!m.has(s.transaction_id)) m.set(s.transaction_id, []); m.get(s.transaction_id)!.push(s); });
+    return m;
+  }, [splits]);
+
+  // buildLedgerEntries comes back chronological with each row's running balance already
+  // correct; reversed here (newest first) same as every other ledger view in the app.
+  const entries = useMemo(() => {
+    return buildLedgerEntries(transactions, splitMap, 'all').filter((e) => e.date >= dateFrom && e.date <= dateTo).reverse();
+  }, [transactions, splitMap, dateFrom, dateTo]);
+
+  const totalIn = entries.reduce((s, e) => s + e.credit, 0);
+  const totalOut = entries.reduce((s, e) => s + e.debit, 0);
+  const endingBalance = entries.length ? entries[0].balance : 0;
+
+  const tableHeaders = ['Date', 'Description', 'Debit', 'Credit', 'Balance'];
+  function buildRows(forExport: boolean) {
+    return entries.map((e) => [
+      forExport ? e.date : formatDate(e.date),
+      e.description,
+      forExport ? e.debit : (e.debit > 0 ? formatKES(e.debit) : ''),
+      forExport ? e.credit : (e.credit > 0 ? formatKES(e.credit) : ''),
+      forExport ? e.balance : formatKES(e.balance),
+    ]);
+  }
+
+  return (
+    <div className="space-y-4">
+      <ReportHeader
+        title="Combined Ledger"
+        onCSV={() => exportCSVReport(tableHeaders, buildRows(true), `combined-ledger-${dateFrom}-to-${dateTo}.csv`)}
+        onExcel={() => exportExcelReport('Combined Ledger', [['Total In', totalIn], ['Total Out', totalOut], ['Ending Balance', endingBalance]], tableHeaders, buildRows(true), `combined-ledger-${dateFrom}-to-${dateTo}.xlsx`)}
+        onPDF={() => exportPDFReport('Combined Ledger', [['Total In', formatKES(totalIn)], ['Total Out', formatKES(totalOut)], ['Ending Balance', formatKES(endingBalance)]], tableHeaders, buildRows(false), `combined-ledger-${dateFrom}-to-${dateTo}.pdf`)}
+      />
+      <FilterBar>
+        <DateFilterBar preset={filter.datePreset} customFrom={filter.customFrom} customTo={filter.customTo} onChange={(p, f, t) => setFilter({ datePreset: p, customFrom: f, customTo: t })} />
+        <button onClick={() => setShowLedger(true)} className="text-sm bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg font-medium">Edit / Void Entries</button>
+      </FilterBar>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <SummaryCard title="Total In" amount={totalIn} color="text-emerald-600" />
+        <SummaryCard title="Total Out" amount={totalOut} color="text-red-600" />
+        <SummaryCard title="Ending Balance" amount={endingBalance} color="text-slate-800" />
+      </div>
+      <ReportTable loading={loading} empty={entries.length === 0} headers={tableHeaders} rows={buildRows(false)} />
+      <LedgerModal open={showLedger} onClose={() => setShowLedger(false)} title="Combined Ledger" />
+    </div>
   );
 }
 
@@ -1084,6 +1163,7 @@ export default function Reports() {
         </div>
 
         <div className="flex-1 min-w-0">
+          {activeReport === 'ledger' && <CombinedLedgerReport />}
           {activeReport === 'sales' && <SalesReport />}
           {activeReport === 'expenses' && <ExpensesReport />}
           {activeReport === 'home_expenses' && <HomeExpensesReport />}

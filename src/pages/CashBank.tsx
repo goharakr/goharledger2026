@@ -14,6 +14,7 @@ import { formatKES, formatDate, todayStr } from '../utils/format';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
 import { computeWalletBalance, tomorrowStr } from '../utils/walletBalance';
+import { buildLedgerEntries } from '../utils/ledgerEntries';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { usePersistentState } from '../context/PageStateContext';
@@ -157,92 +158,12 @@ export default function CashBank() {
   }
 
   function getLedgerEntries(mode: string) {
-    const entries: { date: string; description: string; debit: number; credit: number; balance: number }[] = [];
-    let balance = 0;
     const splitMap = new Map<string, { mode: string; amount: number }[]>();
     splits.forEach((s) => {
       if (!splitMap.has(s.transaction_id)) splitMap.set(s.transaction_id, []);
       splitMap.get(s.transaction_id)!.push(s);
     });
-
-    const sorted = [...transactions].sort((a, b) => {
-      if (a.date !== b.date) return a.date.localeCompare(b.date);
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-    });
-
-    sorted.forEach((t) => {
-      let debit = 0, credit = 0;
-
-      if (t.type === 'sale') {
-        if (mode === 'all') {
-          if (t.primary_mode === 'mpesa') credit += t.amount;
-          else if (t.primary_mode === 'cash') credit += t.amount;
-          else if (t.primary_mode === 'paybill') credit += t.amount;
-          else if (t.primary_mode === 'split') {
-            const s = splitMap.get(t.transaction_id) || [];
-            s.forEach((sp) => credit += sp.amount);
-          }
-          // Commission is no longer deducted here - it's its own Expense
-          // transaction (category "commission"), handled by the 'expense'
-          // branch below.
-        } else if (t.primary_mode === mode) {
-          credit += t.amount;
-        } else if (t.primary_mode === 'split') {
-          const s = splitMap.get(t.transaction_id) || [];
-          const sp = s.find((x) => x.mode === mode);
-          if (sp) credit += sp.amount;
-        }
-      } else if (t.type === 'expense') {
-        const isHomeExpenseFromOwnPocket = t.category === 'home_expense' && t.notes?.includes('From Own Pocket');
-        const isPendingClear = t.clears_on && t.clears_on > todayStr();
-        if (!isHomeExpenseFromOwnPocket && !isPendingClear) {
-          if (mode === 'all') {
-            if (t.primary_mode === 'mpesa') debit += t.amount;
-            else if (t.primary_mode === 'cash') debit += t.amount;
-            else if (t.primary_mode === 'paybill') debit += t.amount;
-          } else if (t.primary_mode === mode) {
-            debit += t.amount;
-          }
-        }
-      } else if (t.type === 'customer_payment') {
-        if (mode === 'all' || t.primary_mode === mode) credit += t.amount;
-      } else if (t.type === 'opening_balance') {
-        if (mode === 'all' || t.primary_mode === mode) credit += t.amount;
-      } else if (t.type === 'supplier_payment') {
-        if (!(t.clears_on && t.clears_on > todayStr()) && (mode === 'all' || t.primary_mode === mode)) debit += t.amount;
-      } else if (t.type === 'partner_draw') {
-        if (mode === 'all' || t.primary_mode === mode) debit += t.amount;
-      } else if (t.type === 'partner_loan') {
-        if (mode === 'all' || t.primary_mode === mode) credit += t.amount;
-      } else if (t.type === 'loan_payment') {
-        if (mode === 'all' || t.primary_mode === mode) debit += t.amount;
-      } else if (t.type === 'capital_entry' && t.primary_mode) {
-        // Unlike opening_balance/customer_payment, a capital entry can
-        // legitimately have no wallet mode (e.g. Retained Profit isn't real
-        // new cash), so it must not be counted in the "All" total either.
-        if (mode === 'all' || t.primary_mode === mode) credit += t.amount;
-      } else if (t.type === 'fund_transfer') {
-        // A transfer between your own wallets doesn't change your total money -
-        // it only matters to the single wallet's own ledger (below), not "All".
-        if (mode !== 'all') {
-          const desc = (t.description || '').toLowerCase();
-          if (desc.includes(`${mode} to`)) debit += t.amount;
-          else if (desc.includes(`to ${mode}`)) credit += t.amount;
-        }
-      }
-
-      if (debit > 0 || credit > 0) {
-        balance += credit - debit;
-        entries.push({
-          date: t.date,
-          description: t.description || t.transaction_id,
-          debit,
-          credit,
-          balance,
-        });
-      }
-    });
-
+    const entries = buildLedgerEntries(transactions, splitMap, mode);
     // Running balance is computed over full history above in chronological
     // order (so each row's balance is correct); reversed at the end so the
     // displayed list matches every other ledger in the app - newest first.
