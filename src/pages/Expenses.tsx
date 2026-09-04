@@ -94,6 +94,9 @@ interface BulkExpenseRow {
   isPostDated: boolean;
   clearsOn: string;
   transactionFee: string;
+  // Extra real-money lines on top of the main Mode above - same idea as the
+  // single Add Expense form's Extra Payment Lines.
+  extraLines: { mode: 'cash' | 'mpesa' | 'paybill'; amount: string }[];
   // Only set on rows that came from Smart Entry and still have something
   // worth a second look before saving - never set on a manually-typed row.
   smartFlags?: string[];
@@ -110,6 +113,7 @@ const emptyBulkRow: BulkExpenseRow = {
   isPostDated: false,
   clearsOn: '',
   transactionFee: '',
+  extraLines: [],
 };
 
 interface BulkSupplierPaymentRow {
@@ -721,21 +725,36 @@ export default function Expenses() {
         const isPartnerExpense = !isHomeExpense && (category === 'taher' || category === 'abdulqadir');
         const existingTxnId = bulkTxnIds[originalIndex];
 
+        // Same Extra Payment Lines handling as the single Add Expense form -
+        // not offered for an "Own Pocket" home expense (never real cash).
+        const usesExtraLines = f.extraLines.length > 0 && !(isHomeExpense && f.source === 'own_pocket');
+        const extraTotal = usesExtraLines ? f.extraLines.reduce((s, l) => s + (parseFloat(l.amount || '0') || 0), 0) : 0;
+        const mainAmt = amt - extraTotal;
+        if (usesExtraLines && mainAmt < -0.01) { failedRows.push(originalIndex + 1); continue; }
+
         const payload = {
           date: f.date,
           type: isPartnerExpense ? 'partner_draw' : 'expense',
-          primary_mode: isHomeExpense && f.source === 'own_pocket' ? null : f.mode,
+          primary_mode: usesExtraLines ? 'split' : (isHomeExpense && f.source === 'own_pocket' ? null : f.mode),
           amount: amt,
           category,
           description: f.description || null,
           notes: isHomeExpense ? `From ${f.source === 'own_pocket' ? 'Own Pocket' : 'Shop'}` : null,
           partner_id: isPartnerExpense ? category : (isHomeExpense ? f.partnerId || null : null),
-          clears_on: f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
+          clears_on: !usesExtraLines && f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
         };
 
         if (existingTxnId) {
           const { error } = await supabase.from('transactions').update({ ...payload, edited_at: new Date().toISOString() }).eq('id', existingTxnId);
-          if (error) { console.error(error); failedRows.push(originalIndex + 1); }
+          if (error) { console.error(error); failedRows.push(originalIndex + 1); continue; }
+          if (usesExtraLines) {
+            await supabase.from('transaction_splits').delete().eq('transaction_id', existingTxnId);
+            const existingTxn = expenses.find((e) => e.id === existingTxnId);
+            const splitRows: { transaction_id: string; mode: string; amount: number }[] = [];
+            if (existingTxn && mainAmt > 0.01) splitRows.push({ transaction_id: existingTxn.transaction_id, mode: f.mode, amount: mainAmt });
+            if (existingTxn) f.extraLines.forEach((l) => splitRows.push({ transaction_id: existingTxn.transaction_id, mode: l.mode, amount: parseFloat(l.amount) }));
+            if (splitRows.length > 0) await supabase.from('transaction_splits').insert(splitRows);
+          }
           continue;
         }
 
@@ -745,6 +764,14 @@ export default function Expenses() {
           created_by: user?.username || null,
         }));
         if (error || !newTxn) { console.error(error); failedRows.push(originalIndex + 1); continue; }
+
+        if (usesExtraLines) {
+          const splitRows: { transaction_id: string; mode: string; amount: number }[] = [];
+          if (mainAmt > 0.01) splitRows.push({ transaction_id: newTxn.transaction_id, mode: f.mode, amount: mainAmt });
+          f.extraLines.forEach((l) => splitRows.push({ transaction_id: newTxn.transaction_id, mode: l.mode, amount: parseFloat(l.amount) }));
+          if (splitRows.length > 0) await supabase.from('transaction_splits').insert(splitRows);
+        }
+
         await insertTransactionFee(f.date, f.mode, f.transactionFee, f.description || category);
       }
 
@@ -964,6 +991,7 @@ export default function Expenses() {
           isPostDated: !!b.clears_on,
           clearsOn: b.clears_on || '',
           transactionFee: '',
+          extraLines: [],
         })));
         setBulkTxnIds(sorted.map((b) => b.id));
         setActiveTab(isHome ? 'home' : 'shop');
@@ -1986,6 +2014,67 @@ export default function Expenses() {
                         placeholder="Clears on"
                       />
                     )}
+                  </div>
+                )}
+
+                {/* Extra payment lines - e.g. paid partly Cash and partly Mpesa */}
+                {!(activeTab === 'home' && f.source === 'own_pocket') && (
+                  <div className="mt-2 space-y-1.5 border border-slate-200 rounded p-2">
+                    <p className="text-xs font-medium text-slate-600">Extra payment lines (optional)</p>
+                    {f.extraLines.map((line, idx) => (
+                      <div key={idx} className="flex gap-1.5 items-center">
+                        <select
+                          value={line.mode}
+                          onChange={(e) => {
+                            const newForms = [...bulkForms];
+                            const extraLines = [...newForms[i].extraLines];
+                            extraLines[idx] = { ...extraLines[idx], mode: e.target.value as 'cash' | 'mpesa' | 'paybill' };
+                            newForms[i] = { ...newForms[i], extraLines };
+                            setBulkForms(newForms);
+                          }}
+                          className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                        >
+                          <option value="cash">Cash</option>
+                          <option value="mpesa">Mpesa</option>
+                          <option value="paybill">Paybill</option>
+                        </select>
+                        <input
+                          type="number"
+                          value={line.amount}
+                          onChange={(e) => {
+                            const newForms = [...bulkForms];
+                            const extraLines = [...newForms[i].extraLines];
+                            extraLines[idx] = { ...extraLines[idx], amount: e.target.value };
+                            newForms[i] = { ...newForms[i], extraLines };
+                            setBulkForms(newForms);
+                          }}
+                          placeholder="Amount"
+                          className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newForms = [...bulkForms];
+                            newForms[i] = { ...newForms[i], extraLines: newForms[i].extraLines.filter((_, li) => li !== idx) };
+                            setBulkForms(newForms);
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-red-600 shrink-0"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newForms = [...bulkForms];
+                        newForms[i] = { ...newForms[i], extraLines: [...newForms[i].extraLines, { mode: 'cash', amount: '' }] };
+                        setBulkForms(newForms);
+                      }}
+                      className="text-xs text-emerald-700 hover:text-emerald-800 font-medium"
+                    >
+                      + Add another payment line
+                    </button>
                   </div>
                 )}
               </div>

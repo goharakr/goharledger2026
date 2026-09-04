@@ -106,6 +106,9 @@ interface BulkPaymentRow {
   isPostDated: boolean;
   clearsOn: string;
   transactionFee: string;
+  // Extra real-money lines on top of the main Mode above - same idea as the
+  // single Add Payment form's Extra Payment Lines.
+  extraLines: { mode: 'cash' | 'mpesa' | 'paybill'; amount: string }[];
 }
 
 const emptyBulkPaymentRow: BulkPaymentRow = {
@@ -117,6 +120,7 @@ const emptyBulkPaymentRow: BulkPaymentRow = {
   isPostDated: false,
   clearsOn: '',
   transactionFee: '',
+  extraLines: [],
 };
 
 export default function Suppliers() {
@@ -125,6 +129,7 @@ export default function Suppliers() {
   const navigate = useNavigate();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [splits, setSplits] = useState<{ transaction_id: string; mode: string; amount: number }[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [shareRules, setShareRules] = useState<ShareRule[]>([]);
   const [historicalProfit, setHistoricalProfit] = useState<HistoricalProfit[]>([]);
@@ -188,17 +193,19 @@ export default function Suppliers() {
 
   async function fetchData() {
     setLoading(true);
-    const [{ data: supp }, { data: txns }, { data: custs }, { data: rules }, { data: hist }] = await Promise.all([
+    const [{ data: supp }, { data: txns }, { data: splitData }, { data: custs }, { data: rules }, { data: hist }] = await Promise.all([
       supabase.from('suppliers').select('*').eq('is_active', true).order('name'),
       fetchAllRows<Transaction>((from, to) =>
         supabase.from('transactions').select('*').eq('is_void', false).order('date', { ascending: false }).range(from, to)
       ),
+      supabase.from('transaction_splits').select('*'),
       supabase.from('customers').select('*').eq('is_active', true),
       supabase.from('share_rules').select('*').eq('is_active', true),
       supabase.from('historical_profit').select('*'),
     ]);
     setSuppliers(supp || []);
     setTransactions(txns || []);
+    setSplits(splitData || []);
     setCustomers(custs || []);
     setShareRules(rules || []);
     setHistoricalProfit(hist || []);
@@ -586,9 +593,40 @@ export default function Suppliers() {
         if (!supplier) { failedRows.push(originalIndex + 1); continue; }
         const existingTxnId = bulkPaymentTxnIds[originalIndex];
 
+        // Same Extra Payment Lines handling as the single Add Payment form.
+        const usesExtraLines = f.extraLines.length > 0;
+        if (usesExtraLines && f.extraLines.some((l) => parseFloat(l.amount || '0') <= 0)) { failedRows.push(originalIndex + 1); continue; }
+        const extraTotal = usesExtraLines ? f.extraLines.reduce((s, l) => s + (parseFloat(l.amount || '0') || 0), 0) : 0;
+        const mainAmt = amt - extraTotal;
+        if (usesExtraLines && mainAmt < -0.01) { failedRows.push(originalIndex + 1); continue; }
+
         if (existingTxnId) {
           const existing = transactions.find((t) => t.id === existingTxnId);
           if (!existing) { failedRows.push(originalIndex + 1); continue; }
+
+          if (usesExtraLines) {
+            // The guard in startEditPaymentAsBulk means a reopened row here
+            // never already has splits, so this is always a plain->split
+            // conversion, not a rewrite of an existing breakdown.
+            const { error } = await supabase.from('transactions').update({
+              date: f.date,
+              supplier_id: f.supplierId,
+              primary_mode: 'split',
+              amount: amt,
+              notes: f.notes || null,
+              clears_on: null,
+              edited_at: new Date().toISOString(),
+            }).eq('id', existingTxnId);
+            if (error) { console.error(error); failedRows.push(originalIndex + 1); continue; }
+            const splitRows: { transaction_id: string; mode: string; amount: number }[] = [];
+            if (mainAmt > 0.01) splitRows.push({ transaction_id: existing.transaction_id, mode: f.mode, amount: mainAmt });
+            f.extraLines.forEach((l) => splitRows.push({ transaction_id: existing.transaction_id, mode: l.mode, amount: parseFloat(l.amount) }));
+            if (splitRows.length > 0) await supabase.from('transaction_splits').insert(splitRows);
+            if (existing.supplier_id) await adjustSupplierBalance(existing.supplier_id, existing.amount || 0);
+            await adjustSupplierBalance(f.supplierId, -amt);
+            continue;
+          }
+
           const result = await adjustPaymentAmount(existing, amt, f.mode);
           if (!result.ok) { console.error(result.error); failedRows.push(originalIndex + 1); continue; }
           const { error } = await supabase.from('transactions').update({
@@ -611,16 +649,24 @@ export default function Suppliers() {
           transaction_id: txnId,
           date: f.date,
           type: 'supplier_payment',
-          primary_mode: f.mode,
+          primary_mode: usesExtraLines ? 'split' : f.mode,
           amount: amt,
           supplier_id: f.supplierId,
           description: `Payment to ${supplier.name}`,
           notes: f.notes || null,
-          clears_on: f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
+          clears_on: !usesExtraLines && f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
           created_by: user?.username || null,
         }));
         if (error || !newTxn) { console.error(error); failedRows.push(originalIndex + 1); continue; }
         await adjustSupplierBalance(f.supplierId, -amt);
+
+        if (usesExtraLines) {
+          const splitRows: { transaction_id: string; mode: string; amount: number }[] = [];
+          if (mainAmt > 0.01) splitRows.push({ transaction_id: newTxn.transaction_id, mode: f.mode, amount: mainAmt });
+          f.extraLines.forEach((l) => splitRows.push({ transaction_id: newTxn.transaction_id, mode: l.mode, amount: parseFloat(l.amount) }));
+          if (splitRows.length > 0) await supabase.from('transaction_splits').insert(splitRows);
+        }
+
         await insertTransactionFee(f.date, f.mode, f.transactionFee, supplier.name);
       }
 
@@ -679,8 +725,16 @@ export default function Suppliers() {
   // (every payment saved alongside it, found via findBulkBatch) instead of
   // one row at a time - matches how it was actually entered. Falls back to
   // the single-payment editor above if it was entered on its own.
+  // A payment settled via more than one source (settlement sources, or an
+  // Extra Payment Line) can't be safely reopened in this simple bulk form -
+  // same guard already used for the single editor (adjustPaymentAmount).
+  function hasSplitLines(t: Transaction): boolean {
+    return splits.some((sp) => sp.transaction_id === t.transaction_id);
+  }
+
   function startEditPaymentAsBulk(t: Transaction) {
-    const batch = findBulkBatch(transactions, t, 'supplier_payment');
+    if (hasSplitLines(t)) { startEditPayment(t); return; }
+    const batch = findBulkBatch(transactions, t, 'supplier_payment').filter((b) => !hasSplitLines(b));
     if (batch.length <= 1) { startEditPayment(t); return; }
     const sorted = [...batch].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
     setBulkPaymentForms(sorted.map((b) => ({
@@ -692,6 +746,7 @@ export default function Suppliers() {
       isPostDated: !!b.clears_on,
       clearsOn: b.clears_on || '',
       transactionFee: '',
+      extraLines: [],
     })));
     setBulkPaymentTxnIds(sorted.map((b) => b.id));
     setShowBulkPayment(true);
@@ -1066,6 +1121,65 @@ export default function Suppliers() {
                     )}
                   </div>
                 )}
+
+                {/* Extra payment lines - e.g. paid partly Cash and partly Mpesa */}
+                <div className="mt-2 space-y-1.5 border border-slate-200 rounded p-2">
+                  <p className="text-xs font-medium text-slate-600">Extra payment lines (optional)</p>
+                  {f.extraLines.map((line, idx) => (
+                    <div key={idx} className="flex gap-1.5 items-center">
+                      <select
+                        value={line.mode}
+                        onChange={(e) => {
+                          const newForms = [...bulkPaymentForms];
+                          const extraLines = [...newForms[i].extraLines];
+                          extraLines[idx] = { ...extraLines[idx], mode: e.target.value as 'cash' | 'mpesa' | 'paybill' };
+                          newForms[i] = { ...newForms[i], extraLines };
+                          setBulkPaymentForms(newForms);
+                        }}
+                        className="border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                      >
+                        <option value="cash">Cash</option>
+                        <option value="mpesa">Mpesa</option>
+                        <option value="paybill">Paybill</option>
+                      </select>
+                      <input
+                        type="number"
+                        value={line.amount}
+                        onChange={(e) => {
+                          const newForms = [...bulkPaymentForms];
+                          const extraLines = [...newForms[i].extraLines];
+                          extraLines[idx] = { ...extraLines[idx], amount: e.target.value };
+                          newForms[i] = { ...newForms[i], extraLines };
+                          setBulkPaymentForms(newForms);
+                        }}
+                        placeholder="Amount"
+                        className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const newForms = [...bulkPaymentForms];
+                          newForms[i] = { ...newForms[i], extraLines: newForms[i].extraLines.filter((_, li) => li !== idx) };
+                          setBulkPaymentForms(newForms);
+                        }}
+                        className="p-1.5 text-slate-400 hover:text-red-600 shrink-0"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newForms = [...bulkPaymentForms];
+                      newForms[i] = { ...newForms[i], extraLines: [...newForms[i].extraLines, { mode: 'cash', amount: '' }] };
+                      setBulkPaymentForms(newForms);
+                    }}
+                    className="text-xs text-emerald-700 hover:text-emerald-800 font-medium"
+                  >
+                    + Add another payment line
+                  </button>
+                </div>
               </div>
             ))}
           </div>
