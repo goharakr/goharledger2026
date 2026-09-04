@@ -161,15 +161,6 @@ export default function ProfitLoss() {
 
   const data = calculateMonthData(selectedMonth);
 
-  // Generate month options
-  const months: string[] = [];
-  const start = new Date(2024, 5, 1); // June 2024
-  const now = new Date();
-  while (start <= now) {
-    months.push(`${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`);
-    start.setMonth(start.getMonth() + 1);
-  }
-
   const colorClasses: Record<string, string> = {
     emerald: 'bg-emerald-50 border-emerald-200 text-emerald-700',
     red: 'bg-red-50 border-red-200 text-red-700',
@@ -182,15 +173,12 @@ export default function ProfitLoss() {
       {/* Month Selector */}
       <div className="flex items-center gap-3">
         <label className="text-sm font-medium text-slate-600">Month:</label>
-        <select
+        <input
+          type="month"
           value={selectedMonth}
-          onChange={(e) => setSelectedMonth(e.target.value)}
+          onChange={(e) => e.target.value && setSelectedMonth(e.target.value)}
           className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
-        >
-          {months.map((m) => (
-            <option key={m} value={m}>{getMonthLabel(m)}</option>
-          ))}
-        </select>
+        />
         {loading && <span className="text-xs text-slate-400">Loading...</span>}
       </div>
 

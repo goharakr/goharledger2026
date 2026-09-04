@@ -393,10 +393,11 @@ export default function Dashboard() {
       // their own pocket that the shop still owes back, (3) how much they've
       // drawn out in the currently-viewed month only.
       const monthly = buildMonthlyFigures(txns);
+      const historicalMonths = new Set((histProfit || []).map((h) => h.month));
       const taherRule = shareRules?.find((r) => r.partner_id === 'taher');
       const abdulRule = shareRules?.find((r) => r.partner_id === 'abdulqadir');
-      const taherShareEarned = calculateShareEarned(monthly, taherRule);
-      const abdulShareEarned = calculateShareEarned(monthly, abdulRule);
+      const taherShareEarned = calculateShareEarned(monthly, taherRule, historicalMonths);
+      const abdulShareEarned = calculateShareEarned(monthly, abdulRule, historicalMonths);
 
       let taherDrawsAllTime = 0, abdulDrawsAllTime = 0;
       let taherDrawsThisMonth = 0, abdulDrawsThisMonth = 0;

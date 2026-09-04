@@ -56,11 +56,17 @@ export function buildMonthlyFigures(transactions: Transaction[] | null | undefin
 }
 
 // Sums a partner's "earned" entitlement across every month with real
-// activity, using their active Fixed/Percentage share rule.
-export function calculateShareEarned(monthly: Map<string, MonthlyFigures>, rule: ShareRule | undefined): number {
+// activity, using their active Fixed/Percentage share rule. A month already
+// locked into a Historical Profit record is skipped here - once a month's
+// share has been recorded there, the live monthly total must stop counting
+// it too, or it gets counted twice (see getDoubleCountedMonths below, which
+// used to be the only guard against this - excluding it here removes the
+// double-count instead of just flagging it).
+export function calculateShareEarned(monthly: Map<string, MonthlyFigures>, rule: ShareRule | undefined, excludeMonths?: Set<string>): number {
   if (!rule) return 0;
   let earned = 0;
-  monthly.forEach((m) => {
+  monthly.forEach((m, key) => {
+    if (excludeMonths?.has(key)) return;
     const netProfit = m.grossProfit - m.shopExpenses - m.homeExpensesFromShop - m.loanPayments;
     earned += rule.rule_type === 'fixed' ? rule.value : netProfit * (rule.value / 100);
   });
@@ -92,7 +98,8 @@ export function calculateShareDue(
   if (!rule) return 0;
 
   const monthly = buildMonthlyFigures(transactions);
-  const earned = calculateShareEarned(monthly, rule);
+  const historicalMonths = new Set((historicalProfit || []).map((h) => h.month));
+  const earned = calculateShareEarned(monthly, rule, historicalMonths);
 
   const histRemaining = (historicalProfit || []).reduce((s, h) => {
     const share = partnerId === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);

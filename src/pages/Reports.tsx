@@ -508,12 +508,13 @@ function PartnersReport() {
     const txnsInRange = allTxns.filter((t) => t.date >= dateFrom && t.date <= dateTo);
     const monthlyInRange = buildMonthlyFigures(txnsInRange);
     const monthlyAll = buildMonthlyFigures(allTxns);
+    const historicalMonths = new Set(historicalProfit.map((h) => h.month));
     const result: Record<string, { earnedInRange: number; takenInRange: number; shareDueOverall: number }> = {};
     partners.forEach((p) => {
       const rule = shareRules.find((r) => r.partner_id === p);
-      const earnedInRange = calculateShareEarned(monthlyInRange, rule);
+      const earnedInRange = calculateShareEarned(monthlyInRange, rule, historicalMonths);
       const takenInRange = allTxns.reduce((s, t) => (t.type === 'partner_draw' && t.partner_id === p && t.date >= dateFrom && t.date <= dateTo ? s + t.amount : s), 0);
-      const earnedAll = calculateShareEarned(monthlyAll, rule);
+      const earnedAll = calculateShareEarned(monthlyAll, rule, historicalMonths);
       const histRemaining = historicalProfit.reduce((s, h) => {
         const share = p === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);
         const taken = p === 'taher' ? (h.taher_taken || 0) : (h.abdulqadir_taken || 0);

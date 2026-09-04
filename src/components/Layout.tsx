@@ -22,10 +22,11 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate } from '../utils/format';
+import { formatKES, formatDate, getMonthLabel } from '../utils/format';
 import { sortCustomersByBalance, sortSuppliersByBalance } from '../utils/sortEntities';
 import { useDataRefresh } from '../context/DataContext';
 import HelpChat from './HelpChat';
+import { buildMonthlyFigures, calculateShareEarned } from '../utils/shareDue';
 import type { Supplier, Customer, Reminder } from '../types';
 
 const navItems = [
@@ -75,6 +76,20 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [showNavProgress, setShowNavProgress] = useState(false);
 
+  // Month-end profit share popup - the app has no server running in the
+  // background, so it can't act "on the last day of the month" by itself.
+  // The closest real equivalent: the next time anyone opens it on or after
+  // the 1st of a new month, if last month's share hasn't been recorded yet,
+  // this pops up with the amount worked out from the Share Rule (editable
+  // before confirming). Confirming only records what each partner is now
+  // owed (adds a Historical Profit row, same as the Capital page's own
+  // table) - it never pays anyone or moves any money.
+  const [monthEndPrompt, setMonthEndPrompt] = useState<{
+    month: string; taherShare: string; abdulShare: string; taherRuleLabel: string; abdulRuleLabel: string;
+  } | null>(null);
+  const [monthEndDismissed, setMonthEndDismissed] = useState(false);
+  const [monthEndSaving, setMonthEndSaving] = useState(false);
+
   // A visible sign that a page switch (from the sidebar or anywhere else) is
   // actually happening - each page fetches its own data after mounting, so
   // without this the screen can look unresponsive for a moment after a click.
@@ -92,6 +107,68 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     supabase.from('customers').select('*').eq('is_active', true).order('name').then(({ data }) => setCustomers(data || []));
     supabase.from('reminders').select('*').eq('status', 'pending').then(({ data }) => setReminders(data || []));
   }, [refreshKey]);
+
+  // Check once per app load whether last month's profit share still needs
+  // recording - cheap most days (2 tiny queries), only pulls that one
+  // month's transactions on the rare day it's actually needed.
+  useEffect(() => {
+    if (monthEndDismissed) return;
+    const now = new Date();
+    const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonth = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, '0')}`;
+
+    (async () => {
+      const [{ data: existing }, { data: rules }] = await Promise.all([
+        supabase.from('historical_profit').select('id').eq('month', lastMonth).maybeSingle(),
+        supabase.from('share_rules').select('*').eq('is_active', true),
+      ]);
+      if (existing || !rules || rules.length === 0) return;
+
+      const { data: monthTxns } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('is_void', false)
+        .gte('date', `${lastMonth}-01`)
+        .lte('date', `${lastMonth}-31`);
+      const monthly = buildMonthlyFigures(monthTxns);
+      if (!monthly.has(lastMonth)) return; // no real activity that month - nothing to record
+
+      const taherRule = rules.find((r) => r.partner_id === 'taher');
+      const abdulRule = rules.find((r) => r.partner_id === 'abdulqadir');
+      const taherShare = calculateShareEarned(monthly, taherRule);
+      const abdulShare = calculateShareEarned(monthly, abdulRule);
+
+      setMonthEndPrompt({
+        month: lastMonth,
+        taherShare: String(Math.round(taherShare)),
+        abdulShare: String(Math.round(abdulShare)),
+        taherRuleLabel: taherRule ? (taherRule.rule_type === 'fixed' ? 'Fixed amount' : `${taherRule.value}%`) : 'No rule set',
+        abdulRuleLabel: abdulRule ? (abdulRule.rule_type === 'fixed' ? 'Fixed amount' : `${abdulRule.value}%`) : 'No rule set',
+      });
+    })();
+  }, [monthEndDismissed]);
+
+  async function handleConfirmMonthEndShare() {
+    if (!monthEndPrompt) return;
+    setMonthEndSaving(true);
+    const taherShare = parseFloat(monthEndPrompt.taherShare || '0') || 0;
+    const abdulShare = parseFloat(monthEndPrompt.abdulShare || '0') || 0;
+    const { error } = await supabase.from('historical_profit').insert({
+      month: monthEndPrompt.month,
+      total_profit: taherShare + abdulShare,
+      taher_share: taherShare,
+      abdulqadir_share: abdulShare,
+      taher_taken: 0,
+      abdulqadir_taken: 0,
+      retained: 0,
+      notes: 'Recorded automatically at month-end',
+      created_by: user?.username || null,
+    });
+    setMonthEndSaving(false);
+    if (error) { alert('Failed to record the month-end share: ' + error.message); return; }
+    setMonthEndPrompt(null);
+    triggerRefresh();
+  }
 
   // Check for due reminders every minute, regardless of which page is open
   useEffect(() => {
@@ -350,6 +427,55 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </div>
           );
         })()}
+
+        {/* Month-End Profit Share popup - see the effect above for when this
+            fires. Confirming only records what each partner is now owed
+            (a Historical Profit row) - it never pays anyone. */}
+        {monthEndPrompt && (
+          <div className="fixed inset-0 bg-black/40 z-[65] flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+              <h3 className="font-semibold text-slate-800 mb-1">{getMonthLabel(monthEndPrompt.month)} ended</h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Here's each partner's share for that month, worked out from your Share Rule. Check the amounts (edit if needed), then Confirm to add it to what they're owed - this doesn't pay them or move any money.
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Taher's share ({monthEndPrompt.taherRuleLabel})</label>
+                  <input
+                    type="number"
+                    value={monthEndPrompt.taherShare}
+                    onChange={(e) => setMonthEndPrompt({ ...monthEndPrompt, taherShare: e.target.value })}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Abdulqadir's share ({monthEndPrompt.abdulRuleLabel})</label>
+                  <input
+                    type="number"
+                    value={monthEndPrompt.abdulShare}
+                    onChange={(e) => setMonthEndPrompt({ ...monthEndPrompt, abdulShare: e.target.value })}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2 mt-4">
+                <button
+                  onClick={handleConfirmMonthEndShare}
+                  disabled={monthEndSaving}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white py-2 rounded-lg text-sm font-medium"
+                >
+                  {monthEndSaving ? 'Saving...' : 'Confirm'}
+                </button>
+                <button
+                  onClick={() => { setMonthEndPrompt(null); setMonthEndDismissed(true); }}
+                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-lg text-sm font-medium"
+                >
+                  Remind me later
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Quick Add Reminder Popup */}
         {showReminderPopup && (
