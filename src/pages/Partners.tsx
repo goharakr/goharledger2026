@@ -412,10 +412,16 @@ export default function Partners() {
 
   const balance = calculatePartnerBalance(activePartner);
   const isPositive = balance >= 0;
-  const takenRange = getDatePresetRange(takenPreset, takenCustomFrom, takenCustomTo);
-  const periodLabel = takenPreset === 'pick_month'
-    ? getMonthLabel(takenCustomFrom)
-    : DATE_PRESET_OPTIONS.find((o) => o.value === takenPreset)?.label;
+  // Custom with no dates picked yet shouldn't silently fall back to
+  // "today only" (confusing near-empty range) - show All Time until both
+  // dates are actually chosen.
+  const customIncomplete = takenPreset === 'custom' && (!takenCustomFrom || !takenCustomTo);
+  const takenRange = customIncomplete ? getDatePresetRange('all') : getDatePresetRange(takenPreset, takenCustomFrom, takenCustomTo);
+  const periodLabel = customIncomplete
+    ? 'All Time - pick both dates to filter'
+    : takenPreset === 'pick_month'
+      ? getMonthLabel(takenCustomFrom)
+      : DATE_PRESET_OPTIONS.find((o) => o.value === takenPreset)?.label;
   const shareDue = calculateShareDueInRange(activePartner, takenRange.from, takenRange.to);
   const homeOwed = calculateHomeOwedInRange(activePartner, takenRange.from, takenRange.to);
   const takenInRange = calculateTakenInRange(activePartner, takenRange.from, takenRange.to);
