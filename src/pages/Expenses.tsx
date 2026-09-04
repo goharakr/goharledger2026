@@ -56,6 +56,9 @@ interface ExpenseForm {
   source: 'shop' | 'own_pocket';
   isPostDated: boolean;
   clearsOn: string;
+  // When true, this cheque won't auto-deduct on its date - the app asks
+  // Yes/No to confirm it first (Dashboard banner + popup).
+  confirmCheque: boolean;
   transactionFee: string;
   settlement: SettlementAmounts;
   // Extra real-money lines on top of the main Mode above - e.g. paid partly
@@ -78,6 +81,7 @@ const emptyForm: ExpenseForm = {
   source: 'shop',
   isPostDated: false,
   clearsOn: '',
+  confirmCheque: false,
   transactionFee: '',
   settlement: emptySettlementAmounts,
   extraLines: [],
@@ -93,6 +97,7 @@ interface BulkExpenseRow {
   description: string;
   isPostDated: boolean;
   clearsOn: string;
+  confirmCheque: boolean;
   transactionFee: string;
   // Extra real-money lines on top of the main Mode above - same idea as the
   // single Add Expense form's Extra Payment Lines.
@@ -112,6 +117,7 @@ const emptyBulkRow: BulkExpenseRow = {
   description: '',
   isPostDated: false,
   clearsOn: '',
+  confirmCheque: false,
   transactionFee: '',
   extraLines: [],
 };
@@ -124,6 +130,7 @@ interface BulkSupplierPaymentRow {
   notes: string;
   isPostDated: boolean;
   clearsOn: string;
+  confirmCheque: boolean;
   transactionFee: string;
   smartFlags?: string[];
   settlement: SettlementAmounts;
@@ -137,6 +144,7 @@ const emptyBulkSupplierRow: BulkSupplierPaymentRow = {
   notes: '',
   isPostDated: false,
   clearsOn: '',
+  confirmCheque: false,
   transactionFee: '',
   settlement: emptySettlementAmounts,
 };
@@ -156,6 +164,14 @@ interface ExpenseSmartPreviewRow {
   matchName: string;
   description: string;
   flags: string[];
+}
+
+// Tags a post-dated cheque's Notes so Layout.tsx's confirm-queue picks it up
+// instead of letting it auto-clear on its date - see the "Ask me to confirm
+// first" choice next to Post-dated cheque below.
+function tagConfirmCheque(notes: string | null, active: boolean): string | null {
+  if (!active) return notes;
+  return notes ? `${notes} [Confirm cheque]` : '[Confirm cheque]';
 }
 
 export default function Expenses() {
@@ -541,7 +557,7 @@ export default function Expenses() {
         amount: amt,
         supplier_id: form.supplierId,
         description: form.description || `Payment to ${supp.name}`,
-        notes: form.notes || null,
+        notes: tagConfirmCheque(form.notes || null, form.mode === 'paybill' && form.isPostDated && !!form.clearsOn && form.confirmCheque),
         clears_on: form.mode === 'paybill' && form.isPostDated && form.clearsOn ? form.clearsOn : null,
         created_by: user?.username || null,
       }));
@@ -667,7 +683,10 @@ export default function Expenses() {
       amount: amt,
       category,
       description: form.description || null,
-      notes: isHomeExpense ? `From ${form.source === 'own_pocket' ? 'Own Pocket' : 'Shop'}${form.notes ? ' | ' + form.notes : ''}` : (form.notes || null),
+      notes: tagConfirmCheque(
+        isHomeExpense ? `From ${form.source === 'own_pocket' ? 'Own Pocket' : 'Shop'}${form.notes ? ' | ' + form.notes : ''}` : (form.notes || null),
+        !usesExtraLines && form.mode === 'paybill' && form.isPostDated && !!form.clearsOn && form.confirmCheque
+      ),
       supplier_id: form.supplierId || null,
       loan_id: form.loanId || null,
       partner_id: isPartnerExpense ? category : (isHomeExpense ? form.partnerId || null : null),
@@ -739,7 +758,10 @@ export default function Expenses() {
           amount: amt,
           category,
           description: f.description || null,
-          notes: isHomeExpense ? `From ${f.source === 'own_pocket' ? 'Own Pocket' : 'Shop'}` : null,
+          notes: tagConfirmCheque(
+            isHomeExpense ? `From ${f.source === 'own_pocket' ? 'Own Pocket' : 'Shop'}` : null,
+            !usesExtraLines && f.mode === 'paybill' && f.isPostDated && !!f.clearsOn && f.confirmCheque
+          ),
           partner_id: isPartnerExpense ? category : (isHomeExpense ? f.partnerId || null : null),
           clears_on: !usesExtraLines && f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
         };
@@ -828,7 +850,7 @@ export default function Expenses() {
             primary_mode: f.mode,
             amount: amt,
             supplier_id: f.supplierId,
-            notes: f.notes || null,
+            notes: tagConfirmCheque(f.notes || null, f.mode === 'paybill' && f.isPostDated && !!f.clearsOn && f.confirmCheque),
             clears_on: f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
             edited_at: new Date().toISOString(),
           }).eq('id', existingTxnId);
@@ -856,7 +878,7 @@ export default function Expenses() {
           amount: amt,
           supplier_id: f.supplierId,
           description: `Payment to ${supplier.name}`,
-          notes: f.notes || null,
+          notes: tagConfirmCheque(f.notes || null, f.mode === 'paybill' && f.isPostDated && !!f.clearsOn && f.confirmCheque),
           clears_on: f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
           created_by: user?.username || null,
         }));
@@ -990,6 +1012,7 @@ export default function Expenses() {
           description: b.description || '',
           isPostDated: !!b.clears_on,
           clearsOn: b.clears_on || '',
+          confirmCheque: !!b.notes?.includes('[Confirm cheque]'),
           transactionFee: '',
           extraLines: [],
         })));
@@ -1015,9 +1038,10 @@ export default function Expenses() {
           amount: String(b.amount || ''),
           date: b.date,
           mode: b.primary_mode || 'cash',
-          notes: b.notes || '',
+          notes: (b.notes || '').replace(/\s*\[Confirm cheque\]/, ''),
           isPostDated: !!b.clears_on,
           clearsOn: b.clears_on || '',
+          confirmCheque: !!b.notes?.includes('[Confirm cheque]'),
           transactionFee: '',
           settlement: emptySettlementAmounts,
         })));
@@ -1036,13 +1060,14 @@ export default function Expenses() {
       amount: String(expense.amount),
       mode: expense.primary_mode || 'cash',
       description: expense.description || '',
-      notes: isHome ? (expense.notes?.replace(/From (Own Pocket|Shop)( \| )?/, '') || '') : (expense.notes || ''),
+      notes: (isHome ? (expense.notes?.replace(/From (Own Pocket|Shop)( \| )?/, '') || '') : (expense.notes || '')).replace(/\s*\[Confirm cheque\]/, ''),
       supplierId: expense.supplier_id || '',
       loanId: expense.loan_id || '',
       partnerId: expense.partner_id || '',
       source: source as 'shop' | 'own_pocket',
       isPostDated: !!expense.clears_on,
       clearsOn: expense.clears_on || '',
+      confirmCheque: !!expense.notes?.includes('[Confirm cheque]'),
       transactionFee: '',
       settlement: emptySettlementAmounts,
       extraLines: [],
@@ -1077,7 +1102,7 @@ export default function Expenses() {
         amount: amt,
         supplier_id: form.supplierId || null,
         description: form.description || null,
-        notes: form.notes || null,
+        notes: tagConfirmCheque(form.notes || null, form.mode === 'paybill' && form.isPostDated && !!form.clearsOn && form.confirmCheque),
         clears_on: form.mode === 'paybill' && form.isPostDated && form.clearsOn ? form.clearsOn : null,
         edited_at: new Date().toISOString(),
       }).eq('id', editingId);
@@ -1162,7 +1187,10 @@ export default function Expenses() {
       amount: amt,
       category,
       description: form.description || null,
-      notes: isHomeExpense ? `From ${form.source === 'own_pocket' ? 'Own Pocket' : 'Shop'}${form.notes ? ' | ' + form.notes : ''}` : (form.notes || null),
+      notes: tagConfirmCheque(
+        isHomeExpense ? `From ${form.source === 'own_pocket' ? 'Own Pocket' : 'Shop'}${form.notes ? ' | ' + form.notes : ''}` : (form.notes || null),
+        form.mode === 'paybill' && form.isPostDated && !!form.clearsOn && form.confirmCheque
+      ),
       supplier_id: form.supplierId || null,
       loan_id: form.loanId || null,
       partner_id: isPartnerExpense ? category : (isHomeExpense ? form.partnerId || null : null),
@@ -1576,25 +1604,39 @@ export default function Expenses() {
 
             {/* Post-dated cheque (only makes sense for Paybill/Bank) */}
             {form.mode === 'paybill' && (
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="isPostDated"
-                  checked={form.isPostDated}
-                  onChange={(e) => setForm({ ...form, isPostDated: e.target.checked })}
-                  onKeyDown={(e) => handleFormKeyNav(e)}
-                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                />
-                <label htmlFor="isPostDated" className="text-xs text-slate-600">Post-dated cheque</label>
-                {form.isPostDated && (
+              <div>
+                <div className="flex items-center gap-2">
                   <input
-                    type="date"
-                    value={form.clearsOn}
-                    onChange={(e) => setForm({ ...form, clearsOn: e.target.value })}
+                    type="checkbox"
+                    id="isPostDated"
+                    checked={form.isPostDated}
+                    onChange={(e) => setForm({ ...form, isPostDated: e.target.checked })}
                     onKeyDown={(e) => handleFormKeyNav(e)}
-                    className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
-                    placeholder="Clears on"
+                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                   />
+                  <label htmlFor="isPostDated" className="text-xs text-slate-600">Post-dated cheque</label>
+                  {form.isPostDated && (
+                    <input
+                      type="date"
+                      value={form.clearsOn}
+                      onChange={(e) => setForm({ ...form, clearsOn: e.target.value })}
+                      onKeyDown={(e) => handleFormKeyNav(e)}
+                      className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
+                      placeholder="Clears on"
+                    />
+                  )}
+                </div>
+                {form.isPostDated && (
+                  <div className="flex items-center gap-3 mt-1.5 pl-6 text-xs text-slate-600">
+                    <label className="flex items-center gap-1">
+                      <input type="radio" checked={!form.confirmCheque} onChange={() => setForm({ ...form, confirmCheque: false })} />
+                      Auto-deduct on this date
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <input type="radio" checked={form.confirmCheque} onChange={() => setForm({ ...form, confirmCheque: true })} />
+                      Ask me to confirm first
+                    </label>
+                  </div>
                 )}
               </div>
             )}
@@ -1987,32 +2029,54 @@ export default function Expenses() {
 
                 {/* Post-dated cheque (only makes sense for Paybill/Bank) */}
                 {f.mode === 'paybill' && (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={f.isPostDated}
-                      onChange={(e) => {
-                        const newForms = [...bulkForms];
-                        newForms[i] = { ...newForms[i], isPostDated: e.target.checked };
-                        setBulkForms(newForms);
-                      }}
-                      onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
-                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                    />
-                    <label className="text-xs text-slate-600">Post-dated cheque</label>
-                    {f.isPostDated && (
+                  <div>
+                    <div className="flex items-center gap-2">
                       <input
-                        type="date"
-                        value={f.clearsOn}
+                        type="checkbox"
+                        checked={f.isPostDated}
                         onChange={(e) => {
                           const newForms = [...bulkForms];
-                          newForms[i] = { ...newForms[i], clearsOn: e.target.value };
+                          newForms[i] = { ...newForms[i], isPostDated: e.target.checked };
                           setBulkForms(newForms);
                         }}
                         onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
-                        className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
-                        placeholder="Clears on"
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                       />
+                      <label className="text-xs text-slate-600">Post-dated cheque</label>
+                      {f.isPostDated && (
+                        <input
+                          type="date"
+                          value={f.clearsOn}
+                          onChange={(e) => {
+                            const newForms = [...bulkForms];
+                            newForms[i] = { ...newForms[i], clearsOn: e.target.value };
+                            setBulkForms(newForms);
+                          }}
+                          onKeyDown={(e) => handleFormKeyNav(e, addBulkRow)}
+                          className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
+                          placeholder="Clears on"
+                        />
+                      )}
+                    </div>
+                    {f.isPostDated && (
+                      <div className="flex items-center gap-3 mt-1.5 pl-6 text-xs text-slate-600">
+                        <label className="flex items-center gap-1">
+                          <input type="radio" checked={!f.confirmCheque} onChange={() => {
+                            const newForms = [...bulkForms];
+                            newForms[i] = { ...newForms[i], confirmCheque: false };
+                            setBulkForms(newForms);
+                          }} />
+                          Auto-deduct on this date
+                        </label>
+                        <label className="flex items-center gap-1">
+                          <input type="radio" checked={f.confirmCheque} onChange={() => {
+                            const newForms = [...bulkForms];
+                            newForms[i] = { ...newForms[i], confirmCheque: true };
+                            setBulkForms(newForms);
+                          }} />
+                          Ask me to confirm first
+                        </label>
+                      </div>
                     )}
                   </div>
                 )}
@@ -2284,32 +2348,54 @@ export default function Expenses() {
 
                 {/* Post-dated cheque (only makes sense for Paybill/Bank) */}
                 {f.mode === 'paybill' && (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={f.isPostDated}
-                      onChange={(e) => {
-                        const newForms = [...bulkSupplierForms];
-                        newForms[i] = { ...newForms[i], isPostDated: e.target.checked };
-                        setBulkSupplierForms(newForms);
-                      }}
-                      onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
-                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                    />
-                    <label className="text-xs text-slate-600">Post-dated cheque</label>
-                    {f.isPostDated && (
+                  <div>
+                    <div className="flex items-center gap-2">
                       <input
-                        type="date"
-                        value={f.clearsOn}
+                        type="checkbox"
+                        checked={f.isPostDated}
                         onChange={(e) => {
                           const newForms = [...bulkSupplierForms];
-                          newForms[i] = { ...newForms[i], clearsOn: e.target.value };
+                          newForms[i] = { ...newForms[i], isPostDated: e.target.checked };
                           setBulkSupplierForms(newForms);
                         }}
                         onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
-                        className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
-                        placeholder="Clears on"
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                       />
+                      <label className="text-xs text-slate-600">Post-dated cheque</label>
+                      {f.isPostDated && (
+                        <input
+                          type="date"
+                          value={f.clearsOn}
+                          onChange={(e) => {
+                            const newForms = [...bulkSupplierForms];
+                            newForms[i] = { ...newForms[i], clearsOn: e.target.value };
+                            setBulkSupplierForms(newForms);
+                          }}
+                          onKeyDown={(e) => handleFormKeyNav(e, addBulkSupplierRow)}
+                          className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
+                          placeholder="Clears on"
+                        />
+                      )}
+                    </div>
+                    {f.isPostDated && (
+                      <div className="flex items-center gap-3 mt-1.5 pl-6 text-xs text-slate-600">
+                        <label className="flex items-center gap-1">
+                          <input type="radio" checked={!f.confirmCheque} onChange={() => {
+                            const newForms = [...bulkSupplierForms];
+                            newForms[i] = { ...newForms[i], confirmCheque: false };
+                            setBulkSupplierForms(newForms);
+                          }} />
+                          Auto-deduct on this date
+                        </label>
+                        <label className="flex items-center gap-1">
+                          <input type="radio" checked={f.confirmCheque} onChange={() => {
+                            const newForms = [...bulkSupplierForms];
+                            newForms[i] = { ...newForms[i], confirmCheque: true };
+                            setBulkSupplierForms(newForms);
+                          }} />
+                          Ask me to confirm first
+                        </label>
+                      </div>
                     )}
                   </div>
                 )}

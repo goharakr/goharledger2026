@@ -58,6 +58,9 @@ interface PaymentForm {
   notes: string;
   isPostDated: boolean;
   clearsOn: string;
+  // When true, this cheque won't auto-deduct on its date - the app asks
+  // Yes/No to confirm it first (Dashboard banner + popup).
+  confirmCheque: boolean;
   transactionFee: string;
   settlement: SettlementAmounts;
   // Extra real-money lines on top of the main Mode above - e.g. paid partly
@@ -92,6 +95,7 @@ const emptyPayment: PaymentForm = {
   notes: '',
   isPostDated: false,
   clearsOn: '',
+  confirmCheque: false,
   transactionFee: '',
   settlement: emptySettlementAmounts,
   extraLines: [],
@@ -105,6 +109,7 @@ interface BulkPaymentRow {
   notes: string;
   isPostDated: boolean;
   clearsOn: string;
+  confirmCheque: boolean;
   transactionFee: string;
   // Extra real-money lines on top of the main Mode above - same idea as the
   // single Add Payment form's Extra Payment Lines.
@@ -119,9 +124,18 @@ const emptyBulkPaymentRow: BulkPaymentRow = {
   notes: '',
   isPostDated: false,
   clearsOn: '',
+  confirmCheque: false,
   transactionFee: '',
   extraLines: [],
 };
+
+// Tags a post-dated cheque's Notes so Layout.tsx's confirm-queue picks it up
+// instead of letting it auto-clear on its date - see the "Ask me to confirm
+// first" choice next to Post-dated cheque below.
+function tagConfirmCheque(notes: string | null, active: boolean): string | null {
+  if (!active) return notes;
+  return notes ? `${notes} [Confirm cheque]` : '[Confirm cheque]';
+}
 
 export default function Suppliers() {
   const { refreshKey, triggerRefresh } = useDataRefresh();
@@ -480,7 +494,7 @@ export default function Suppliers() {
       amount: amt,
       supplier_id: selectedSupplier.id,
       description: `Payment to ${selectedSupplier.name}`,
-      notes: paymentForm.notes || null,
+      notes: tagConfirmCheque(paymentForm.notes || null, !usesExtraLines && paymentForm.mode === 'paybill' && paymentForm.isPostDated && !!paymentForm.clearsOn && paymentForm.confirmCheque),
       clears_on: !usesExtraLines && paymentForm.mode === 'paybill' && paymentForm.isPostDated && paymentForm.clearsOn ? paymentForm.clearsOn : null,
       created_by: user?.username || null,
     }));
@@ -632,7 +646,7 @@ export default function Suppliers() {
           const { error } = await supabase.from('transactions').update({
             date: f.date,
             supplier_id: f.supplierId,
-            notes: f.notes || null,
+            notes: tagConfirmCheque(f.notes || null, f.mode === 'paybill' && f.isPostDated && !!f.clearsOn && f.confirmCheque),
             clears_on: f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
             edited_at: new Date().toISOString(),
           }).eq('id', existingTxnId);
@@ -653,7 +667,7 @@ export default function Suppliers() {
           amount: amt,
           supplier_id: f.supplierId,
           description: `Payment to ${supplier.name}`,
-          notes: f.notes || null,
+          notes: tagConfirmCheque(f.notes || null, !usesExtraLines && f.mode === 'paybill' && f.isPostDated && !!f.clearsOn && f.confirmCheque),
           clears_on: !usesExtraLines && f.mode === 'paybill' && f.isPostDated && f.clearsOn ? f.clearsOn : null,
           created_by: user?.username || null,
         }));
@@ -742,9 +756,10 @@ export default function Suppliers() {
       amount: String(b.amount || ''),
       date: b.date,
       mode: b.primary_mode || 'cash',
-      notes: b.notes || '',
+      notes: (b.notes || '').replace(/\s*\[Confirm cheque\]/, ''),
       isPostDated: !!b.clears_on,
       clearsOn: b.clears_on || '',
+      confirmCheque: !!b.notes?.includes('[Confirm cheque]'),
       transactionFee: '',
       extraLines: [],
     })));
@@ -1092,32 +1107,54 @@ export default function Suppliers() {
 
                 {/* Post-dated cheque (only makes sense for Paybill/Bank) */}
                 {f.mode === 'paybill' && (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={f.isPostDated}
-                      onChange={(e) => {
-                        const newForms = [...bulkPaymentForms];
-                        newForms[i] = { ...newForms[i], isPostDated: e.target.checked };
-                        setBulkPaymentForms(newForms);
-                      }}
-                      onKeyDown={(e) => handleFormKeyNav(e, addBulkPaymentRow)}
-                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                    />
-                    <label className="text-xs text-slate-600">Post-dated cheque</label>
-                    {f.isPostDated && (
+                  <div>
+                    <div className="flex items-center gap-2">
                       <input
-                        type="date"
-                        value={f.clearsOn}
+                        type="checkbox"
+                        checked={f.isPostDated}
                         onChange={(e) => {
                           const newForms = [...bulkPaymentForms];
-                          newForms[i] = { ...newForms[i], clearsOn: e.target.value };
+                          newForms[i] = { ...newForms[i], isPostDated: e.target.checked };
                           setBulkPaymentForms(newForms);
                         }}
                         onKeyDown={(e) => handleFormKeyNav(e, addBulkPaymentRow)}
-                        className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
-                        placeholder="Clears on"
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                       />
+                      <label className="text-xs text-slate-600">Post-dated cheque</label>
+                      {f.isPostDated && (
+                        <input
+                          type="date"
+                          value={f.clearsOn}
+                          onChange={(e) => {
+                            const newForms = [...bulkPaymentForms];
+                            newForms[i] = { ...newForms[i], clearsOn: e.target.value };
+                            setBulkPaymentForms(newForms);
+                          }}
+                          onKeyDown={(e) => handleFormKeyNav(e, addBulkPaymentRow)}
+                          className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
+                          placeholder="Clears on"
+                        />
+                      )}
+                    </div>
+                    {f.isPostDated && (
+                      <div className="flex items-center gap-3 mt-1.5 pl-6 text-xs text-slate-600">
+                        <label className="flex items-center gap-1">
+                          <input type="radio" checked={!f.confirmCheque} onChange={() => {
+                            const newForms = [...bulkPaymentForms];
+                            newForms[i] = { ...newForms[i], confirmCheque: false };
+                            setBulkPaymentForms(newForms);
+                          }} />
+                          Auto-deduct on this date
+                        </label>
+                        <label className="flex items-center gap-1">
+                          <input type="radio" checked={f.confirmCheque} onChange={() => {
+                            const newForms = [...bulkPaymentForms];
+                            newForms[i] = { ...newForms[i], confirmCheque: true };
+                            setBulkPaymentForms(newForms);
+                          }} />
+                          Ask me to confirm first
+                        </label>
+                      </div>
                     )}
                   </div>
                 )}
@@ -1608,25 +1645,39 @@ export default function Suppliers() {
                 />
               )}
               {paymentForm.mode === 'paybill' && (
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="paymentPostDated"
-                    checked={paymentForm.isPostDated}
-                    onChange={(e) => setPaymentForm({ ...paymentForm, isPostDated: e.target.checked })}
-                    onKeyDown={(e) => handleFormKeyNav(e)}
-                    className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                  />
-                  <label htmlFor="paymentPostDated" className="text-xs text-slate-600">Post-dated cheque</label>
-                  {paymentForm.isPostDated && (
+                <div>
+                  <div className="flex items-center gap-2">
                     <input
-                      type="date"
-                      value={paymentForm.clearsOn}
-                      onChange={(e) => setPaymentForm({ ...paymentForm, clearsOn: e.target.value })}
+                      type="checkbox"
+                      id="paymentPostDated"
+                      checked={paymentForm.isPostDated}
+                      onChange={(e) => setPaymentForm({ ...paymentForm, isPostDated: e.target.checked })}
                       onKeyDown={(e) => handleFormKeyNav(e)}
-                      className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
-                      placeholder="Clears on"
+                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
                     />
+                    <label htmlFor="paymentPostDated" className="text-xs text-slate-600">Post-dated cheque</label>
+                    {paymentForm.isPostDated && (
+                      <input
+                        type="date"
+                        value={paymentForm.clearsOn}
+                        onChange={(e) => setPaymentForm({ ...paymentForm, clearsOn: e.target.value })}
+                        onKeyDown={(e) => handleFormKeyNav(e)}
+                        className="flex-1 border border-slate-300 rounded px-2 py-1 text-xs"
+                        placeholder="Clears on"
+                      />
+                    )}
+                  </div>
+                  {paymentForm.isPostDated && (
+                    <div className="flex items-center gap-3 mt-1.5 pl-6 text-xs text-slate-600">
+                      <label className="flex items-center gap-1">
+                        <input type="radio" checked={!paymentForm.confirmCheque} onChange={() => setPaymentForm({ ...paymentForm, confirmCheque: false })} />
+                        Auto-deduct on this date
+                      </label>
+                      <label className="flex items-center gap-1">
+                        <input type="radio" checked={paymentForm.confirmCheque} onChange={() => setPaymentForm({ ...paymentForm, confirmCheque: true })} />
+                        Ask me to confirm first
+                      </label>
+                    </div>
                   )}
                 </div>
               )}
