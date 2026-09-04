@@ -97,6 +97,20 @@ export default function Dashboard() {
   const [capitalCustomTo, setCapitalCustomTo] = usePersistentState('dashboard.capitalCustomTo', '');
   const { from: capitalFrom, to: capitalTo } = getDatePresetRange(capitalPreset, capitalCustomFrom, capitalCustomTo);
   const [monthlyCapital, setMonthlyCapital] = useState<MonthlyCapital | null>(null);
+  const [overdueCheques, setOverdueCheques] = useState<Transaction[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('is_void', false)
+        .not('clears_on', 'is', null)
+        .lte('clears_on', todayStr())
+        .ilike('notes', '%[Confirm cheque]%');
+      setOverdueCheques(data || []);
+    })();
+  }, [refreshKey]);
 
   useEffect(() => {
     fetchDashboardData();
@@ -597,6 +611,18 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Post-dated cheques still waiting for Yes/No confirmation, date has passed */}
+      {overdueCheques.length > 0 && (
+        <div className="w-full flex items-center justify-between bg-red-50 border border-red-300 rounded-xl px-4 py-3">
+          <div className="flex items-center gap-3">
+            <AlertCircle size={22} className="text-red-600" />
+            <p className="text-sm text-red-700 font-medium">
+              {overdueCheques.length} post-dated cheque{overdueCheques.length > 1 ? 's' : ''} passed the date - not confirmed if deducted yet
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Cash in Hand - TOP */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <button onClick={() => navigate('/cash-bank')} className="text-left">
