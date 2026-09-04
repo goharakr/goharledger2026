@@ -22,12 +22,13 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../utils/supabase';
-import { formatKES, formatDate, getMonthLabel } from '../utils/format';
+import { formatKES, formatDate, getMonthLabel, todayStr } from '../utils/format';
 import { sortCustomersByBalance, sortSuppliersByBalance } from '../utils/sortEntities';
 import { useDataRefresh } from '../context/DataContext';
 import HelpChat from './HelpChat';
 import { buildMonthlyFigures, calculateShareEarned } from '../utils/shareDue';
-import type { Supplier, Customer, Reminder } from '../types';
+import { tomorrowStr } from '../utils/walletBalance';
+import type { Supplier, Customer, Reminder, Transaction } from '../types';
 
 const navItems = [
   { label: 'Dashboard', path: '/', icon: LayoutDashboard },
@@ -89,6 +90,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   } | null>(null);
   const [monthEndDismissed, setMonthEndDismissed] = useState(false);
   const [monthEndSaving, setMonthEndSaving] = useState(false);
+
+  // Post-dated cheque confirmation queue - only for a cheque saved with
+  // "Ask me to confirm first" (marked via a "[Confirm cheque]" tag in its
+  // Notes, since there's no dedicated column for this). Unlike a normal
+  // post-dated cheque (which auto-clears once its date passes), one of
+  // these stays out of the wallet balance until explicitly confirmed here -
+  // clears_on is used as "the next date to ask again", never left in the
+  // past, so it can never silently count as paid before that happens.
+  const [chequeQueue, setChequeQueue] = useState<Transaction[]>([]);
+  const [chequeSaving, setChequeSaving] = useState(false);
+  const [chequeAskDate, setChequeAskDate] = useState<{ id: string; date: string } | null>(null);
 
   // A visible sign that a page switch (from the sidebar or anywhere else) is
   // actually happening - each page fetches its own data after mounting, so
@@ -167,6 +179,53 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     setMonthEndSaving(false);
     if (error) { alert('Failed to record the month-end share: ' + error.message); return; }
     setMonthEndPrompt(null);
+    triggerRefresh();
+  }
+
+  // Check once per app load whether any "Ask me to confirm first" post-dated
+  // cheque is due to be asked about - clears_on <= today means it's due,
+  // since clears_on is only ever set to today-or-later for one of these
+  // (never left in the past), so it can never silently count as paid.
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('is_void', false)
+        .not('clears_on', 'is', null)
+        .lte('clears_on', todayStr())
+        .ilike('notes', '%[Confirm cheque]%');
+      setChequeQueue(data || []);
+    })();
+  }, [refreshKey]);
+
+  async function handleChequeConfirmed(txn: Transaction) {
+    setChequeSaving(true);
+    const { error } = await supabase.from('transactions').update({
+      clears_on: null,
+      notes: (txn.notes || '').replace('[Confirm cheque]', '').trim() || null,
+      edited_at: new Date().toISOString(),
+    }).eq('id', txn.id);
+    setChequeSaving(false);
+    if (error) { alert('Failed to confirm the cheque: ' + error.message); return; }
+    setChequeQueue((prev) => prev.filter((t) => t.id !== txn.id));
+    triggerRefresh();
+  }
+
+  // "Not yet" - pushes clears_on to the picked date (or tomorrow if none
+  // picked, so it naturally asks again every day until a date is set or
+  // it's confirmed) - never removes the pending status, only moves it.
+  async function handleChequeNotYet(txn: Transaction, nextDate: string) {
+    setChequeSaving(true);
+    const next = nextDate || tomorrowStr();
+    const { error } = await supabase.from('transactions').update({
+      clears_on: next,
+      edited_at: new Date().toISOString(),
+    }).eq('id', txn.id);
+    setChequeSaving(false);
+    if (error) { alert('Failed to update: ' + error.message); return; }
+    setChequeQueue((prev) => prev.filter((t) => t.id !== txn.id));
+    setChequeAskDate(null);
     triggerRefresh();
   }
 
@@ -423,6 +482,69 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     Remind me later
                   </button>
                 </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Post-dated cheque confirmation popup - only for cheques saved
+            with "Ask me to confirm first". Yes deducts it now; No asks for
+            a date to check again (or defaults to tomorrow, so it keeps
+            coming daily until a date is set or it's confirmed). */}
+        {chequeQueue.length > 0 && (() => {
+          const t = chequeQueue[0];
+          const asking = chequeAskDate?.id === t.id;
+          return (
+            <div className="fixed inset-0 bg-black/40 z-[68] flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-lg p-6 w-full max-w-md">
+                <h3 className="font-semibold text-slate-800 mb-1">Cheque check</h3>
+                <p className="text-sm text-slate-600 mb-1">{t.description || t.notes?.replace('[Confirm cheque]', '').trim() || t.transaction_id}</p>
+                <p className="text-sm text-slate-600 mb-3">KES {formatKES(t.amount || 0)} - was this approved and deducted from the bank?</p>
+                {chequeQueue.length > 1 && (
+                  <p className="text-xs text-amber-600 mb-3">+{chequeQueue.length - 1} more cheque{chequeQueue.length > 2 ? 's' : ''} to check</p>
+                )}
+                {!asking ? (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleChequeConfirmed(t)}
+                      disabled={chequeSaving}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white py-2 rounded-lg text-sm font-medium"
+                    >
+                      Yes - Deducted
+                    </button>
+                    <button
+                      onClick={() => setChequeAskDate({ id: t.id, date: '' })}
+                      className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-lg text-sm font-medium"
+                    >
+                      Not yet
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500">When should I ask again? Leave blank to ask again tomorrow.</p>
+                    <input
+                      type="date"
+                      value={chequeAskDate.date}
+                      onChange={(e) => setChequeAskDate({ id: t.id, date: e.target.value })}
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleChequeNotYet(t, chequeAskDate.date)}
+                        disabled={chequeSaving}
+                        className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white py-2 rounded-lg text-sm font-medium"
+                      >
+                        {chequeSaving ? 'Saving...' : 'Save'}
+                      </button>
+                      <button
+                        onClick={() => setChequeAskDate(null)}
+                        className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-lg text-sm font-medium"
+                      >
+                        Back
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           );
