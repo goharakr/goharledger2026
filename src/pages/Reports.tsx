@@ -507,21 +507,22 @@ function PartnersReport() {
   const perPartner = useMemo(() => {
     const txnsInRange = allTxns.filter((t) => t.date >= dateFrom && t.date <= dateTo);
     const monthlyInRange = buildMonthlyFigures(txnsInRange);
-    const monthlyAll = buildMonthlyFigures(allTxns);
     const historicalMonths = new Set(historicalProfit.map((h) => h.month));
     const result: Record<string, { earnedInRange: number; takenInRange: number; shareDueOverall: number }> = {};
     partners.forEach((p) => {
       const rule = shareRules.find((r) => r.partner_id === p);
       const earnedInRange = calculateShareEarned(monthlyInRange, rule, historicalMonths);
       const takenInRange = allTxns.reduce((s, t) => (t.type === 'partner_draw' && t.partner_id === p && t.date >= dateFrom && t.date <= dateTo ? s + t.amount : s), 0);
-      const earnedAll = calculateShareEarned(monthlyAll, rule, historicalMonths);
+      // Share Due (overall) only counts a month once it's been Confirmed (has
+      // a Historical Profit row) - a live/unconfirmed month contributes 0
+      // here, even though it still shows in "Earned (period)" above.
       const histRemaining = historicalProfit.reduce((s, h) => {
         const share = p === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);
         const taken = p === 'taher' ? (h.taher_taken || 0) : (h.abdulqadir_taken || 0);
         return s + share - taken;
       }, 0);
       const drawsAllTime = allTxns.reduce((s, t) => (t.type === 'partner_draw' && t.partner_id === p ? s + t.amount : s), 0);
-      result[p] = { earnedInRange, takenInRange, shareDueOverall: earnedAll + histRemaining - drawsAllTime };
+      result[p] = { earnedInRange, takenInRange, shareDueOverall: histRemaining - drawsAllTime };
     });
     return result;
   }, [allTxns, historicalProfit, shareRules, dateFrom, dateTo, filter.partner]);

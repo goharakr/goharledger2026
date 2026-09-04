@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   TrendingUp,
-  AlertTriangle,
   Wallet,
   ShoppingCart,
   Users,
@@ -31,7 +30,7 @@ import DateFilterBar from '../components/DateFilterBar';
 import { getDatePresetRange, DatePreset } from '../utils/dateFilters';
 import { fetchAllRows } from '../utils/fetchAll';
 import { computeWalletBalance, tomorrowStr } from '../utils/walletBalance';
-import { buildMonthlyFigures, calculateShareEarned, getDoubleCountedMonths, calculateHomeExpensesOwed } from '../utils/shareDue';
+import { calculateHomeExpensesOwed } from '../utils/shareDue';
 import type { Transaction, Supplier, Customer, Reminder, LoanTracker, CapitalEntry } from '../types';
 
 interface DailySalesBreakdown {
@@ -255,7 +254,7 @@ export default function Dashboard() {
       const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][monthFilterMonth - 1];
       const monthEnd = `${monthFilterYear}-${String(monthFilterMonth).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
 
-      const [{ data: txns }, { data: splits }, { data: suppData }, { data: custData }, { data: loans }, { data: reminderData }, { data: capitalData }, { data: histProfit }, { data: shareRules }, { data: monthlyBalancesData }, { data: physicalCountsData }] = await Promise.all([
+      const [{ data: txns }, { data: splits }, { data: suppData }, { data: custData }, { data: loans }, { data: reminderData }, { data: capitalData }, { data: histProfit }, { data: monthlyBalancesData }, { data: physicalCountsData }] = await Promise.all([
         fetchAllRows<Transaction>((from, to) =>
           supabase.from('transactions').select('*').eq('is_void', false).range(from, to)
         ),
@@ -266,7 +265,6 @@ export default function Dashboard() {
         supabase.from('reminders').select('*').eq('status', 'pending').order('reminder_date', { ascending: true }),
         supabase.from('capital_entries').select('*'),
         supabase.from('historical_profit').select('*'),
-        supabase.from('share_rules').select('*').eq('is_active', true),
         supabase.from('monthly_balances').select('*'),
         supabase.from('physical_cash_counts').select('*'),
       ]);
@@ -406,13 +404,6 @@ export default function Dashboard() {
       // regardless of which month it was earned in, (2) home expenses paid from
       // their own pocket that the shop still owes back, (3) how much they've
       // drawn out in the currently-viewed month only.
-      const monthly = buildMonthlyFigures(txns);
-      const historicalMonths = new Set((histProfit || []).map((h) => h.month));
-      const taherRule = shareRules?.find((r) => r.partner_id === 'taher');
-      const abdulRule = shareRules?.find((r) => r.partner_id === 'abdulqadir');
-      const taherShareEarned = calculateShareEarned(monthly, taherRule, historicalMonths);
-      const abdulShareEarned = calculateShareEarned(monthly, abdulRule, historicalMonths);
-
       let taherDrawsAllTime = 0, abdulDrawsAllTime = 0;
       let taherDrawsThisMonth = 0, abdulDrawsThisMonth = 0;
       txns?.forEach((t) => {
@@ -427,10 +418,12 @@ export default function Dashboard() {
       const histTaherRemaining = (histProfit || []).reduce((s, h) => s + (h.taher_share || 0) - (h.taher_taken || 0), 0);
       const histAbdulRemaining = (histProfit || []).reduce((s, h) => s + (h.abdulqadir_share || 0) - (h.abdulqadir_taken || 0), 0);
 
-      const doubleCountedMonths = getDoubleCountedMonths(monthly, (histProfit || []).map((h) => h.month));
-
-      const taherShareDue = taherShareEarned + histTaherRemaining - taherDrawsAllTime;
-      const abdulShareDue = abdulShareEarned + histAbdulRemaining - abdulDrawsAllTime;
+      // Share Due only counts a month once it has been Confirmed (a
+      // Historical Profit row exists for it, via the month-end popup or the
+      // Capital page) - a month still live/unconfirmed contributes 0, even
+      // if the Share Rule would already earn something for it.
+      const taherShareDue = histTaherRemaining - taherDrawsAllTime;
+      const abdulShareDue = histAbdulRemaining - abdulDrawsAllTime;
 
       // Shown as two separate figures (not netted into one) - a supplier who
       // owes you and one you owe are different situations, not a wash.
@@ -485,7 +478,6 @@ export default function Dashboard() {
         totalNetProfit,
         totalCapital: totalCapitalVal,
         activeLoans: activeLoansList,
-        doubleCountedMonths,
       });
 
     } catch (err) {
@@ -844,21 +836,6 @@ export default function Dashboard() {
           <button onClick={() => navigate('/customers')} className="text-left"><StatBox label="Customers Pending" value={stats?.totalCustomersPending || 0} icon={<ArrowDown size={16} />} color="text-blue-600" clickable /></button>
         </div>
       </div>
-
-      {stats?.doubleCountedMonths?.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
-          <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-medium text-amber-800">
-              Check Share Due for {stats.doubleCountedMonths.join(', ')}
-            </p>
-            <p className="text-sm text-amber-700">
-              These month(s) have both a Historical Profit entry (Capital page) and live transactions.
-              Both are being counted in Share Due, which may be counting that month's profit twice.
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Partner Balances */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

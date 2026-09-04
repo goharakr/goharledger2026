@@ -59,9 +59,10 @@ export function buildMonthlyFigures(transactions: Transaction[] | null | undefin
 // activity, using their active Fixed/Percentage share rule. A month already
 // locked into a Historical Profit record is skipped here - once a month's
 // share has been recorded there, the live monthly total must stop counting
-// it too, or it gets counted twice (see getDoubleCountedMonths below, which
-// used to be the only guard against this - excluding it here removes the
-// double-count instead of just flagging it).
+// it too, or it gets counted twice. Used for reporting ("earned this
+// period") and for working out what to prefill in the month-end popup - not
+// for Share Due itself, which only counts a month once it's Confirmed
+// (see calculateShareDue below).
 export function calculateShareEarned(monthly: Map<string, MonthlyFigures>, rule: ShareRule | undefined, excludeMonths?: Set<string>): number {
   if (!rule) return 0;
   let earned = 0;
@@ -73,21 +74,13 @@ export function calculateShareEarned(monthly: Map<string, MonthlyFigures>, rule:
   return earned;
 }
 
-// A month covered by a manually-entered Historical Profit record should not
-// also have live transactions counted separately into Share Due - that would
-// count the same month's profit twice. This doesn't fix it automatically; it
-// just flags the overlap so it can be reviewed. Uses the same "real
-// activity" months as calculateShareEarned, not every month with any
-// transaction at all.
-export function getDoubleCountedMonths(monthly: Map<string, MonthlyFigures>, historicalMonths: string[]): string[] {
-  const histSet = new Set(historicalMonths);
-  return Array.from(monthly.keys()).filter((m) => histSet.has(m)).sort();
-}
-
 // The single source of truth for "Share Due" (a.k.a. Profit Share Not Taken) -
 // mirrors the calc Partners.tsx used to keep as its own private copy.
-// Earned-to-date (live months + historical carry-over) minus everything
-// already drawn via a partner_draw transaction.
+// Only counts a month once it's been Confirmed (has a Historical Profit row,
+// via the month-end popup or the Capital page) - a month still live/
+// unconfirmed contributes 0 here, even if the Share Rule would already earn
+// something for it. Historical carry-over minus everything already drawn
+// via a partner_draw transaction.
 export function calculateShareDue(
   transactions: Transaction[] | null | undefined,
   shareRules: ShareRule[] | null | undefined,
@@ -97,10 +90,6 @@ export function calculateShareDue(
   const rule = shareRules?.find((r) => r.partner_id === partnerId);
   if (!rule) return 0;
 
-  const monthly = buildMonthlyFigures(transactions);
-  const historicalMonths = new Set((historicalProfit || []).map((h) => h.month));
-  const earned = calculateShareEarned(monthly, rule, historicalMonths);
-
   const histRemaining = (historicalProfit || []).reduce((s, h) => {
     const share = partnerId === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);
     const taken = partnerId === 'taher' ? (h.taher_taken || 0) : (h.abdulqadir_taken || 0);
@@ -109,7 +98,7 @@ export function calculateShareDue(
 
   const drawsAllTime = transactions?.reduce((s, t) => (t.type === 'partner_draw' && t.partner_id === partnerId && !t.is_void ? s + t.amount : s), 0) || 0;
 
-  return earned + histRemaining - drawsAllTime;
+  return histRemaining - drawsAllTime;
 }
 
 // How much the shop currently owes a partner back for home expenses they

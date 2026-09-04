@@ -10,7 +10,6 @@ import {
   ArrowDownCircle,
   ArrowUpCircle,
   BookOpen,
-  AlertTriangle,
   Edit2,
   Trash2,
 } from 'lucide-react';
@@ -18,7 +17,6 @@ import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, getMonthLabel, todayStr } from '../utils/format';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
-import { buildMonthlyFigures, getDoubleCountedMonths as getDoubleCountedMonthsShared } from '../utils/shareDue';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { usePersistentState } from '../context/PageStateContext';
@@ -139,11 +137,6 @@ export default function Partners() {
     triggerRefresh();
   }
 
-  function getDoubleCountedMonths() {
-    const monthly = buildMonthlyFigures(transactions);
-    return getDoubleCountedMonthsShared(monthly, historicalProfit.map((h) => h.month));
-  }
-
   function calculateTakenInRange(partner: string, from: string, to: string) {
     return transactions.reduce((s, t) => (
       t.type === 'partner_draw' && t.partner_id === partner && !t.is_void && t.date >= from && t.date <= to ? s + t.amount : s
@@ -158,17 +151,12 @@ export default function Partners() {
   function calculateShareDueInRange(partner: string, from: string, to: string) {
     const rule = shareRules.find((r) => r.partner_id === partner);
     if (!rule) return 0;
-    const monthly = buildMonthlyFigures(transactions);
-    const historicalMonths = new Set(historicalProfit.map((h) => h.month));
     const fromMonth = from.slice(0, 7);
     const toMonth = to.slice(0, 7);
+    // Only counts a month once it's been Confirmed (has a Historical Profit
+    // row) - a month still live/unconfirmed contributes 0, even if the Share
+    // Rule would already earn something for it.
     let due = 0;
-    monthly.forEach((m, key) => {
-      if (key < fromMonth || key > toMonth) return;
-      if (historicalMonths.has(key)) return;
-      const netProfit = m.grossProfit - m.shopExpenses - m.homeExpensesFromShop - m.loanPayments;
-      due += rule.rule_type === 'fixed' ? rule.value : netProfit * (rule.value / 100);
-    });
     historicalProfit.forEach((h) => {
       if (h.month < fromMonth || h.month > toMonth) return;
       const share = partner === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);
@@ -179,15 +167,20 @@ export default function Partners() {
     return due;
   }
 
-  // Home expenses owed for just the picked period - "From Own Pocket" minus
-  // "From Shop (repaying)" reimbursements, both restricted to dates in range.
+  // Home expenses owed for just the picked period - only expenses whose OWN
+  // date is in the period, and only ones still not repaid yet (matches the
+  // Home Expenses table below, so the two never disagree). Not "From Own
+  // Pocket minus From Shop repaying both filtered by date" - that could go
+  // negative if the repayment lands in the period but the original expense
+  // it's repaying doesn't.
   function calculateHomeOwedInRange(partner: string, from: string, to: string) {
     let owed = 0;
     transactions.forEach((t) => {
       if (t.is_void || t.type !== 'expense' || t.category !== 'home_expense' || t.partner_id !== partner) return;
+      if (!t.notes?.includes('From Own Pocket')) return;
       if (t.date < from || t.date > to) return;
-      if (t.notes?.includes('From Own Pocket')) owed += t.amount;
-      if (t.notes?.includes('From Shop') && t.notes?.includes('repaying')) owed -= t.amount;
+      const reimbursed = transactions.some((tx) => !tx.is_void && tx.type === 'expense' && tx.notes?.includes(t.id));
+      if (!reimbursed) owed += t.amount;
     });
     return owed;
   }
@@ -453,25 +446,9 @@ export default function Partners() {
       status: transactions.some((tx) => tx.notes?.includes(t.id) && tx.type === 'expense') ? 'taken' : 'pending',
     }));
 
-  const doubleCountedMonths = getDoubleCountedMonths();
-
   return (
     <div className="space-y-6">
       {loading && <p className="text-xs text-slate-400">Loading...</p>}
-      {doubleCountedMonths.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
-          <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-medium text-amber-800">
-              Check Share Due for {doubleCountedMonths.join(', ')}
-            </p>
-            <p className="text-sm text-amber-700">
-              These month(s) have both a Historical Profit entry (Capital page) and live transactions.
-              Both are being counted in Share Due, which may be counting that month's profit twice.
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* Partner Tabs */}
       <div className="flex gap-1 bg-slate-100 p-1 rounded-lg w-fit">
