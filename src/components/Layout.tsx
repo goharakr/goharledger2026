@@ -87,6 +87,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   // table) - it never pays anyone or moves any money.
   const [monthEndPrompt, setMonthEndPrompt] = useState<{
     month: string; taherShare: string; abdulShare: string; taherRuleLabel: string; abdulRuleLabel: string;
+    taherBaseShare: number; abdulBaseShare: number; taherOldLeftover: number; abdulOldLeftover: number;
+    taherMergeOld: boolean; abdulMergeOld: boolean;
   } | null>(null);
   const [monthEndDismissed, setMonthEndDismissed] = useState(false);
   const [monthEndSaving, setMonthEndSaving] = useState(false);
@@ -130,10 +132,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     const lastMonth = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth() + 1).padStart(2, '0')}`;
 
     (async () => {
-      const [{ data: existing }, { data: rules }] = await Promise.all([
-        supabase.from('historical_profit').select('id').eq('month', lastMonth).maybeSingle(),
+      const [{ data: allHist }, { data: rules }] = await Promise.all([
+        supabase.from('historical_profit').select('*'),
         supabase.from('share_rules').select('*').eq('is_active', true),
       ]);
+      const existing = (allHist || []).find((h) => h.month === lastMonth);
       if (existing || !rules || rules.length === 0) return;
 
       const { data: monthTxns } = await supabase
@@ -147,15 +150,36 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       const taherRule = rules.find((r) => r.partner_id === 'taher');
       const abdulRule = rules.find((r) => r.partner_id === 'abdulqadir');
-      const taherShare = calculateShareEarned(monthly, taherRule);
-      const abdulShare = calculateShareEarned(monthly, abdulRule);
+      const taherEarned = calculateShareEarned(monthly, taherRule);
+      const abdulEarned = calculateShareEarned(monthly, abdulRule);
+
+      // Money the partner already took this same month (via Take Money)
+      // reduces what still needs adding for this month - otherwise it would
+      // look like they're owed the full rule amount again on top of what
+      // they've already taken.
+      const taherTakenThisMonth = (monthTxns || []).reduce((s, t) => (t.type === 'partner_draw' && t.partner_id === 'taher' && !t.is_void ? s + t.amount : s), 0);
+      const abdulTakenThisMonth = (monthTxns || []).reduce((s, t) => (t.type === 'partner_draw' && t.partner_id === 'abdulqadir' && !t.is_void ? s + t.amount : s), 0);
+      const taherBaseShare = Math.round(taherEarned - taherTakenThisMonth);
+      const abdulBaseShare = Math.round(abdulEarned - abdulTakenThisMonth);
+
+      // Unpaid share sitting in older months (already-recorded rows where
+      // taken < share) - shown so the amount doesn't need adding here, but
+      // can optionally be folded in if asked for.
+      const taherOldLeftover = Math.round((allHist || []).filter((h) => h.month < lastMonth).reduce((s, h) => s + ((h.taher_share || 0) - (h.taher_taken || 0)), 0));
+      const abdulOldLeftover = Math.round((allHist || []).filter((h) => h.month < lastMonth).reduce((s, h) => s + ((h.abdulqadir_share || 0) - (h.abdulqadir_taken || 0)), 0));
 
       setMonthEndPrompt({
         month: lastMonth,
-        taherShare: String(Math.round(taherShare)),
-        abdulShare: String(Math.round(abdulShare)),
+        taherShare: String(taherBaseShare),
+        abdulShare: String(abdulBaseShare),
         taherRuleLabel: taherRule ? (taherRule.rule_type === 'fixed' ? 'Fixed amount' : `${taherRule.value}%`) : 'No rule set',
         abdulRuleLabel: abdulRule ? (abdulRule.rule_type === 'fixed' ? 'Fixed amount' : `${abdulRule.value}%`) : 'No rule set',
+        taherBaseShare,
+        abdulBaseShare,
+        taherOldLeftover,
+        abdulOldLeftover,
+        taherMergeOld: false,
+        abdulMergeOld: false,
       });
     })();
   }, [monthEndDismissed]);
@@ -176,8 +200,25 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       notes: 'Recorded automatically at month-end',
       created_by: user?.username || null,
     });
+    if (error) { setMonthEndSaving(false); alert('Failed to record the month-end share: ' + error.message); return; }
+
+    // "Add old leftover to this month too" was ticked - the old unpaid
+    // month(s) aren't paid, that unpaid amount has just been folded into
+    // this month's number above, so mark those old rows as fully taken now
+    // (so the total across all rows stays correct, not double-counted).
+    if (monthEndPrompt.taherMergeOld || monthEndPrompt.abdulMergeOld) {
+      const { data: oldRows } = await supabase.from('historical_profit').select('*').lt('month', monthEndPrompt.month);
+      for (const row of oldRows || []) {
+        const updates: Record<string, number> = {};
+        if (monthEndPrompt.taherMergeOld) updates.taher_taken = row.taher_share || 0;
+        if (monthEndPrompt.abdulMergeOld) updates.abdulqadir_taken = row.abdulqadir_share || 0;
+        if (Object.keys(updates).length > 0) {
+          await supabase.from('historical_profit').update(updates).eq('id', row.id);
+        }
+      }
+    }
+
     setMonthEndSaving(false);
-    if (error) { alert('Failed to record the month-end share: ' + error.message); return; }
     setMonthEndPrompt(null);
     triggerRefresh();
   }
@@ -569,6 +610,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     onChange={(e) => setMonthEndPrompt({ ...monthEndPrompt, taherShare: e.target.value })}
                     className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                   />
+                  {monthEndPrompt.taherOldLeftover > 0 && (
+                    <label className="flex items-center gap-2 mt-1.5 text-xs text-amber-700">
+                      <input
+                        type="checkbox"
+                        checked={monthEndPrompt.taherMergeOld}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setMonthEndPrompt({
+                            ...monthEndPrompt,
+                            taherMergeOld: checked,
+                            taherShare: String(monthEndPrompt.taherBaseShare + (checked ? monthEndPrompt.taherOldLeftover : 0)),
+                          });
+                        }}
+                      />
+                      Also owed KES {formatKES(monthEndPrompt.taherOldLeftover)} from before - add into this month too?
+                    </label>
+                  )}
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">Abdulqadir's share ({monthEndPrompt.abdulRuleLabel})</label>
@@ -578,6 +636,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     onChange={(e) => setMonthEndPrompt({ ...monthEndPrompt, abdulShare: e.target.value })}
                     className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                   />
+                  {monthEndPrompt.abdulOldLeftover > 0 && (
+                    <label className="flex items-center gap-2 mt-1.5 text-xs text-amber-700">
+                      <input
+                        type="checkbox"
+                        checked={monthEndPrompt.abdulMergeOld}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setMonthEndPrompt({
+                            ...monthEndPrompt,
+                            abdulMergeOld: checked,
+                            abdulShare: String(monthEndPrompt.abdulBaseShare + (checked ? monthEndPrompt.abdulOldLeftover : 0)),
+                          });
+                        }}
+                      />
+                      Also owed KES {formatKES(monthEndPrompt.abdulOldLeftover)} from before - add into this month too?
+                    </label>
+                  )}
                 </div>
               </div>
               <div className="flex gap-2 mt-4">
