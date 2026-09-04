@@ -18,7 +18,7 @@ import { supabase } from '../utils/supabase';
 import { formatKES, formatDate, getMonthLabel, todayStr } from '../utils/format';
 import { insertTransactionWithId } from '../utils/transactionId';
 import { fetchAllRows } from '../utils/fetchAll';
-import { buildMonthlyFigures, getDoubleCountedMonths as getDoubleCountedMonthsShared, calculateHomeExpensesOwed, calculateShareDue as calculateShareDueShared } from '../utils/shareDue';
+import { buildMonthlyFigures, getDoubleCountedMonths as getDoubleCountedMonthsShared } from '../utils/shareDue';
 import { useDataRefresh } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { usePersistentState } from '../context/PageStateContext';
@@ -139,25 +139,57 @@ export default function Partners() {
     triggerRefresh();
   }
 
-  // Mirrors Dashboard's "Share due" calc: applies the active share rule across
-  // every month with transactions, plus any historical carry-over, minus draws.
-  function calculateShareDue(partner: string) {
-    return calculateShareDueShared(transactions, shareRules, historicalProfit, partner);
-  }
-
   function getDoubleCountedMonths() {
     const monthly = buildMonthlyFigures(transactions);
     return getDoubleCountedMonthsShared(monthly, historicalProfit.map((h) => h.month));
-  }
-
-  function calculateHomeOwed(partner: string) {
-    return calculateHomeExpensesOwed(transactions, partner);
   }
 
   function calculateTakenInRange(partner: string, from: string, to: string) {
     return transactions.reduce((s, t) => (
       t.type === 'partner_draw' && t.partner_id === partner && !t.is_void && t.date >= from && t.date <= to ? s + t.amount : s
     ), 0);
+  }
+
+  // Share Due for just the picked period - earned in that period's months
+  // (via the active rule), plus any Historical Profit record whose month
+  // falls in the period, minus draws taken in the period. For the "All Time"
+  // range (2000-01 to 2099-12) this covers every month/draw/historical
+  // record there is, so it comes out the same as the old whole-history number.
+  function calculateShareDueInRange(partner: string, from: string, to: string) {
+    const rule = shareRules.find((r) => r.partner_id === partner);
+    if (!rule) return 0;
+    const monthly = buildMonthlyFigures(transactions);
+    const historicalMonths = new Set(historicalProfit.map((h) => h.month));
+    const fromMonth = from.slice(0, 7);
+    const toMonth = to.slice(0, 7);
+    let due = 0;
+    monthly.forEach((m, key) => {
+      if (key < fromMonth || key > toMonth) return;
+      if (historicalMonths.has(key)) return;
+      const netProfit = m.grossProfit - m.shopExpenses - m.homeExpensesFromShop - m.loanPayments;
+      due += rule.rule_type === 'fixed' ? rule.value : netProfit * (rule.value / 100);
+    });
+    historicalProfit.forEach((h) => {
+      if (h.month < fromMonth || h.month > toMonth) return;
+      const share = partner === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);
+      const taken = partner === 'taher' ? (h.taher_taken || 0) : (h.abdulqadir_taken || 0);
+      due += share - taken;
+    });
+    due -= calculateTakenInRange(partner, from, to);
+    return due;
+  }
+
+  // Home expenses owed for just the picked period - "From Own Pocket" minus
+  // "From Shop (repaying)" reimbursements, both restricted to dates in range.
+  function calculateHomeOwedInRange(partner: string, from: string, to: string) {
+    let owed = 0;
+    transactions.forEach((t) => {
+      if (t.is_void || t.type !== 'expense' || t.category !== 'home_expense' || t.partner_id !== partner) return;
+      if (t.date < from || t.date > to) return;
+      if (t.notes?.includes('From Own Pocket')) owed += t.amount;
+      if (t.notes?.includes('From Shop') && t.notes?.includes('repaying')) owed -= t.amount;
+    });
+    return owed;
   }
 
   function calculatePartnerBalance(partner: string) {
@@ -380,12 +412,17 @@ export default function Partners() {
 
   const balance = calculatePartnerBalance(activePartner);
   const isPositive = balance >= 0;
-  const shareDue = calculateShareDue(activePartner);
-  const homeOwed = calculateHomeOwed(activePartner);
   const takenRange = getDatePresetRange(takenPreset, takenCustomFrom, takenCustomTo);
+  const periodLabel = takenPreset === 'pick_month'
+    ? getMonthLabel(takenCustomFrom)
+    : DATE_PRESET_OPTIONS.find((o) => o.value === takenPreset)?.label;
+  const shareDue = calculateShareDueInRange(activePartner, takenRange.from, takenRange.to);
+  const homeOwed = calculateHomeOwedInRange(activePartner, takenRange.from, takenRange.to);
   const takenInRange = calculateTakenInRange(activePartner, takenRange.from, takenRange.to);
 
-  const profitShares = historicalProfit.map((h) => {
+  const profitShares = historicalProfit
+    .filter((h) => h.month >= takenRange.from.slice(0, 7) && h.month <= takenRange.to.slice(0, 7))
+    .map((h) => {
     const earned = activePartner === 'taher' ? (h.taher_share || 0) : (h.abdulqadir_share || 0);
     const taken = activePartner === 'taher' ? (h.taher_taken || 0) : (h.abdulqadir_taken || 0);
     const remaining = earned - taken;
@@ -400,7 +437,7 @@ export default function Partners() {
   });
 
   const homeExpenses = transactions
-    .filter((t) => t.type === 'expense' && t.category === 'home_expense' && t.partner_id === activePartner && !t.is_void && t.notes?.includes('From Own Pocket'))
+    .filter((t) => t.type === 'expense' && t.category === 'home_expense' && t.partner_id === activePartner && !t.is_void && t.notes?.includes('From Own Pocket') && t.date >= takenRange.from && t.date <= takenRange.to)
     .map((t) => ({
       id: t.id,
       date: t.date,
@@ -462,31 +499,36 @@ export default function Partners() {
         </div>
       </div>
 
+      {/* Period filter - changes Share due, Home expenses owed, Taken, and
+          all 3 tables below to only that period. */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <p className="text-sm text-slate-500 mb-2">Showing: {periodLabel}</p>
+        <DateFilterBar
+          preset={takenPreset}
+          customFrom={takenCustomFrom}
+          customTo={takenCustomTo}
+          onChange={(p, from, to) => { setTakenPreset(p); setTakenCustomFrom(from); setTakenCustomTo(to); }}
+        />
+      </div>
+
       {/* Summary figures - same numbers shown on the Dashboard card */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-slate-500">Share due</p>
+            <p className="text-sm text-slate-500">Share due ({periodLabel})</p>
             <button onClick={() => setShowEditRules(true)} className="text-xs text-emerald-600 hover:text-emerald-700 font-medium">Edit Rule</button>
           </div>
           <p className={`text-xl font-bold ${shareDue >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>KES {formatKES(Math.abs(shareDue))}</p>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-          <p className="text-sm text-slate-500">Home expenses owed</p>
+          <p className="text-sm text-slate-500">Home expenses owed ({periodLabel})</p>
           <p className="text-xl font-bold text-blue-600">KES {formatKES(homeOwed)}</p>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-          <p className="text-sm text-slate-500">Taken ({DATE_PRESET_OPTIONS.find((o) => o.value === takenPreset)?.label})</p>
+          <p className="text-sm text-slate-500">Taken ({periodLabel})</p>
           <p className="text-xl font-bold text-slate-800">KES {formatKES(takenInRange)}</p>
         </div>
       </div>
-
-      <DateFilterBar
-        preset={takenPreset}
-        customFrom={takenCustomFrom}
-        customTo={takenCustomTo}
-        onChange={(p, from, to) => { setTakenPreset(p); setTakenCustomFrom(from); setTakenCustomTo(to); }}
-      />
 
       {/* Actions */}
       <div className="flex flex-wrap items-center gap-3">
